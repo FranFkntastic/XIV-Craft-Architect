@@ -232,6 +232,11 @@ builder.Services.AddSingleton<
 builder.Services.AddSingleton<
     ICompanyCommissionPostCommitSink,
     CommissionProjectionChangePostCommitSink>();
+builder.Services.AddSingleton<AccountClaimProjectionService>();
+builder.Services.AddHostedService<AccountClaimProjectionBackfillHostedService>();
+builder.Services.AddSingleton<
+    ICompanyCommissionPostCommitSink,
+    AccountClaimProjectionPostCommitSink>();
 builder.Services.AddSingleton<CompanyCommissionMigrationDiagnostics>();
 builder.Services.AddHostedService<CompanyCommissionSchemaMigrationHostedService>();
 builder.Services.AddSingleton<DiscordRequestVerifier>();
@@ -390,6 +395,7 @@ app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
 app.MapMembershipEndpoints();
 app.MapCompanyHubEndpoints();
+app.MapCrafterHubEndpoints();
 app.MapTradeCompanyWorkspaceEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
@@ -564,6 +570,13 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 var consolidation = scope.ServiceProvider
                     .GetRequiredService<CompanyCrafterConsolidationService>();
                 WriteJson(await consolidation.RunAsync(command.DryRun, cancellationToken));
+                break;
+            }
+        case ProfileHostProvisioningAction.RebuildClaimLookup:
+            {
+                var projection = scope.ServiceProvider
+                    .GetRequiredService<AccountClaimProjectionService>();
+                WriteJson(await projection.RebuildAsync(command.DryRun, cancellationToken));
                 break;
             }
         case ProfileHostProvisioningAction.RetireCompanies:

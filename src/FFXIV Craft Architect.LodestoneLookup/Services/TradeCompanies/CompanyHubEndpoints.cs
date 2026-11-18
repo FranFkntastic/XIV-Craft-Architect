@@ -3,7 +3,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -107,7 +109,7 @@ public sealed record CompanyHubMutationResponse(long ProfileRevision);
 public sealed record CompanyMarginItemsUpdateRequest(long ExpectedProfileRevision, bool UpdateMarginItems, IReadOnlyList<TradeMarginItem>? MarginItems);
 public sealed record CompanyPolicyUpdateRequest(long ExpectedProfileRevision, string Name,
     string? Description, string? CommissionContact, TradePaymentPolicy PaymentPolicy,
-    TradeCompanyPricingScope? CommissionPricingScope);
+    TradeCompanyPricingScope? CommissionPricingScope, bool? FreelancerOpenCommissions = null);
 public sealed record CompanyHubAttentionReadRequest(long OpenedRevision);
 public sealed record CompanyHubAttentionReadResponse(long ReadRevision);
 
@@ -295,12 +297,15 @@ public sealed record CompanyHubAttentionReadResult(
     CompanyHubAttentionReadStatus Status,
     long? ReadRevision = null);
 
-public sealed class CompanyHubService(
+public sealed partial class CompanyHubService(
     SqliteProfileHostStore profiles,
     SqliteMembershipStore memberships,
     MembershipAccessResolver accessResolver,
     LegacyCrafterAccountResolver crafterAccounts,
     ProfileHostChangeSignal changes,
+    SqliteDiscordIdentityStore identities,
+    SqliteDiscordNotificationStore notifications,
+    CommissionBriefOptions briefOptions,
     TimeProvider timeProvider)
 {
     private const int MaximumDisplayNameLength = 120;
@@ -416,15 +421,8 @@ public sealed class CompanyHubService(
             return new(CompanyHubAttentionReadStatus.NotFound);
         }
         var companyId = new CompanyId(company.Profile.Id);
-        var membership = await memberships.LoadForAccountAsync(
-            companyId,
-            account.ProfileId,
-            cancellationToken);
-        if (membership is not { State: MembershipState.Active } &&
-            account.ProfileId != company.HostProfileId)
-        {
-            return new(CompanyHubAttentionReadStatus.Forbidden);
-        }
+        // Unread state belongs to whoever owns the claim, member or freelancer; the
+        // canonical claim-ownership check below is the only authority.
         var order = (await LoadOrdersAsync(company, cancellationToken))
             .SingleOrDefault(candidate => candidate.Id == commissionId);
         if (order == null ||
@@ -506,8 +504,17 @@ public sealed class CompanyHubService(
         updated.CommissionContact = body.CommissionContact;
         updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(body.PaymentPolicy);
         updated.CommissionPricingScope = body.CommissionPricingScope;
+        if (body.FreelancerOpenCommissions is { } freelancers)
+        {
+            updated.FreelancerOpenCommissions = freelancers;
+        }
         updated.UpdatedAtUtc = DateTime.UtcNow;
-        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
+        return await SaveProfileAsync(
+            company,
+            updated,
+            body.ExpectedProfileRevision,
+            cancellationToken,
+            updateFreelancerOpenCommissions: body.FreelancerOpenCommissions.HasValue);
     }
 
     public async Task<CompanyHubMutationResult> UpdateThemeAsync(
@@ -637,7 +644,8 @@ public sealed class CompanyHubService(
         TradeCompanyProfile updated,
         long expectedProfileRevision,
         CancellationToken cancellationToken,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool updateFreelancerOpenCommissions = false)
     {
         var result = await profiles.PutObjectAsync(
             company.HostProfileId.ToString("D"),
@@ -647,7 +655,8 @@ public sealed class CompanyHubService(
             expectedProfileRevision,
             cancellationToken,
             allowCompanyCollection: true,
-            updateMarginItems: updateMarginItems);
+            updateMarginItems: updateMarginItems,
+            updateFreelancerOpenCommissions: updateFreelancerOpenCommissions);
         return result.Success
             ? new CompanyHubMutationResult(
                 CompanyHubMutationStatus.Applied,

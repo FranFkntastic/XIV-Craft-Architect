@@ -1595,7 +1595,7 @@ function buildClaimRelationship() {
 
     const contractor = element("p", "relationship-line");
     contractor.append(
-        element("strong", null, "Claim as contractor"),
+        element("strong", null, "Claim as freelancer"),
         element("span", null, "Claiming does not grant company access."));
     fieldset.append(contractor);
 

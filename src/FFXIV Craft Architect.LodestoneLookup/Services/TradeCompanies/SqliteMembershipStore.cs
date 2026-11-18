@@ -583,25 +583,57 @@ public sealed partial class SqliteMembershipStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
+    public Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
         string token,
         Guid accountProfileId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        !IsValidInvitationToken(token) || accountProfileId == Guid.Empty
+            ? Task.FromResult(new MembershipInvitationConsumptionResult(
+                MembershipInvitationConsumptionStatus.Unavailable))
+            : ConsumeInvitationCoreAsync(
+                (connection, transaction, ct) => LoadInvitationAsync(
+                    connection,
+                    transaction,
+                    HashToken(token),
+                    ct),
+                accountProfileId,
+                cancellationToken);
+
+    /// <summary>
+    /// Accepts an invitation that was delivered on Discord to this account's linked
+    /// Discord user. The host-recorded recipient stands in for the link token, so the
+    /// invitee can accept from the Crafter hub without the original message.
+    /// </summary>
+    public Task<MembershipInvitationConsumptionResult> ConsumeInvitationForRecipientAsync(
+        Guid invitationId,
+        Guid accountProfileId,
+        string discordUserId,
+        CancellationToken cancellationToken = default) =>
+        invitationId == Guid.Empty || accountProfileId == Guid.Empty ||
+        string.IsNullOrWhiteSpace(discordUserId)
+            ? Task.FromResult(new MembershipInvitationConsumptionResult(
+                MembershipInvitationConsumptionStatus.Unavailable))
+            : ConsumeInvitationCoreAsync(
+                (connection, transaction, ct) => LoadRecipientInvitationAsync(
+                    connection,
+                    transaction,
+                    invitationId,
+                    discordUserId,
+                    ct),
+                accountProfileId,
+                cancellationToken);
+
+    private async Task<MembershipInvitationConsumptionResult> ConsumeInvitationCoreAsync(
+        Func<SqliteConnection, SqliteTransaction, CancellationToken, Task<CompanyMembershipInvitation?>> load,
+        Guid accountProfileId,
+        CancellationToken cancellationToken)
     {
-        if (!IsValidInvitationToken(token) || accountProfileId == Guid.Empty)
-        {
-            return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable);
-        }
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
-        var invitation = await LoadInvitationAsync(
-            connection,
-            transaction,
-            HashToken(token),
-            cancellationToken);
+        var invitation = await load(connection, transaction, cancellationToken);
         var now = timeProvider.GetUtcNow();
         if (invitation == null || invitation.RevokedAtUtc != null || invitation.ExpiresAtUtc <= now)
         {
@@ -2040,6 +2072,32 @@ public sealed partial class SqliteMembershipStore(
                     PRIMARY KEY(company_id, loser_crafter_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS account_commission_claims (
+                    account_profile_id TEXT NOT NULL,
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    claimed_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(account_profile_id, company_id, commission_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_account_commission_claims_commission
+                    ON account_commission_claims(company_id, commission_id);
+
+                CREATE TABLE IF NOT EXISTS account_commission_claim_marks (
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    projected_at_utc TEXT NOT NULL,
+                    commission_revision INTEGER NULL,
+                    PRIMARY KEY(company_id, commission_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS account_commission_claim_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS company_retirement_receipts (
                     company_id TEXT PRIMARY KEY,
                     actor TEXT NOT NULL,
@@ -2066,6 +2124,11 @@ public sealed partial class SqliteMembershipStore(
             await AddMembershipColumnIfMissingAsync(
                 connection,
                 "notify_progress_status",
+                "INTEGER NULL",
+                cancellationToken);
+            await AddClaimMarkColumnIfMissingAsync(
+                connection,
+                "commission_revision",
                 "INTEGER NULL",
                 cancellationToken);
             await WidenCrafterBindingEvidenceAsync(connection, cancellationToken);
@@ -2192,6 +2255,30 @@ public sealed partial class SqliteMembershipStore(
             alter.CommandText = $"ALTER TABLE company_memberships ADD COLUMN {column} {definition};";
             await alter.ExecuteNonQueryAsync(cancellationToken);
         }
+    }
+
+    private static async Task AddClaimMarkColumnIfMissingAsync(
+        SqliteConnection connection,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using (var inspect = connection.CreateCommand())
+        {
+            inspect.CommandText = "PRAGMA table_info(account_commission_claim_marks);";
+            await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE account_commission_claim_marks ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task AddInvitationColumnIfMissingAsync(

@@ -14,6 +14,7 @@
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService TradeAccess
 @inject HostedOrderSyncCoordinator HostedOrderSync
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
@@ -61,7 +62,22 @@
             <section class="settings-content"
                      id="@GetPanelId(_activePanel)"
                      aria-labelledby="@GetTabId(_activePanel)">
-            @if (_activePanel == SettingsSection.Profile)
+            @if (_activePanel == SettingsSection.General)
+            {
+                <CompactSelectField Id="general-start-workspace"
+                                    Label="Open the app to"
+                                    Value="@_startWorkspace"
+                                    ValueChanged="OnStartWorkspaceChanged"
+                                    Options="StartWorkspaceOptions"
+                                    Class="options-select my-3" />
+                <CompactSelectField Id="general-trade-start-page"
+                                    Label="Open Trade Architect to"
+                                    Value="@_tradeStartPage"
+                                    ValueChanged="OnTradeStartPageChanged"
+                                    Options="TradeStartPageOptions"
+                                    Class="options-select my-3" />
+            }
+            else if (_activePanel == SettingsSection.Profile)
             {
                 <AccountSettingsPanel Section="AccountSettingsSection.Profile" />
             }
@@ -384,6 +400,12 @@
                                   Immediate="true"
                                   MaxLength="240"
                                   Class="my-2" />
+                    <MudSwitch T="bool"
+                               @bind-Value="_companyFreelancerOpenCommissions"
+                               Label="Freelancers see open commissions"
+                               Color="Color.Primary"
+                               Disabled="@(!_canAdministerCompany || _companyIsBusy)"
+                               Class="my-2" />
 
                     @if (ProfileSync.CurrentStatus.IsConnected)
                     {
@@ -870,6 +892,7 @@
 
     private static readonly IReadOnlyList<SettingsNavItem> AllSettingsSections =
     [
+        new(SettingsSection.General, "General", Icons.Material.Filled.Tune),
         new(SettingsSection.Profile, "Profile", Icons.Material.Filled.Person),
         new(SettingsSection.Workspace, "Workspace", Icons.Material.Filled.BusinessCenter),
         new(SettingsSection.AccessAndDevices, "Access & devices", Icons.Material.Filled.Devices),
@@ -937,6 +960,22 @@
 
     private static string GetTabId(SettingsSection panel) => $"settings-nav-{panel.ToString().ToLowerInvariant()}";
     private static string GetPanelId(SettingsSection panel) => $"settings-section-{panel.ToString().ToLowerInvariant()}";
+
+    private async Task OnStartWorkspaceChanged(string value)
+    {
+        _startWorkspace = value;
+        await Settings.SetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.StartWorkspaceKey,
+            value);
+    }
+
+    private async Task OnTradeStartPageChanged(string value)
+    {
+        _tradeStartPage = value;
+        await Settings.SetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.TradeStartPageKey,
+            value);
+    }
 
     private async Task SetGlassAsync(bool value)
     {
@@ -1025,6 +1064,24 @@
     private string _companyName = string.Empty;
     private string? _companyDescription;
     private string? _companyCommissionContact;
+    private bool _companyFreelancerOpenCommissions = true;
+    private string _startWorkspace = "craft";
+    private string _tradeStartPage = "hub";
+    private bool _canOperateTrade;
+    private static readonly IReadOnlyList<CompactSelectOption> StartWorkspaceOptions =
+    [
+        new("craft", "Craft Architect"),
+        new("trade", "Trade Architect")
+    ];
+    private IReadOnlyList<CompactSelectOption> TradeStartPageOptions => _canOperateTrade
+        ?
+        [
+            new("hub", "Crafter hub"),
+            new("orders", "Orders"),
+            new("crafters", "Crafters"),
+            new("margins", "Margins")
+        ]
+        : [new("hub", "Crafter hub")];
     private string _companyPricingRegion = string.Empty;
     private string _companyPricingDataCenter = string.Empty;
     private IReadOnlyList<CompactSelectOption> CompanyPricingRegionOptions =>
@@ -1083,6 +1140,18 @@
     protected override async Task OnInitializedAsync()
     {
         _activePanel = InitialSection;
+        _startWorkspace = await Settings.GetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.StartWorkspaceKey,
+            "craft") == "trade" ? "trade" : "craft";
+        _tradeStartPage = await Settings.GetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.TradeStartPageKey,
+            "hub") ?? "hub";
+        _canOperateTrade = await TradeAccess.CanOperateAsync();
+        if (!_canOperateTrade)
+        {
+            // A stored page this account cannot open still lands on the hub.
+            _tradeStartPage = "hub";
+        }
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _comparisonRegions = await LoadComparisonRegionsAsync();
@@ -1571,6 +1640,7 @@
         _companyName = profile.Name;
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
+        _companyFreelancerOpenCommissions = profile.FreelancerOpenCommissions;
         _companyPricingRegion = profile.CommissionPricingScope?.Region ?? string.Empty;
         _companyPricingDataCenter = profile.CommissionPricingScope?.DataCenter ?? string.Empty;
         var policy = TradePaymentPolicyNormalizer.Normalize(
@@ -1602,6 +1672,7 @@
         _companyName.Trim(),
         NormalizeOptionalText(_companyDescription) ?? string.Empty,
         NormalizeOptionalText(_companyCommissionContact) ?? string.Empty,
+        _companyFreelancerOpenCommissions.ToString(),
         _companyPricingRegion,
         _companyPricingDataCenter,
         _companyMaterialValueBonusPercent.ToString(CultureInfo.InvariantCulture),
@@ -1944,6 +2015,7 @@
                 _companyProfile.Name = _companyName.Trim();
                 _companyProfile.Description = NormalizeOptionalText(_companyDescription);
                 _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
+                _companyProfile.FreelancerOpenCommissions = _companyFreelancerOpenCommissions;
                 _companyProfile.PaymentPolicy = paymentPolicy;
                 _companyProfile.MaterialPricingPolicy = BuildCompanyMaterialPricingPolicy();
                 _companyProfile.CommissionPricingScope = string.IsNullOrWhiteSpace(_companyPricingRegion)

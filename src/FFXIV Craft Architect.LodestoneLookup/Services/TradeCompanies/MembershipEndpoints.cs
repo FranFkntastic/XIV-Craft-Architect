@@ -480,7 +480,7 @@ public static class MembershipEndpoints
                 {
                     return Results.BadRequest(new MembershipErrorResponse(
                         "invalid_crafter_binding",
-                        "Choose a company member and a contractor record from this company."));
+                        "Choose a company member and a freelancer record from this company."));
                 }
 
                 var result = await memberships.BindCrafterAsync(
@@ -501,7 +501,7 @@ public static class MembershipEndpoints
                                 result.Binding.CreatedAtUtc)),
                     _ => Results.Conflict(new MembershipErrorResponse(
                         "crafter_already_connected",
-                        "That contractor record is already connected to another account."))
+                        "That freelancer record is already connected to another account."))
                 };
             });
 

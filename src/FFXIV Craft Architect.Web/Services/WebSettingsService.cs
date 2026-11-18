@@ -47,6 +47,8 @@ public class WebSettingsService : ISettingsService
         ["ui.accent_color"] = "#d4af37",
         ["ui.use_split_pane_market_view"] = true,
         ["ui.trade_orders_ops_pane_width"] = 820,
+        ["ui.start_workspace"] = "craft",
+        ["ui.trade_start_page"] = "hub",
         ["planning.default_recommendation_mode"] = "MinimizeTotalCost",
         ["debug.enable_diagnostic_logging"] = false,
         ["debug.secret_tools_enabled"] = false

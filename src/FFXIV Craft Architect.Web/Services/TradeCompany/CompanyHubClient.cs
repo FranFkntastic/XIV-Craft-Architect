@@ -6,7 +6,7 @@ using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
-public sealed class CompanyHubClient(
+public sealed partial class CompanyHubClient(
     HttpClient http,
     ProfileSyncLocalStateService localState,
     ProfileHostClient profileHostClient)
@@ -137,7 +137,8 @@ public sealed class CompanyHubClient(
                 profile.CommissionPricingScope,
                 UpdateCommissionPricingScope = true,
                 MarginItems = updateMarginItems ? profile.MarginItems : null,
-                UpdateMarginItems = updateMarginItems
+                UpdateMarginItems = updateMarginItems,
+                profile.FreelancerOpenCommissions
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
@@ -669,7 +670,8 @@ public sealed record TradeCompanyWorkspaceProfile(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    IReadOnlyList<TradeMarginItem>? MarginItems = null)
+    IReadOnlyList<TradeMarginItem>? MarginItems = null,
+    bool FreelancerOpenCommissions = true)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -681,6 +683,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         MaterialPricingPolicy = MaterialPricingPolicy!,
         CommissionPricingScope = CommissionPricingScope,
         MarginItems = MarginItems ?? [],
+        FreelancerOpenCommissions = FreelancerOpenCommissions,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,

@@ -10,7 +10,8 @@ public enum ProfileHostProvisioningAction
     DisableProfile,
     ExportProfile,
     ConsolidateCrafters,
-    RetireCompanies
+    RetireCompanies,
+    RebuildClaimLookup
 }
 
 public sealed record ProfileHostProvisioningCommand(
@@ -70,6 +71,15 @@ public sealed record ProfileHostProvisioningCommand(
                     null,
                     null,
                     DryRun: args.Length == 3),
+            "rebuild-claim-lookup" when args.Length == 2 ||
+                                        args.Length == 3 && args[2] == "--dry-run" =>
+                new ProfileHostProvisioningCommand(
+                    ProfileHostProvisioningAction.RebuildClaimLookup,
+                    null,
+                    null,
+                    DryRun: args.Length == 3),
+            "rebuild-claim-lookup" => throw new InvalidOperationException(
+                "Usage: profile-host rebuild-claim-lookup [--dry-run]"),
             "retire-company" when args.Skip(2).Any(arg => arg != "--dry-run") =>
                 new ProfileHostProvisioningCommand(
                     ProfileHostProvisioningAction.RetireCompanies,

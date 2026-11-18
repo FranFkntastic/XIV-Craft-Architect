@@ -90,6 +90,7 @@ builder.Services.AddScoped<TradeOperationsPersistenceService>();
 builder.Services.AddScoped<TradeWorkspaceProfileResolver>();
 builder.Services.AddScoped<TradeCompanyCollaborationClient>();
 builder.Services.AddScoped<CompanyHubClient>();
+builder.Services.AddScoped<TradeWorkspaceAccessService>();
 builder.Services.AddScoped<TradeCompanyCollaborationService>();
 builder.Services.AddScoped<TradeCommissionOperationsClient>();
 builder.Services.AddScoped<TradeCommissionOperationsService>();

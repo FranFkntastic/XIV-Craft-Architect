@@ -15,7 +15,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    IReadOnlyList<TradeMarginItem>? MarginItems = null);
+    IReadOnlyList<TradeMarginItem>? MarginItems = null,
+    bool FreelancerOpenCommissions = true);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -27,7 +28,8 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     TradeCompanyPricingScope? CommissionPricingScope = null,
     bool UpdateCommissionPricingScope = false,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
-    bool UpdateMarginItems = false);
+    bool UpdateMarginItems = false,
+    bool? FreelancerOpenCommissions = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -86,7 +88,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Profile.CreatedAtUtc,
                         snapshot.Profile.UpdatedAtUtc,
                         snapshot.Profile.CommissionPricingScope,
-                        snapshot.Profile.MarginItems));
+                        snapshot.Profile.MarginItems,
+                        snapshot.Profile.FreelancerOpenCommissions));
             });
 
         companies.MapPut(
@@ -138,7 +141,8 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.CommissionPricingScope,
                     body.UpdateCommissionPricingScope,
                     body.MarginItems,
-                    body.UpdateMarginItems);
+                    body.UpdateMarginItems,
+                    body.FreelancerOpenCommissions);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(
