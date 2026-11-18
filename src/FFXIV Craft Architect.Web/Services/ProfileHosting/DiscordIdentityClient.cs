@@ -50,18 +50,13 @@ public sealed class DiscordIdentityClient(HttpClient httpClient)
 
     public async Task<Uri> StartSignInAsync(
         string hostUrl,
-        CancellationToken cancellationToken = default) =>
-        await StartSignInAsync(hostUrl, null, cancellationToken);
-
-    public async Task<Uri> StartSignInAsync(
-        string hostUrl,
-        string? returnPath,
+        string returnPath,
         CancellationToken cancellationToken = default)
     {
         using var request = CreateRequest(
             HttpMethod.Post,
             hostUrl,
-            "identity/v1/signin/discord/start" + (returnPath == null ? string.Empty : $"?returnPath={Uri.EscapeDataString(returnPath)}"));
+            $"identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}");
         using var response = await httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<DiscordLinkStartDto>(

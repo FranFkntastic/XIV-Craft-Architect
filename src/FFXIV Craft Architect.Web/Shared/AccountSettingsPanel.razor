@@ -360,7 +360,7 @@
         {
             var authorizationUri = await DiscordIdentityClient.StartSignInAsync(
                 ProfileHostClient.DefaultHostUrl,
-                CancellationToken.None);
+                NavigationManager.ToAbsoluteUri(NavigationManager.Uri).PathAndQuery);
             NavigationManager.NavigateTo(authorizationUri.AbsoluteUri, forceLoad: true);
         }
         catch (Exception ex)

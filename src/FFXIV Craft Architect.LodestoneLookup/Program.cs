@@ -130,7 +130,7 @@ var discordIdentityOptions = new DiscordIdentityOptions
     UserEndpoint = builder.Configuration["DiscordIdentity:UserEndpoint"]
         ?? "https://discord.com/api/v10/users/@me",
     StateLifetime = TimeSpan.FromSeconds(Math.Clamp(
-        builder.Configuration.GetValue("DiscordIdentity:StateLifetimeSeconds", 300),
+        builder.Configuration.GetValue("DiscordIdentity:StateLifetimeSeconds", 900),
         60,
         900)),
     ParticipantBootstrapLifetime = TimeSpan.FromSeconds(Math.Clamp(
