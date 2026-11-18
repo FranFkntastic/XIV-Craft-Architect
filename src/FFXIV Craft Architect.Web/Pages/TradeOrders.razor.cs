@@ -440,6 +440,16 @@ public partial class TradeOrders
             _loadError = null;
             if ((await TradeOperationsPersistence.LoadCompanyProfilesAsync()).Count == 0)
             {
+                // Accounts confirmed to operate no company belong on the Crafter hub, so
+                // never start a Discord sign-in on the way out. An unconfirmed answer
+                // (host unreachable) keeps the sign-in path, which surfaces the error.
+                if (!await TradeAccess.CanOperateAsync() && TradeAccess.IsSettled)
+                {
+                    NavigationManager.NavigateTo(
+                        FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.HubRoute,
+                        replace: true);
+                    return;
+                }
                 var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
                 var signedIn = settings.IsConfigured &&
                     (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;

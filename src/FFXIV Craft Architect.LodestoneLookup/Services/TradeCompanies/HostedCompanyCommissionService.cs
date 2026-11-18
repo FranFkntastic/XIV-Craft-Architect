@@ -480,6 +480,70 @@ public sealed partial class HostedCompanyCommissionService(
             cancellationToken);
     }
 
+    /// <summary>
+    /// The canonical commission behind a published brief, loaded with the publication's
+    /// own access rather than a caller's company role.
+    /// </summary>
+    public async Task<HostedCompanyCommissionSnapshot?> LoadPublishedAsync(
+        TradeCompanyPublicationOwnership ownership,
+        string publicBriefId,
+        CancellationToken cancellationToken = default)
+    {
+        var access = await companies.ResolvePublicAccessAsync(
+            ownership,
+            publicBriefId,
+            cancellationToken);
+        return access == null
+            ? null
+            : await LoadOwnerAsync(access, ownership.OrderId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Commits a claim whose authority is the signed-in account instead of a claim link.
+    /// The caller has already checked that the account may claim this company's open
+    /// commissions; the command must carry that account's evidence.
+    /// </summary>
+    public async Task<CompanyCommissionMutationResult> ExecuteAccountClaimAsync(
+        TradeCompanyPublicationOwnership ownership,
+        string publicBriefId,
+        Guid accountProfileId,
+        ClaimCompanyCommissionCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (accountProfileId == Guid.Empty ||
+            command.AccountEvidence?.ProfileId != accountProfileId ||
+            command.Context.CompanyId != ownership.CompanyId ||
+            command.Context.CommissionId != ownership.OrderId)
+        {
+            return Unauthorized();
+        }
+
+        var access = await companies.ResolvePublicAccessAsync(
+            ownership,
+            publicBriefId,
+            cancellationToken);
+        if (access == null)
+        {
+            return Unauthorized();
+        }
+
+        var actor = new CompanyCommissionActor(
+            $"account-profile:{accountProfileId:D}",
+            CompanyCommissionActorKind.Crafter);
+        return await ExecuteAuthenticatedAsync(
+            access,
+            command,
+            actor,
+            CompanyCommissionSourceSurface.PublicBrief,
+            order => CompanyCommissionCommandWorkflow.Apply(
+                order,
+                command,
+                actor,
+                timeProvider.GetUtcNow().UtcDateTime),
+            cancellationToken);
+    }
+
     private async Task<CompanyCommissionMutationResult> ExecuteAuthenticatedAsync(
         TradeCompanyAccessContext access,
         ICompanyCommissionCommand command,

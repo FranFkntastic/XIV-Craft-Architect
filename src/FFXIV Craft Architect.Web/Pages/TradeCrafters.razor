@@ -73,7 +73,7 @@
                             class="@(_filter == filter ? "is-active" : null)"
                             aria-pressed="@(_filter == filter ? "true" : "false")"
                             @onclick="() => _filter = filter">
-                        @filter @_rows.Count(row => row.Matches(filter))
+                        @FilterLabel(filter) @_rows.Count(row => row.Matches(filter))
                     </button>
                 }
             </div>
@@ -162,11 +162,15 @@
             </table>
         </div>
         <div class="workforce-summary">
-            <span><strong>@_rows.Count(row => row.AccountProfileId.HasValue && row.Access == CompanyWorkforceAccess.Active)</strong> authenticated members</span>
-            <span><strong>@_rows.Count(row => !row.IsMemberSide)</strong> external freelancers</span>
+            @{
+                var authenticatedMembers = _rows.Count(row => row.AccountProfileId.HasValue && row.Access == CompanyWorkforceAccess.Active);
+                var externalFreelancers = _rows.Count(row => !row.IsMemberSide);
+            }
+            <span><strong>@authenticatedMembers</strong> @(authenticatedMembers == 1 ? "authenticated member" : "authenticated members")</span>
+            <span><strong>@externalFreelancers</strong> @(externalFreelancers == 1 ? "external freelancer" : "external freelancers")</span>
             @if (_isAdmin)
             {
-                <span><strong>@RequestedRows.Count</strong> pending requests</span>
+                <span><strong>@RequestedRows.Count</strong> @(RequestedRows.Count == 1 ? "pending request" : "pending requests")</span>
             }
         </div>
 
@@ -500,6 +504,13 @@
     private CompanyWorkforceHostedFacts? _hosted;
     private IReadOnlyList<CompanyWorkforceRow> _rows = [];
     private CompanyWorkforceFilter _filter = CompanyWorkforceFilter.Everyone;
+
+    private static string FilterLabel(CompanyWorkforceFilter filter) => filter switch
+    {
+        CompanyWorkforceFilter.Members => "Members",
+        CompanyWorkforceFilter.Contractors => "Freelancers",
+        _ => "Everyone"
+    };
     private string _search = string.Empty;
     private WorkforceDrawerKind _drawer;
     private string? _memberRowKey;

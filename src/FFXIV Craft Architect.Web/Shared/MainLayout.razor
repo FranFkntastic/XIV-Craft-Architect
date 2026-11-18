@@ -580,7 +580,7 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (IsTradeRoute(uri) && uriLower.Contains("/trade/hub"))
+        if (IsTradeRoute(uri) && (uriLower.Contains("/trade/hub") || IsCompanyRoute(uri)))
             _activeTab = "hub";
         else if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
             _activeTab = "orders";
@@ -632,10 +632,21 @@
         NavigationManager.NavigateTo(string.IsNullOrEmpty(page) ? "./" : page);
     }
 
+    // Company pages (/companies/{slug}) are part of Trade Architect: members work
+    // commissions there, and everyone reaches them from the Crafter hub.
     private bool IsTradeRoute(string uri)
     {
         var relativePath = NavigationManager.ToBaseRelativePath(uri).TrimStart('/');
-        return relativePath.StartsWith("trade", StringComparison.OrdinalIgnoreCase);
+        return relativePath.StartsWith("trade", StringComparison.OrdinalIgnoreCase) ||
+            IsCompanyRoute(uri);
+    }
+
+    private bool IsCompanyRoute(string uri)
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(uri).TrimStart('/');
+        return relativePath.Equals("companies", StringComparison.OrdinalIgnoreCase) ||
+            relativePath.StartsWith("companies/", StringComparison.OrdinalIgnoreCase) ||
+            relativePath.StartsWith("companies?", StringComparison.OrdinalIgnoreCase);
     }
 
     private string GetWorkspaceTitle()
