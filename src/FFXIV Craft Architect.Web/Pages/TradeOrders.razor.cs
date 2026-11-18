@@ -440,6 +440,18 @@ public partial class TradeOrders
             _loadError = null;
             if ((await TradeOperationsPersistence.LoadCompanyProfilesAsync()).Count == 0)
             {
+                // Accounts that operate no company belong on the Crafter hub; the layout
+                // redirects them there, so never start a Discord sign-in on the way out.
+                if (!await TradeAccess.CanOperateAsync())
+                {
+                    if (TradeAccess.IsSettled)
+                    {
+                        NavigationManager.NavigateTo(
+                            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.HubRoute,
+                            replace: true);
+                    }
+                    return;
+                }
                 var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
                 var signedIn = settings.IsConfigured &&
                     (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
