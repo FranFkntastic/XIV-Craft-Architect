@@ -178,7 +178,11 @@ public sealed record CompanyCommissionClaim(
     Guid? ClaimantCharacterId,
     CompanyCommissionClaimAccountEvidence? AccountEvidence = null);
 
-public sealed record CompanyCommissionClaimPriceReview(Guid ProfileId, int TermsVersion);
+public sealed record CompanyCommissionClaimPriceReview(Guid ProfileId, int TermsVersion, Guid? ClaimCommandId = null)
+{
+    public bool IsRetry(Guid? account, Guid commandId, int? offeredVersion) =>
+        ProfileId == account && ClaimCommandId == commandId && offeredVersion == TermsVersion - 1;
+}
 
 public sealed record CompanyCommissionClaimAccountEvidence(
     Guid ProfileId,

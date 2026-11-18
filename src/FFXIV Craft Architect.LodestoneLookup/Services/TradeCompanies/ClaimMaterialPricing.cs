@@ -78,25 +78,43 @@ public sealed class ClaimMaterialPricing(
             throw new InvalidOperationException("The optimizer returned no publishable route selection key.");
         }
         var lines = result.MaterialLines.ToDictionary(line => (line.ItemId, line.RequiresHq));
-        if (terms.Materials.Count != lines.Count || terms.Materials.Any(m =>
-            !lines.TryGetValue((m.ItemId, m.RequiresHq), out var line) || m.Quantity != line.Quantity))
+        var published = terms.Materials.ToDictionary(m => (m.ItemId, m.RequiresHq));
+        var crafter = terms.Materials.Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter)
+            .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet();
+        if (!crafter.IsSubsetOf(lines.Keys) || lines.Any(pair =>
+            !published.TryGetValue(pair.Key, out var material) || material.Quantity != pair.Value.Quantity))
         {
             throw new InvalidOperationException("Refreshed demand does not exactly match the published materials.");
         }
+        var (cash, allowance) = TradePaymentCalculator.CrafterShare(quote, crafter);
         quote = quote with
         {
             CompanyProfileId = old.CompanyProfileId,
             SourcePlanId = id,
             PlanSessionVersion = old.PlanSessionVersion,
-            MarketAnalysisVersion = checked(old.MarketAnalysisVersion + 1)
+            MarketAnalysisVersion = checked(old.MarketAnalysisVersion + 1),
+            Lines = quote.Lines.Where(line => crafter.Contains((line.ItemId, line.RequiresHq))).ToArray(),
+            RouteCashRequired = cash,
+            SafetyAllowance = allowance,
+            MaterialReimbursement = cash + allowance
         };
         var materials = terms.Materials.Select(m =>
         {
+            if (m.Responsibility == CommissionMaterialResponsibility.Provided)
+            {
+                return m;
+            }
             var line = lines[(m.ItemId, m.RequiresHq)];
             return m with { UnitCost = line.UnitCost, TotalCost = decimal.Round(line.UnitCost * m.Quantity, 0, MidpointRounding.AwayFromZero) };
         }).ToArray();
+        var originalLines = snapshot.Materials.ToDictionary(m => (m.ItemId, m.RequiresHq));
         snapshot.Materials = materials.Select(m =>
         {
+            if (m.Responsibility == CommissionMaterialResponsibility.Provided)
+            {
+                return originalLines.GetValueOrDefault((m.ItemId, m.RequiresHq))
+                    ?? new TradeOrderMaterialSnapshot(m.ItemId, m.Name, m.Quantity, m.RequiresHq, m.UnitCost, m.TotalCost);
+            }
             var line = lines[(m.ItemId, m.RequiresHq)];
             return new TradeOrderMaterialSnapshot(m.ItemId, m.Name, m.Quantity, m.RequiresHq, m.UnitCost, m.TotalCost,
                 line.EvidenceSource, line.UnitCostExplanation, line.EvidenceTimestampUtc, line.Warnings);
@@ -105,10 +123,7 @@ public sealed class ClaimMaterialPricing(
         snapshot.MarketAnalysisVersion = quote.MarketAnalysisVersion;
         snapshot.ImportedAtUtc = now;
         var bonus = TradePaymentCalculator.MaterialValueBonus(materials.Sum(m => m.UnitCost * m.Quantity), rate);
-        var (cash, allowance) = TradePaymentCalculator.CrafterShare(quote,
-            materials.Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter)
-                .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet());
-        var reimbursement = cash > 0 ? cash + allowance : 0m;
+        var reimbursement = quote.MaterialReimbursement;
         var revised = terms with
         {
             Version = checked(terms.Version + 1),

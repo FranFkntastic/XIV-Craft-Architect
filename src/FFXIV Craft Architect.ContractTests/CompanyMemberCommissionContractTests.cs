@@ -1060,7 +1060,8 @@ public sealed class CompanyMemberCommissionContractTests
     [InlineData(949, true, true, true)]
     [InlineData(2000, false, false, true)]
     [InlineData(-1, true, false, false)]
-    public async Task ClaimRefreshCommitsOnlyTheAcceptedPayment(int listingPrice, bool knownRate, bool conflict, bool useLink)
+    [InlineData(1010, true, false, false, true)]
+    public async Task ClaimRefreshCommitsOnlyTheAcceptedPayment(int listingPrice, bool knownRate, bool conflict, bool useLink, bool mixed = false)
     {
         // A sealed single-listing route exercises the real optimizer and CAS without a market server or an account key.
         var root = Directory.CreateTempSubdirectory("claim-pricing-");
@@ -1073,7 +1074,7 @@ public sealed class CompanyMemberCommissionContractTests
             var commission = order.CompanyCommission!;
             var terms = commission.CurrentTerms;
             var now = DateTime.UtcNow;
-            var policy = new TradeMaterialPricingPolicy { SafetyAllowancePercent = 0, MinimumSafetyAllowanceGil = 0 };
+            var policy = new TradeMaterialPricingPolicy { SafetyAllowancePercent = mixed ? 10 : 0, MinimumSafetyAllowanceGil = 0 };
             var plan = new CraftingPlan
             {
                 RootItems = [new PlanNode
@@ -1082,6 +1083,21 @@ public sealed class CompanyMemberCommissionContractTests
                 CanBuyFromMarket = true, SourceReason = AcquisitionSourceReason.UserSelected
             }]
             };
+            var provided = new CompanyCommissionMaterialTerm(Guid.NewGuid(), 101, "Company stock", 2, false,
+                CommissionMaterialResponsibility.Provided, 50, 100);
+            if (mixed)
+            {
+                plan.RootItems.Add(new PlanNode
+                {
+                    ItemId = 101,
+                    Name = provided.Name,
+                    Quantity = 2,
+                    Source = AcquisitionSource.VendorBuy,
+                    VendorPrice = 75,
+                    CanBuyFromVendor = true,
+                    SourceReason = AcquisitionSourceReason.UserSelected
+                });
+            }
             var id = plan.Id.ToString();
             var old = new TradeMaterialQuote
             {
@@ -1095,8 +1111,8 @@ public sealed class CompanyMemberCommissionContractTests
                 QuotedAtUtc = now.AddHours(-2),
                 ExpiresAtUtc = now.AddHours(-1),
                 RouteCashRequired = 1000,
-                SafetyAllowance = 0,
-                MaterialReimbursement = 1000,
+                SafetyAllowance = mixed ? 100 : 0,
+                MaterialReimbursement = mixed ? 1100 : 1000,
                 WorldStops = 0,
                 Lines = [new(100, "Market item", 1, false, 1000, ["Siren (Aether)"], null)]
             };
@@ -1107,6 +1123,14 @@ public sealed class CompanyMemberCommissionContractTests
                 Materials = [new(Guid.NewGuid(), 100, "Market item", 1, false, CommissionMaterialResponsibility.Crafter, 1000, 1000)],
                 PricingEvidence = new("ProcurementRoute", "DC", "Aether", old.QuotedAtUtc, old)
             };
+            if (mixed)
+            {
+                terms = terms with
+                {
+                    Materials = [.. terms.Materials, provided],
+                    Payment = terms.Payment with { MaterialAdjustment = 110, MaterialReimbursement = 1100, Total = 1210 }
+                };
+            }
             order.CompanyCommission = commission with { TermsVersions = [terms] };
             order.CraftPlanId = id;
             order.CraftPlanSavedAtUtc = now;
@@ -1190,6 +1214,21 @@ public sealed class CompanyMemberCommissionContractTests
                 Assert.Equal(1100m, body.GetProperty("previousPayment").GetDecimal());
                 Assert.Equal(result.Order.CompanyCommission.CurrentTerms.Payment.Total, body.GetProperty("currentPayment").GetDecimal());
                 Assert.Equal(2, body.GetProperty("termsVersion").GetInt32());
+                if (useLink)
+                {
+                    var capability = new CompanyCommissionCapabilityResolution(new(company.Id), order.Id,
+                        publicId, CompanyCommissionCapabilityKind.Claim, null, 1);
+                    Assert.NotNull(await service.CreateCapabilityCommandContextAsync(capability, 0, claim.Context.CommandId, 1,
+                        claimAccountId: claim.AccountEvidence!.ProfileId, claimTermsVersion: 1));
+                    Assert.Null(await service.CreateCapabilityCommandContextAsync(capability, 0, claim.Context.CommandId, 1,
+                        claimAccountId: claim.AccountEvidence.ProfileId, claimTermsVersion: 2));
+                }
+                var retry = await Submit(claim);
+                Assert.Equal("claim_price_changed", retry.ErrorCode);
+                Assert.Null(retry.Order!.CompanyCommission!.ActiveClaim);
+                var repeatedResponse = CompanyCommissionEndpoints.ClaimPriceChanged(retry);
+                Assert.Equal(409, ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)repeatedResponse).StatusCode);
+                Assert.Equal(body.GetRawText(), JsonSerializer.Serialize(((Microsoft.AspNetCore.Http.IValueHttpResult)repeatedResponse).Value));
                 clock.Offset = TimeSpan.FromDays(1); // Even a delayed confirmation accepts the price shown.
                 snapshot = (await service.LoadOwnerAsync(access, order.Id))!;
                 claim = claim with
@@ -1208,7 +1247,21 @@ public sealed class CompanyMemberCommissionContractTests
             var final = (await service.LoadOwnerAsync(access, order.Id))!.Order.CompanyCommission!;
             Assert.Equal(refreshed ? 2 : 1, final.ActiveClaim!.AcceptedTermsVersion);
             Assert.Equal(final.CurrentTermsVersion, final.ParticipantAcknowledgedTermsVersion);
-            Assert.Equal(refreshed ? listingPrice + decimal.Round(listingPrice / 10m, 0, MidpointRounding.AwayFromZero) : 1100m, final.CurrentTerms.Payment.Total);
+            if (mixed)
+            {
+                Assert.Equal(provided, Assert.Single(final.CurrentTerms.Materials, m => m.Responsibility == CommissionMaterialResponsibility.Provided));
+                var quote = final.CurrentTerms.PricingEvidence.MaterialQuote!;
+                Assert.Equal(100, Assert.Single(quote.Lines).ItemId);
+                Assert.Equal(101, quote.SafetyAllowance);
+                Assert.Equal(1111, quote.MaterialReimbursement);
+                Assert.Equal(quote.MaterialReimbursement, final.CurrentTerms.Payment.MaterialReimbursement);
+                Assert.Equal(111, final.CurrentTerms.Payment.MaterialAdjustment);
+                Assert.Equal(1222, final.CurrentTerms.Payment.Total);
+            }
+            else
+            {
+                Assert.Equal(refreshed ? listingPrice + decimal.Round(listingPrice / 10m, 0, MidpointRounding.AwayFromZero) : 1100m, final.CurrentTerms.Payment.Total);
+            }
             Assert.Equal(refreshed ? 1 : 0, final.Activity.Count(e => e.Kind == CompanyCommissionActivityKind.TermsAmended &&
                 e.Actor.Kind == CompanyCommissionActorKind.System && e.Visibility == CompanyCommissionActivityVisibility.Shared));
             Assert.Single(final.Activity, e => e.Kind == CompanyCommissionActivityKind.ClaimAccepted);
@@ -1244,19 +1297,21 @@ public sealed class CompanyMemberCommissionContractTests
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
             }
             var timestamp = DateTimeOffset.UtcNow;
+            var ids = Uri.UnescapeDataString(request.RequestUri!.Segments[^1]).Split(',').Select(int.Parse).ToArray();
+            object Listing(int id) => new
+            {
+                itemID = id,
+                dcName = "Aether",
+                lastUploadTime = timestamp.ToUnixTimeMilliseconds(),
+                worldUploadTimes = new Dictionary<int, long> { [57] = timestamp.ToUnixTimeMilliseconds() },
+                averagePrice = price,
+                averagePriceNQ = price,
+                listings = new[] { new { worldName = "Siren", pricePerUnit = price, quantity = id == 101 ? 2 : 1,
+                    total = price * (id == 101 ? 2 : 1), retainerName = "Fixture", lastReviewTime = timestamp.ToUnixTimeSeconds() } }
+            };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = JsonContent.Create(new
-                {
-                    itemID = 100,
-                    dcName = "Aether",
-                    lastUploadTime = timestamp.ToUnixTimeMilliseconds(),
-                    worldUploadTimes = new Dictionary<int, long> { [57] = timestamp.ToUnixTimeMilliseconds() },
-                    averagePrice = price,
-                    averagePriceNQ = price,
-                    listings = new[] { new { worldName = "Siren", pricePerUnit = price, quantity = 1, total = price,
-                        retainerName = "Fixture", lastReviewTime = timestamp.ToUnixTimeSeconds() } }
-                })
+                Content = JsonContent.Create(ids.Length == 1 ? Listing(ids[0]) : new { items = ids.ToDictionary(id => id, Listing) })
             });
         }
     }

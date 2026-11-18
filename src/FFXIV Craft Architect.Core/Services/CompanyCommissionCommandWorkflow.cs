@@ -249,6 +249,7 @@ public static class CompanyCommissionCommandWorkflow
                     .Append(terms)
                     .OrderBy(item => item.Version)
                     .ToArray(),
+                ClaimPriceReview = null,
                 ParticipantAcknowledgedTermsVersion = null,
                 PaymentPolicyChangeRequest = null,
                 Gates = commission.Gates with

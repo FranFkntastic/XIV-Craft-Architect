@@ -684,7 +684,9 @@ public static class CompanyCommissionEndpoints
                     envelope.ExpectedProjectionRevision,
                     envelope.CommandId,
                     envelope.ProtocolVersion,
-                    cancellationToken);
+                    cancellationToken,
+                    claimAccount?.ProfileId,
+                    ReadClaimTermsVersion(envelope.Command));
                 if (context == null)
                 {
                     return Results.Conflict(new
@@ -1078,7 +1080,8 @@ public static class CompanyCommissionEndpoints
                     "commission_not_open",
                     "Only an open, published commission can be claimed."));
             }
-            if ((commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
+            if (commission.ClaimPriceReview?.IsRetry(account.ProfileId, envelope.CommandId, ReadClaimTermsVersion(envelope.Command)) != true &&
+                (commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
                 envelope.ExpectedProjectionRevision)
             {
                 return Results.Conflict(new
@@ -1917,6 +1920,10 @@ public static class CompanyCommissionEndpoints
                 message = mutation.ErrorMessage
             })
         };
+
+    private static int? ReadClaimTermsVersion(JsonElement command) =>
+        command.ValueKind == JsonValueKind.Object && command.TryGetProperty("termsVersion", out var value) &&
+        value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var version) ? version : null;
 
     internal static IResult ClaimPriceChanged(CompanyCommissionMutationResult mutation)
     {
