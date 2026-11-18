@@ -84,9 +84,7 @@ public partial class TradeOrders
 
         var state = quote.IsLocked
             ? $"locked {quote.LockedAtUtc!.Value.ToLocalTime():g}"
-            : quote.IsExpired(DateTime.UtcNow)
-                ? $"expired {quote.ExpiresAtUtc.ToLocalTime():g}"
-                : $"valid until {quote.ExpiresAtUtc.ToLocalTime():g}";
+            : $"priced {quote.QuotedAtUtc.ToLocalTime():g}";
         return $"{quote.WorldStops:N0} worlds · {state} · policy {quote.PolicyFingerprint}";
     }
 

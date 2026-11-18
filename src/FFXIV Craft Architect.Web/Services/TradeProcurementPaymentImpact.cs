@@ -80,7 +80,7 @@ public static class TradeProcurementPaymentImpact
             else if (peers.All(node => node.Source == source) &&
                 source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy)
             {
-                // Expiry controls whether a quote can be accepted, not what its recorded cash means.
+                // Quote age does not change the recorded purchase cost.
                 if (quoteLines != null && quoteLines.TryGetValue(key, out var quotes) &&
                     quotes.Length == 1 && quotes[0].RequiredQuantity == quantity)
                 {

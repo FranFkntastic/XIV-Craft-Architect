@@ -133,7 +133,7 @@ public static class TradeOrderPaymentCopyFormatter
         {
             var quoteState = quote.IsLocked
                 ? $"locked {FormatTimestamp(quote.LockedAtUtc!.Value)}"
-                : $"expires {FormatTimestamp(quote.ExpiresAtUtc)}";
+                : $"priced {FormatTimestamp(quote.QuotedAtUtc)}";
             builder.AppendLine(
                 $"Route quote: {quote.WorldStops:N0} worlds; {quoteState}; policy {quote.PolicyFingerprint}");
         }
