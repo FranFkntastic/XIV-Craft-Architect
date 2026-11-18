@@ -34,7 +34,10 @@ public static class CompanyCommissionDiscordMessage
                     "An open Discord commission projection requires a claim-capable URL.");
             }
 
-            buttons.Add(LinkButton("Claim commission", projection.ClaimUrl.AbsoluteUri));
+            if (string.IsNullOrWhiteSpace(actionToken))
+            {
+                buttons.Add(LinkButton("Claim commission", projection.ClaimUrl.AbsoluteUri));
+            }
         }
         if (!string.IsNullOrWhiteSpace(actionToken))
         {

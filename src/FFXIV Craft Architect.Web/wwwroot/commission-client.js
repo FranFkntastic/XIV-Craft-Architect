@@ -29,9 +29,9 @@ const enumMaps = {
         "ClaimRejected",
         "ClaimReleased",
         "ClaimRecovered",
-        "ProvisionalIdentitySubmitted",
-        "ProvisionalIdentityConfirmed",
-        "ProvisionalIdentityRejected",
+        "ClaimantCharacterSubmitted",
+        "ClaimantCharacterConfirmed",
+        "ClaimantCharacterRejected",
         "PaymentPolicyChangeRequested",
         "PaymentPolicyChangeAccepted",
         "PaymentPolicyChangeRefused",
@@ -448,6 +448,29 @@ export class LodestoneExistenceClient {
     }
 }
 
+// A claim saved before the claimant-character rename still names its character
+// "provisionalCrafter" and carries retired contact fields. Replay it in the current
+// shape so an in-flight claim survives the release instead of being refused.
+function upgradeLegacyPendingClaim(access) {
+    const payload = access.pending?.kind === "claim" ? access.pending.payload : null;
+    if (!payload?.provisionalCrafter || payload.claimantCharacter) {
+        return access;
+    }
+    const { provisionalCrafter, ...rest } = payload;
+    const { provisionalCrafterId, contactMethod, contactValue, ...character } = provisionalCrafter;
+    return {
+        ...access,
+        pending: {
+            ...access.pending,
+            payload: {
+                ...rest,
+                claimIdentityVersion: 2,
+                claimantCharacter: { claimantCharacterId: provisionalCrafterId, ...character }
+            }
+        }
+    };
+}
+
 export class ParticipantAccessStore {
     constructor(publicId, storage = window.localStorage) {
         this.publicId = publicId;
@@ -477,7 +500,7 @@ export class ParticipantAccessStore {
                 value.participantSecret.length < 40) {
                 throw new Error("Invalid participant access record.");
             }
-            return value;
+            return upgradeLegacyPendingClaim(value);
         } catch {
             throw new CommissionClientError(
                 "Saved participant access is damaged. Open your private workspace link or signed-in company workspace.",
@@ -675,7 +698,7 @@ export class PortableClaimAccountStore {
 
 // Durable "also request membership" intent, saved before the claim is sent so a
 // committed claim can always finish or retry its membership request. It is bound
-// to the requesting account and to the claim's provisional crafter identity.
+// to the requesting account and to the claim's claimant character identity.
 export class PortableMembershipRequestStore {
     constructor(publicId, storage = window.localStorage) {
         this.publicId = publicId;
@@ -701,7 +724,10 @@ export class PortableMembershipRequestStore {
                 publicId: this.publicId,
                 companyId: requiredGuid(value.companyId, "Company ID"),
                 accountProfileId: requiredGuid(value.accountProfileId, "Account profile ID"),
-                provisionalCrafterId: requiredGuid(value.provisionalCrafterId, "Provisional crafter ID"),
+                // Intents saved before the rename carry the same ID as provisionalCrafterId.
+                claimantCharacterId: requiredGuid(
+                    value.claimantCharacterId ?? value.provisionalCrafterId,
+                    "Claimant character ID"),
                 requestNote: optionalText(value.requestNote),
                 state: requiredEnum(value.state, ["intended", "sent", "failed"], "Membership request state"),
                 error: value.error
@@ -724,7 +750,7 @@ export class PortableMembershipRequestStore {
             publicId: this.publicId,
             companyId: requiredGuid(binding.companyId, "Company ID"),
             accountProfileId: requiredGuid(binding.accountProfileId, "Account profile ID"),
-            provisionalCrafterId: requiredGuid(binding.provisionalCrafterId, "Provisional crafter ID"),
+            claimantCharacterId: requiredGuid(binding.claimantCharacterId, "Claimant character ID"),
             requestNote: optionalText(requestNote),
             state,
             error,
@@ -883,7 +909,7 @@ export async function loadPortableCommissionProjection(
             capabilities?.claimCapability &&
             !access?.pending &&
             access?.participantSecret &&
-            projection?.kind === "anonymous" &&
+            projection?.kind === "public" &&
             projection.public?.isClaimed);
         if (savedParticipantCanResumeSharedClaimLink) {
             try {
@@ -979,9 +1005,9 @@ export function adaptBriefProjection(payload) {
     const publicBrief = adaptPublicBrief(isParticipant ? payload.public : payload);
     if (!isParticipant) {
         return {
-            kind: "anonymous",
+            kind: "public",
             public: publicBrief,
-            provisionalCrafter: null,
+            claimantCharacter: null,
             participantCapabilityRevision: null,
             payment: null,
             companyMaterialsReadyForHandoff: false,
@@ -996,8 +1022,8 @@ export function adaptBriefProjection(payload) {
         termsComparisons: payload.termsComparisons == null ? null : requiredArray(payload.termsComparisons, "Terms comparisons").map(adaptTermsComparison),
         permittedTermsVersions: payload.permittedTermsVersions == null ? null : requiredArray(payload.permittedTermsVersions, "Permitted terms").map(adaptHistoricalTerms),
         public: publicBrief,
-        provisionalCrafter: payload.provisionalCrafter
-            ? adaptProvisionalCrafter(payload.provisionalCrafter)
+        claimantCharacter: payload.claimantCharacter
+            ? adaptClaimantCharacter(payload.claimantCharacter)
             : null,
         claimAccountEvidence: payload.claimAccountEvidence
             ? adaptClaimAccountEvidence(payload.claimAccountEvidence)
@@ -1130,6 +1156,7 @@ function adaptPublicBrief(source) {
     }
 
     return {
+        claimIdentityVersion: brief.claimIdentityVersion ?? null,
         publicBriefId: requiredText(brief.publicBriefId, "Public brief ID"),
         commissionId: requiredGuid(brief.commissionId, "Commission ID"),
         title: requiredText(brief.title, "Commission title"),
@@ -1271,13 +1298,11 @@ function adaptPublicReadiness(value) {
     };
 }
 
-function adaptProvisionalCrafter(value) {
+function adaptClaimantCharacter(value) {
     return {
-        provisionalCrafterId: requiredGuid(value.provisionalCrafterId, "Provisional crafter ID"),
+        claimantCharacterId: requiredGuid(value.claimantCharacterId, "Claimant character ID"),
         characterName: requiredText(value.characterName, "Character name"),
         homeWorld: requiredText(value.homeWorld, "Home world"),
-        contactMethod: requiredText(value.contactMethod, "Contact method"),
-        contactValue: requiredText(value.contactValue, "Contact value"),
         discordUserId: optionalText(value.discordUserId),
         discordDisplayNameSnapshot: optionalText(value.discordDisplayNameSnapshot),
         lodestoneCharacterId: requiredText(value.lodestoneCharacterId, "Lodestone character ID"),

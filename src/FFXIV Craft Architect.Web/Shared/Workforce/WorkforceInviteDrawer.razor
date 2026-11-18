@@ -3,7 +3,7 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JSRuntime
 
-<WorkforceDrawer Open="Open" OnClose="CloseAsync" Title="Invite crafter" Eyebrow="Company access">
+<WorkforceDrawer Open="Open" OnClose="CloseAsync" Title="Invite to join" Eyebrow="Company access">
     <ChildContent>
         <section class="workforce-drawer-section">
             @if (AvailableRecords.Count > 0)
@@ -26,12 +26,35 @@
             </div>
             @if (_issued != null)
             {
-                <div class="workforce-receipt" role="status">
-                    <span>
-                        Invitation copied · expires @_issued.ExpiresAtUtc.ToLocalTime().ToString("g")@(_issued.LegacyCrafterName == null ? null : $" · connects {_issued.LegacyCrafterName}")
-                    </span>
-                    <button type="button" class="workforce-button is-small is-quiet" @onclick="CopyIssuedAsync">Copy again</button>
-                </div>
+                @if (_issued.SentOnDiscord || !_deliveryAttempted)
+                {
+                    <div class="workforce-receipt" role="status">
+                        <span>@ReceiptText</span>
+                        <button type="button" class="workforce-button is-small is-quiet" @onclick="CopyIssuedAsync">
+                            @(_issued.SentOnDiscord || !_linkCopied ? "Copy link" : "Copy again")
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="workforce-confirm" role="status">
+                        <div class="workforce-list-row">
+                            <span>@ReceiptText</span>
+                            <span class="workforce-row-actions">
+                                @if (CanRetry(_issued.DiscordDeliveryCode))
+                                {
+                                    <button type="button"
+                                            class="workforce-button is-small"
+                                            disabled="@_busy"
+                                            @onclick="RetryDiscordAsync">
+                                        Retry on Discord
+                                    </button>
+                                }
+                                <button type="button" class="workforce-button is-small is-quiet" @onclick="CopyIssuedAsync">Copy link</button>
+                            </span>
+                        </div>
+                    </div>
+                }
             }
         </section>
 
@@ -43,6 +66,7 @@
                     <thead>
                         <tr>
                             <th scope="col">Invitation</th>
+                            <th scope="col">Delivery</th>
                             <th scope="col">Expires</th>
                             <th scope="col"><span class="workforce-visually-hidden">Actions</span></th>
                         </tr>
@@ -52,6 +76,7 @@
                         {
                             <tr @key="invitation.InvitationId">
                                 <td>@(invitation.LegacyCrafterName ?? "New company member")</td>
+                                <td>@(invitation.SentOnDiscord ? $"Discord · {invitation.DiscordRecipientName}" : "Link only")</td>
                                 <td>@invitation.ExpiresAtUtc.ToLocalTime().ToString("g")</td>
                                 <td class="workforce-row-actions">
                                     <button type="button"
@@ -71,9 +96,9 @@
     <Actions>
         <button type="button"
                 class="workforce-button is-primary"
-                disabled="@(_busy || !_expiresOn.HasValue)"
+                disabled="@(_busy || !_expiresOn.HasValue || _recipientsLoading)"
                 @onclick="IssueAsync">
-            Create invitation
+            @PrimaryLabel
         </button>
     </Actions>
 </WorkforceDrawer>
@@ -92,7 +117,13 @@
     private Guid? _recordId;
     private DateTime? _expiresOn = DateTime.Today.AddDays(7);
     private CompanyMembershipInvitation? _issued;
+    // Why a record with a Discord account was handed a link instead (host or company not ready).
+    private string? _issuedUnavailableCode;
+    private bool _deliveryAttempted;
+    private bool _linkCopied;
     private bool _busy;
+    private bool _recipientsLoading;
+    private MembershipInvitationRecipients? _recipients;
 
     private IReadOnlyList<CompanyMembershipInvitation> ActiveInvitations =>
         Invitations.Where(invitation => invitation.State == "active").ToArray();
@@ -104,20 +135,111 @@
                 string.IsNullOrWhiteSpace(record.WorldName) ? record.DisplayName : $"{record.DisplayName} · {record.WorldName}")))
             .ToArray();
 
-    protected override void OnParametersSet()
+    // The host resolves the recipient itself; this only predicts it so the button says what will happen.
+    private MembershipInvitationRecipient? SelectedRecipient =>
+        _recordId is { } recordId
+            ? _recipients?.Recipients.FirstOrDefault(recipient => recipient.LegacyCrafterId == recordId)
+            : null;
+
+    private bool WillSendOnDiscord => SelectedRecipient != null && _recipients?.UnavailableCode == null;
+
+    private string PrimaryLabel => WillSendOnDiscord
+        ? $"Send to {SelectedRecipient!.DiscordDisplayName} on Discord"
+        : "Copy invitation link";
+
+    private string ReceiptText
+    {
+        get
+        {
+            var issued = _issued!;
+            var tail = $"expires {issued.ExpiresAtUtc.ToLocalTime():g}" +
+                (issued.LegacyCrafterName == null ? null : $" · connects {issued.LegacyCrafterName}");
+            if (issued.SentOnDiscord)
+            {
+                return $"Sent to {issued.DiscordRecipientName} on Discord · {tail}";
+            }
+
+            if (_deliveryAttempted)
+            {
+                var recipient = issued.DiscordRecipientName == null ? "on Discord" : $"to {issued.DiscordRecipientName} on Discord";
+                return $"Not sent {recipient}: {DeliveryReason(issued.DiscordDeliveryCode)} · {tail}";
+            }
+
+            var copied = _linkCopied ? "Invitation link copied" : "Invitation created";
+            return _issuedUnavailableCode == null
+                ? $"{copied} · {tail}"
+                : $"{copied} · not sent on Discord: {DeliveryReason(_issuedUnavailableCode)} · {tail}";
+        }
+    }
+
+    private static string DeliveryReason(string? code) => code switch
+    {
+        "no_installation" => "company has no Discord bot installed",
+        "discord_unconfigured" => "Discord delivery is off on this host",
+        "recipient_unreachable" => "their DMs are closed or they share no server with the bot",
+        "discord_unavailable" => "Discord is not responding",
+        "discord_outcome_unknown" => "Discord did not confirm delivery",
+        "discord_rejected" => "Discord refused the message",
+        "no_recipient" => "no verified Discord account",
+        "delivery_in_progress" => "a send is already in progress",
+        "invitation_unavailable" => "invitation is no longer open",
+        _ => "Discord error"
+    };
+
+    private static bool CanRetry(string? code) =>
+        code is not ("no_recipient" or "no_installation" or "discord_unconfigured" or "invitation_unavailable");
+
+    protected override async Task OnParametersSetAsync()
     {
         // A different company must never inherit the previous company's preselected record
         // or issued link, even if the drawer stays mounted across the switch.
         var companyChanged = !string.Equals(_companyId, CompanyId, StringComparison.Ordinal);
-        if ((Open && !_wasOpen) || companyChanged)
+        var opening = Open && !_wasOpen;
+        if (opening || companyChanged)
         {
             _recordId = Open ? PreselectedRecordId : null;
             _expiresOn = DateTime.Today.AddDays(7);
-            _issued = null;
+            ClearIssued();
+            _recipients = null;
         }
 
         _companyId = CompanyId;
         _wasOpen = Open;
+        if (Open && (opening || companyChanged))
+        {
+            await LoadRecipientsAsync();
+        }
+    }
+
+    private async Task LoadRecipientsAsync()
+    {
+        var companyId = CompanyId;
+        _recipientsLoading = true;
+        try
+        {
+            var recipients = await HubClient.LoadMembershipInvitationRecipientsAsync(companyId);
+            if (string.Equals(companyId, CompanyId, StringComparison.Ordinal))
+            {
+                _recipients = recipients;
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            // Without recipients nothing is sent; the action stays a plain link copy.
+            Console.Error.WriteLine($"[Workforce] Invitation recipients unavailable for company {companyId}: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            _recipientsLoading = false;
+        }
+    }
+
+    private void ClearIssued()
+    {
+        _issued = null;
+        _issuedUnavailableCode = null;
+        _deliveryAttempted = false;
+        _linkCopied = false;
     }
 
     private void SetRecord(string value) =>
@@ -152,18 +274,54 @@
             return;
         }
 
+        var sendOnDiscord = WillSendOnDiscord;
+        var unavailableCode = SelectedRecipient != null ? _recipients?.UnavailableCode : null;
         _busy = true;
         try
         {
-            _issued = await HubClient.IssueMembershipInvitationAsync(CompanyId, _recordId, ExpiresAtUtc());
+            var issued = await HubClient.IssueMembershipInvitationAsync(CompanyId, _recordId, ExpiresAtUtc(), sendOnDiscord);
+            ClearIssued();
+            _issued = issued;
+            _deliveryAttempted = sendOnDiscord;
+            _issuedUnavailableCode = unavailableCode;
             _recordId = null;
-            await CopyIssuedAsync();
+            if (!sendOnDiscord)
+            {
+                await CopyIssuedAsync();
+            }
             await OnChanged.InvokeAsync();
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"[Workforce] Invitation issue failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
             Snackbar.Add(ex is CompanyHubRequestException ? ex.Message : "The company host could not create the invitation.", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RetryDiscordAsync()
+    {
+        if (_issued == null || string.IsNullOrWhiteSpace(_issued.Token))
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var token = _issued.Token;
+            var result = await HubClient.SendMembershipInvitationOnDiscordAsync(_issued);
+            // Keep the link this drawer already holds; the retry only changes delivery.
+            _issued = result with { Token = token };
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine($"[Workforce] Invitation Discord retry failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
+            Snackbar.Add("The company host could not retry the Discord message.", Severity.Error);
         }
         finally
         {
@@ -182,7 +340,8 @@
         try
         {
             await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", url);
-            Snackbar.Add("Company invitation copied.", Severity.Success);
+            _linkCopied = true;
+            Snackbar.Add("Invitation link copied.", Severity.Success);
         }
         catch (JSException ex)
         {

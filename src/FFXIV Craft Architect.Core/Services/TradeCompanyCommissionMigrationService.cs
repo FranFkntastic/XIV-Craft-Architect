@@ -1,12 +1,72 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class TradeCompanyCommissionMigrationService
 {
+    // Stored-data upgrade, not a supported wire format. Do not infer account evidence:
+    // pre-account claims retain their grants, character, review and completion state.
+    private static readonly IReadOnlyDictionary<string, string> RetiredActivitySentences =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Submitted a provisional crafter identity for commissioner review."] =
+                "Submitted a claimant character identity for commissioner review.",
+            ["Confirmed the claimant's contact and in-game character."] =
+                "Confirmed the claimant's Discord account and in-game character."
+        };
+
+    public static void UpgradeStoredClaimIdentity(JsonNode? node)
+    {
+        if (node is JsonObject record)
+        {
+            foreach (var property in record.ToArray())
+            {
+                var name = property.Key;
+                if (name.Equals("contactMethod", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("contactValue", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.Remove(name);
+                    continue;
+                }
+                var renamed = name
+                    .Replace("provisionalCrafter", "claimantCharacter", StringComparison.Ordinal)
+                    .Replace("ProvisionalCrafter", "ClaimantCharacter", StringComparison.Ordinal);
+                if (renamed != name)
+                {
+                    record.Remove(name);
+                    record[renamed] = property.Value;
+                }
+                UpgradeStoredClaimIdentity(property.Value);
+                // Only the retired activity kinds and the two system-written activity
+                // sentences are rewritten; operator and crafter free text is never touched.
+                if (property.Value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
+                {
+                    if (name.Equals("kind", StringComparison.OrdinalIgnoreCase) &&
+                        text.StartsWith("ProvisionalIdentity", StringComparison.Ordinal))
+                    {
+                        record[renamed] = "ClaimantCharacter" + text["ProvisionalIdentity".Length..];
+                    }
+                    else if (name.Equals("comment", StringComparison.OrdinalIgnoreCase) &&
+                             RetiredActivitySentences.TryGetValue(text, out var sentence))
+                    {
+                        record[renamed] = sentence;
+                    }
+                }
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                UpgradeStoredClaimIdentity(item);
+            }
+        }
+    }
+
     public static CompanyCommissionTermsVersion CreateDraftTerms(
         TradeOrder source,
         CommissionBriefDocument brief,

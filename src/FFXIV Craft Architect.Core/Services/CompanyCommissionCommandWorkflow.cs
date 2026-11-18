@@ -289,21 +289,22 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             command.TermsVersion == commission.CurrentTermsVersion,
             "The claim terms version is stale.");
+        // A company member claims as their own confirmed crafter record; everyone else
+        // names one exact Lodestone character for the commissioner to confirm.
         Require(
-            command.ExistingCrafterId.HasValue ^ command.ProvisionalCrafter != null,
-            "A claim requires exactly one existing or provisional crafter identity.");
+            command.ClaimantCharacter != null || command.ExistingCrafterId.HasValue,
+            "claimant_character_required: A claim requires a confirmed company crafter or one exact Lodestone character.");
         if (command.ExistingCrafterId == Guid.Empty)
         {
             throw new InvalidOperationException("The existing crafter identity is invalid.");
         }
-        if (command.ProvisionalCrafter != null)
+        if (command.ClaimantCharacter != null)
         {
-            ValidateProvisionalCrafter(command.ProvisionalCrafter);
+            ValidateClaimantCharacter(command.ClaimantCharacter);
         }
-        if (command.AccountEvidence != null)
-        {
-            ValidateClaimAccountEvidence(command.AccountEvidence);
-        }
+        Require(command.AccountEvidence != null,
+            "claim_requires_verified_discord_account: A new claim requires verified Discord account evidence.");
+        ValidateClaimAccountEvidence(command.AccountEvidence!);
 
         var claimId = command.Context.CommandId;
         var assignedCrafterId = command.ExistingCrafterId;
@@ -315,6 +316,17 @@ public static class CompanyCommissionCommandWorkflow
             identityState,
             nowUtc,
             assignedCrafterId.HasValue ? "existing-company-crafter" : null);
+        if (command.ClaimantCharacter != null)
+        {
+            gates = gates with
+            {
+                Identity = gates.Identity with
+                {
+                    LodestoneCharacterId = command.ClaimantCharacter.LodestoneCharacterId,
+                    CharacterVerifiedAtUtc = nowUtc
+                }
+            };
+        }
         var updated = Copy(source);
         updated.Status = TradeOrderStatus.Assigned;
         updated.AssignedCrafterId = assignedCrafterId;
@@ -327,9 +339,9 @@ public static class CompanyCommissionCommandWorkflow
                     commission.CurrentTermsVersion,
                     nowUtc,
                     assignedCrafterId,
-                    command.ProvisionalCrafter?.ProvisionalCrafterId,
+                    command.ClaimantCharacter?.ClaimantCharacterId,
                     command.AccountEvidence),
-                ProvisionalCrafter = command.ProvisionalCrafter,
+                ClaimantCharacter = command.ClaimantCharacter,
                 ParticipantGrant = new CompanyCommissionParticipantGrant(
                     claimId,
                     claimId,
@@ -345,7 +357,7 @@ public static class CompanyCommissionCommandWorkflow
             {
                 claimId,
                 termsVersion = commission.CurrentTermsVersion,
-                provisional = command.ProvisionalCrafter != null,
+                character = command.ClaimantCharacter != null,
                 discordAccountVerified = command.AccountEvidence != null
             }));
     }
@@ -405,7 +417,7 @@ public static class CompanyCommissionCommandWorkflow
             commission with
             {
                 ActiveClaim = null,
-                ProvisionalCrafter = null,
+                ClaimantCharacter = null,
                 ParticipantGrant = participant with
                 {
                     RevokedAtUtc = nowUtc
@@ -478,12 +490,16 @@ public static class CompanyCommissionCommandWorkflow
     {
         RequireClaim(commission);
         Require(source.Status == TradeOrderStatus.Assigned, "Identity cannot change after work begins.");
-        ValidateProvisionalCrafter(command.ProvisionalCrafter);
+        ValidateClaimantCharacter(command.ClaimantCharacter);
         return Transition(
             source,
             commission with
             {
-                ProvisionalCrafter = command.ProvisionalCrafter with
+                ActiveClaim = commission.ActiveClaim! with
+                {
+                    ClaimantCharacterId = command.ClaimantCharacter.ClaimantCharacterId
+                },
+                ClaimantCharacter = command.ClaimantCharacter with
                 {
                     SubmittedAtUtc = nowUtc
                 },
@@ -491,13 +507,13 @@ public static class CompanyCommissionCommandWorkflow
                 {
                     Identity = new CompanyCommissionIdentityClearance(
                         CompanyCommissionClearanceState.Pending,
-                        command.ProvisionalCrafter.LodestoneCharacterId,
+                        command.ClaimantCharacter.LodestoneCharacterId,
                         CharacterVerifiedAtUtc:
-                        command.ProvisionalCrafter.LodestoneCharacterId == null ? null : nowUtc)
+                        command.ClaimantCharacter.LodestoneCharacterId == null ? null : nowUtc)
                 }
             },
-            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted,
-            "Submitted a provisional crafter identity for commissioner review.");
+            CompanyCommissionActivityKind.ClaimantCharacterSubmitted,
+            "Submitted a claimant character identity for commissioner review.");
     }
 
     private static CompanyCommissionDomainTransition ConfirmIdentity(
@@ -513,9 +529,9 @@ public static class CompanyCommissionCommandWorkflow
             !string.IsNullOrWhiteSpace(command.LodestoneCharacterId),
             "A verified Lodestone character is required.");
         Require(
-            commission.ProvisionalCrafter is { } provisional &&
+            commission.ClaimantCharacter is { } character &&
             string.Equals(
-                provisional.LodestoneCharacterId,
+                character.LodestoneCharacterId,
                 command.LodestoneCharacterId,
                 StringComparison.Ordinal),
             "Commissioner confirmation must match the submitted Lodestone candidate.");
@@ -539,8 +555,8 @@ public static class CompanyCommissionCommandWorkflow
                         ConfirmedByActorId: actor.ActorId)
                 }
             },
-            CompanyCommissionActivityKind.ProvisionalIdentityConfirmed,
-            "Confirmed the claimant's contact and in-game character.");
+            CompanyCommissionActivityKind.ClaimantCharacterConfirmed,
+            "Confirmed the claimant's Discord account and in-game character.");
     }
 
     private static CompanyCommissionDomainTransition RequestPaymentChange(
@@ -1289,7 +1305,7 @@ public static class CompanyCommissionCommandWorkflow
             commission with
             {
                 ActiveClaim = null,
-                ProvisionalCrafter = null,
+                ClaimantCharacter = null,
                 ParticipantGrant = participant == null
                     ? null
                     : participant with { RevokedAtUtc = participant.RevokedAtUtc ?? nowUtc },
@@ -1558,16 +1574,16 @@ public static class CompanyCommissionCommandWorkflow
             "Custom payment timing requires explicit terms.");
     }
 
-    private static void ValidateProvisionalCrafter(
-        CompanyCommissionProvisionalCrafter provisional)
+    private static void ValidateClaimantCharacter(
+        CompanyCommissionClaimantCharacter character)
     {
-        Require(provisional.ProvisionalCrafterId != Guid.Empty, "The provisional crafter ID is invalid.");
+        Require(character.ClaimantCharacterId != Guid.Empty, "The claimant character ID is invalid.");
         Require(
-            !string.IsNullOrWhiteSpace(provisional.CharacterName) &&
-            !string.IsNullOrWhiteSpace(provisional.HomeWorld) &&
-            !string.IsNullOrWhiteSpace(provisional.ContactMethod) &&
-            !string.IsNullOrWhiteSpace(provisional.ContactValue),
-            "Character, world, and usable contact details are required.");
+            !string.IsNullOrWhiteSpace(character.CharacterName) &&
+            !string.IsNullOrWhiteSpace(character.HomeWorld) &&
+            !string.IsNullOrWhiteSpace(character.LodestoneCharacterId) &&
+            !string.IsNullOrWhiteSpace(character.LodestoneProfileUrl),
+            "claimant_character_invalid: Character, world, and exact Lodestone evidence are required.");
     }
 
     private static void RequireClaim(TradeCompanyCommission commission) =>
