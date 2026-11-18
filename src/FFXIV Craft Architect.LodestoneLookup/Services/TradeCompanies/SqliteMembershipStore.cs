@@ -2085,6 +2085,18 @@ public sealed partial class SqliteMembershipStore(
                 CREATE INDEX IF NOT EXISTS ix_account_commission_claims_commission
                     ON account_commission_claims(company_id, commission_id);
 
+                CREATE TABLE IF NOT EXISTS account_commission_claim_marks (
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    projected_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(company_id, commission_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS account_commission_claim_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS company_retirement_receipts (
                     company_id TEXT PRIMARY KEY,
                     actor TEXT NOT NULL,

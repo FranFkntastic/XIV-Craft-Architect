@@ -233,6 +233,7 @@ builder.Services.AddSingleton<
     ICompanyCommissionPostCommitSink,
     CommissionProjectionChangePostCommitSink>();
 builder.Services.AddSingleton<AccountClaimProjectionService>();
+builder.Services.AddHostedService<AccountClaimProjectionBackfillHostedService>();
 builder.Services.AddSingleton<
     ICompanyCommissionPostCommitSink,
     AccountClaimProjectionPostCommitSink>();

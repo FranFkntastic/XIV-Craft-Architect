@@ -18,7 +18,8 @@ public sealed record AccountClaimProjectionReport(
     int ExpectedRows,
     int UnchangedRows,
     IReadOnlyList<AccountClaimProjectionRow> Added,
-    IReadOnlyList<AccountClaimProjectionRow> Removed);
+    IReadOnlyList<AccountClaimProjectionRow> Removed,
+    int SkippedNewerCommissions = 0);
 
 /// <summary>
 /// Maintains the account→claims lookup the Crafter hub uses to find an account's claims
@@ -36,6 +37,12 @@ public sealed class AccountClaimProjectionService(
     SqliteDiscordNotificationStore notifications,
     ILogger<AccountClaimProjectionService> logger)
 {
+    /// <summary>
+    /// Bumped whenever owner resolution changes, so hosts rebuild the lookup on start.
+    /// 2: legacy claims resolve through their committed Discord claim contact.
+    /// </summary>
+    public const int ProjectionVersion = 2;
+
     public async Task ProjectAsync(
         CompanyId companyId,
         TradeOrder order,
@@ -61,6 +68,8 @@ public sealed class AccountClaimProjectionService(
         bool dryRun,
         CancellationToken cancellationToken = default)
     {
+        // Live commits after this instant are newer than the snapshot below and win.
+        var snapshotStartedAtUtc = DateTimeOffset.UtcNow;
         var directory = await hubs.LoadCommissionDirectoryAsync(cancellationToken);
         var expected = new List<AccountCommissionClaim>();
         var activeClaims = 0;
@@ -97,13 +106,21 @@ public sealed class AccountClaimProjectionService(
         var currentKeys = current.Select(Key).ToHashSet();
         var added = expected.Where(item => !currentKeys.Contains(Key(item))).Select(ToRow).ToArray();
         var removed = current.Where(item => !expectedKeys.Contains(Key(item))).Select(ToRow).ToArray();
-        if (!dryRun && (added.Length > 0 || removed.Length > 0))
+        var skipped = 0;
+        if (!dryRun)
         {
-            await memberships.ReplaceAllAccountCommissionClaimsAsync(expected, cancellationToken);
+            var applied = await memberships.ApplyAccountCommissionClaimRebuildAsync(
+                expected,
+                snapshotStartedAtUtc,
+                ProjectionVersion,
+                cancellationToken);
+            skipped = applied.SkippedCommissions;
             logger.LogInformation(
-                "Account claim lookup rebuilt: {Added} added, {Removed} removed, {Expected} rows.",
-                added.Length,
-                removed.Length,
+                "Account claim lookup rebuilt (v{Version}): {Added} added, {Removed} removed, {Skipped} newer commissions kept, {Expected} rows expected.",
+                ProjectionVersion,
+                applied.AddedRows,
+                applied.RemovedRows,
+                applied.SkippedCommissions,
                 expected.Count);
         }
 
@@ -114,7 +131,8 @@ public sealed class AccountClaimProjectionService(
             expected.Count,
             expected.Count - added.Length,
             added,
-            removed);
+            removed,
+            skipped);
     }
 
     // Mirrors LegacyCrafterAccountResolver ownership: committed account evidence is
@@ -257,4 +275,52 @@ public sealed class AccountClaimProjectionPostCommitSink(
         CompanyCommissionActivityEvent activity,
         CancellationToken cancellationToken) =>
         projection.ProjectAsync(access.CompanyId, committed.Order, cancellationToken);
+}
+
+/// <summary>
+/// Backfills the account→claims lookup when the host starts with an empty lookup or one
+/// built by an older projection version.
+/// </summary>
+public sealed class AccountClaimProjectionBackfillHostedService(
+    ProfileHostOptions options,
+    SqliteMembershipStore memberships,
+    AccountClaimProjectionService projection,
+    ILogger<AccountClaimProjectionBackfillHostedService> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (!options.Enabled)
+        {
+            return;
+        }
+
+        try
+        {
+            var version = await memberships.LoadAccountCommissionClaimProjectionVersionAsync(stoppingToken);
+            var populated = await memberships.HasAccountCommissionClaimsAsync(stoppingToken);
+            if (populated && version >= AccountClaimProjectionService.ProjectionVersion)
+            {
+                logger.LogInformation(
+                    "Account claim lookup is current (v{Version}); startup backfill skipped.",
+                    version);
+                return;
+            }
+
+            var report = await projection.RebuildAsync(dryRun: false, stoppingToken);
+            logger.LogInformation(
+                "Account claim lookup startup backfill (stored v{StoredVersion}, empty {Empty}): {Companies} companies, {ActiveClaims} active claims, {Added} added, {Removed} removed, {Skipped} newer commissions kept, {Expected} rows expected.",
+                version?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none",
+                !populated,
+                report.CompaniesScanned,
+                report.ActiveClaims,
+                report.Added.Count,
+                report.Removed.Count,
+                report.SkippedNewerCommissions,
+                report.ExpectedRows);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Account claim lookup startup backfill failed; it retries on the next start.");
+        }
+    }
 }

@@ -21,11 +21,20 @@ public sealed record AccountCommissionClaimOwner(
     Guid ClaimId,
     DateTimeOffset ClaimedAtUtc);
 
+public sealed record AccountCommissionClaimRebuildResult(
+    int AddedRows,
+    int RemovedRows,
+    int SkippedCommissions);
+
 public sealed partial class SqliteMembershipStore
 {
+    private const string ProjectionVersionKey = "projection_version";
+
     /// <summary>
     /// Replaces the projected owners of one commission. An empty owner list removes the
     /// commission from every account's lookup (released, rejected, or cancelled claims).
+    /// The commission is marked as projected now, so a rebuild whose canonical snapshot
+    /// is older leaves it alone.
     /// </summary>
     public async Task SetCommissionClaimOwnersAsync(
         CompanyId companyId,
@@ -50,6 +59,19 @@ public sealed partial class SqliteMembershipStore
             commissionId,
             owners,
             cancellationToken);
+        await using (var mark = connection.CreateCommand())
+        {
+            mark.Transaction = transaction;
+            mark.CommandText = """
+                INSERT INTO account_commission_claim_marks (company_id, commission_id, projected_at_utc)
+                VALUES ($companyId, $commissionId, $projectedAt)
+                ON CONFLICT(company_id, commission_id) DO UPDATE SET projected_at_utc = excluded.projected_at_utc;
+                """;
+            mark.Parameters.AddWithValue("$companyId", companyId.ToString());
+            mark.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            mark.Parameters.AddWithValue("$projectedAt", DateTimeOffset.UtcNow.ToString("O"));
+            await mark.ExecuteNonQueryAsync(cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -74,12 +96,42 @@ public sealed partial class SqliteMembershipStore
         CancellationToken cancellationToken = default) =>
         await LoadCommissionClaimsAsync(string.Empty, _ => { }, cancellationToken);
 
+    public async Task<bool> HasAccountCommissionClaimsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM account_commission_claims);";
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) != 0;
+    }
+
+    /// <summary>The projection version the lookup was last fully rebuilt with, if any.</summary>
+    public async Task<int?> LoadAccountCommissionClaimProjectionVersionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM account_commission_claim_meta WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", ProjectionVersionKey);
+        return await command.ExecuteScalarAsync(cancellationToken) is string value &&
+            int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var version)
+                ? version
+                : null;
+    }
+
     /// <summary>
-    /// Makes the lookup equal to a full rebuild from canonical commissions, in one
-    /// transaction. Rows for commissions outside <paramref name="expected"/> are removed.
+    /// Brings the lookup in line with a full rebuild from canonical commissions read since
+    /// <paramref name="snapshotStartedAtUtc"/>. Only commissions whose owners differ are
+    /// rewritten; a commission projected by a live commit after the snapshot started is
+    /// newer than the rebuild's view and is left untouched. Records
+    /// <paramref name="projectionVersion"/> as the lookup's version.
     /// </summary>
-    public async Task ReplaceAllAccountCommissionClaimsAsync(
+    public async Task<AccountCommissionClaimRebuildResult> ApplyAccountCommissionClaimRebuildAsync(
         IReadOnlyCollection<AccountCommissionClaim> expected,
+        DateTimeOffset snapshotStartedAtUtc,
+        int projectionVersion,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -87,27 +139,90 @@ public sealed partial class SqliteMembershipStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
-        await using (var clear = connection.CreateCommand())
+
+        var newer = new HashSet<(string, string)>();
+        await using (var marks = connection.CreateCommand())
         {
-            clear.Transaction = transaction;
-            clear.CommandText = "DELETE FROM account_commission_claims;";
-            await clear.ExecuteNonQueryAsync(cancellationToken);
+            marks.Transaction = transaction;
+            marks.CommandText = "SELECT company_id, commission_id, projected_at_utc FROM account_commission_claim_marks;";
+            await using var reader = await marks.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (DateTimeOffset.TryParse(
+                        reader.GetString(2),
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind,
+                        out var projectedAt) &&
+                    projectedAt >= snapshotStartedAtUtc)
+                {
+                    newer.Add((reader.GetString(0), reader.GetString(1)));
+                }
+            }
         }
-        foreach (var group in expected.GroupBy(item => (item.CompanyId, item.CommissionId)))
+
+        var current = new Dictionary<(string, string), HashSet<(Guid, Guid)>>();
+        await using (var rows = connection.CreateCommand())
         {
+            rows.Transaction = transaction;
+            rows.CommandText = "SELECT company_id, commission_id, account_profile_id, claim_id FROM account_commission_claims;";
+            await using var reader = await rows.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var key = (reader.GetString(0), reader.GetString(1));
+                if (!current.TryGetValue(key, out var owners))
+                {
+                    current[key] = owners = [];
+                }
+                owners.Add((Guid.Parse(reader.GetString(2)), Guid.Parse(reader.GetString(3))));
+            }
+        }
+
+        var wanted = expected
+            .GroupBy(item => (item.CompanyId.ToString(), item.CommissionId.ToString("D")))
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        int added = 0, removed = 0, skipped = 0;
+        foreach (var key in wanted.Keys.Union(current.Keys).ToArray())
+        {
+            var want = wanted.TryGetValue(key, out var items) ? items : [];
+            var wantSet = want.Select(item => (item.AccountProfileId, item.ClaimId)).ToHashSet();
+            var have = current.TryGetValue(key, out var existing) ? existing : [];
+            if (wantSet.SetEquals(have))
+            {
+                continue;
+            }
+            if (newer.Contains(key))
+            {
+                skipped++;
+                continue;
+            }
+            added += wantSet.Count(item => !have.Contains(item));
+            removed += have.Count(item => !wantSet.Contains(item));
             await ReplaceCommissionClaimOwnersAsync(
                 connection,
                 transaction,
-                group.Key.CompanyId,
-                group.Key.CommissionId,
-                group.Select(item => new AccountCommissionClaimOwner(
+                ParseCompanyId(key.Item1),
+                Guid.Parse(key.Item2),
+                want.Select(item => new AccountCommissionClaimOwner(
                         item.AccountProfileId,
                         item.ClaimId,
                         item.ClaimedAtUtc))
                     .ToArray(),
                 cancellationToken);
         }
+
+        await using (var version = connection.CreateCommand())
+        {
+            version.Transaction = transaction;
+            version.CommandText = """
+                INSERT INTO account_commission_claim_meta (key, value) VALUES ($key, $value)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """;
+            version.Parameters.AddWithValue("$key", ProjectionVersionKey);
+            version.Parameters.AddWithValue("$value", projectionVersion.ToString(CultureInfo.InvariantCulture));
+            await version.ExecuteNonQueryAsync(cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
+        return new AccountCommissionClaimRebuildResult(added, removed, skipped);
     }
 
     public async Task<IReadOnlyList<CrafterAccountBinding>> LoadCrafterBindingsForAccountAsync(
