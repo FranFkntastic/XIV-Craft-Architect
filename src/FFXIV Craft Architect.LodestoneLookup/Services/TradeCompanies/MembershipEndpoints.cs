@@ -113,6 +113,7 @@ public static class MembershipEndpoints
 {
     public static void MapMembershipEndpoints(this WebApplication app)
     {
+        app.MapGet("/join/{code}", InvitationLandingPage.GetAsync);
         var companies = app.MapGroup("/trade/v1/companies");
         companies.MapPost(
             "/{companyId}/membership-requests",
