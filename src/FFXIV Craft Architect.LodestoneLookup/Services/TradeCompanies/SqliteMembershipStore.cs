@@ -214,7 +214,7 @@ public sealed partial class SqliteMembershipStore(
     {
         RequireIdentity(companyId, issuedByProfileId);
         var invitationId = Guid.NewGuid();
-        var token = ToBase64Url(RandomNumberGenerator.GetBytes(32));
+        var token = ToBase64Url(RandomNumberGenerator.GetBytes(12));
         var tokenHash = HashToken(token);
         var issuedAt = timeProvider.GetUtcNow();
         var expiresAt = (expiresAtUtc ?? issuedAt + DefaultInvitationLifetime).ToUniversalTime();
@@ -2506,7 +2506,7 @@ public sealed partial class SqliteMembershipStore(
         Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
     private static bool IsValidInvitationToken(string? token) =>
-        !string.IsNullOrWhiteSpace(token) && token.Length is >= 40 and <= 128 &&
+        !string.IsNullOrWhiteSpace(token) && token.Length is 16 or 43 &&
         token.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     private static string ToBase64Url(byte[] value) =>

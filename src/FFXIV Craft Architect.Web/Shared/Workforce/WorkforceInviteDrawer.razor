@@ -336,7 +336,7 @@
             return;
         }
 
-        var url = Navigation.ToAbsoluteUri($"companies/{Uri.EscapeDataString(CompanyId)}?invite={Uri.EscapeDataString(_issued.Token)}").AbsoluteUri;
+        var url = Navigation.ToAbsoluteUri($"/join/{Uri.EscapeDataString(_issued.Token)}").AbsoluteUri;
         try
         {
             await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", url);

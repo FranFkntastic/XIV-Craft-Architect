@@ -24,7 +24,7 @@ LEGACY_PREFIXES = (
 # Keep the commission route before the broad XIV data route. Caddy path matchers
 # are specificity-aware, but the generated source should carry the authority
 # order directly instead of relying on adapter reordering.
-MANAGED_PREFIXES = (
+PRE_JOIN_PREFIXES = (
     "/api/profile-host",
     "/api/trade",
     "/api/xivdata/commission-briefs",
@@ -34,6 +34,8 @@ MANAGED_PREFIXES = (
     "/api/craft",
     "/api/discord",
 )
+
+MANAGED_PREFIXES = (*PRE_JOIN_PREFIXES, "/join/")
 
 CANONICAL_PORT = "5128"
 STAGING_PORT = "5129"
@@ -96,7 +98,7 @@ def _strip_managed_routes(
 
     legacy = set(LEGACY_PREFIXES)
     current = set(MANAGED_PREFIXES)
-    if seen not in (legacy, current):
+    if seen not in (legacy, set(PRE_JOIN_PREFIXES), current):
         missing_legacy = sorted(legacy - seen)
         missing_current = sorted(current - seen)
         raise RouteRewriteError(
@@ -110,8 +112,8 @@ def _strip_managed_routes(
 def _render_routes(port_by_prefix: dict[str, str]) -> str:
     return "".join(
         f"\thandle {prefix}* {{\n"
-        "\t\turi strip_prefix /api\n"
-        f"\t\treverse_proxy 127.0.0.1:{port_by_prefix[prefix]}\n"
+        + ("\t\turi strip_prefix /api\n" if prefix.startswith("/api/") else "")
+        + f"\t\treverse_proxy 127.0.0.1:{port_by_prefix[prefix]}\n"
         "\t}\n\n"
         for prefix in MANAGED_PREFIXES
     )
