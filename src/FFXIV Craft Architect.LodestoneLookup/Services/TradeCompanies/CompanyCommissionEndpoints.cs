@@ -1272,6 +1272,11 @@ public static class CompanyCommissionEndpoints
             return MissingCanonicalCommission();
         }
 
+        // Final-payment confirmation is the one participant command that belongs after
+        // delivery is accepted (Completed); the workflow re-checks the settlement state.
+        var settlementAfterDelivery =
+            route == "confirm-settlement-received" &&
+            snapshot.Order.Status == TradeOrderStatus.Completed;
         var activeClaim = commission.ActiveClaim;
         var participantIsLive =
             activeClaim != null &&
@@ -1282,7 +1287,7 @@ public static class CompanyCommissionEndpoints
                 cancellationToken) &&
             commission.ParticipantGrant is { RevokedAtUtc: null } participant &&
             participant.ClaimId == activeClaim.ClaimId &&
-            !TradeOrderStatusWorkflow.IsArchived(snapshot.Order.Status) &&
+            (!TradeOrderStatusWorkflow.IsArchived(snapshot.Order.Status) || settlementAfterDelivery) &&
             commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
         if (!participantIsLive)
         {

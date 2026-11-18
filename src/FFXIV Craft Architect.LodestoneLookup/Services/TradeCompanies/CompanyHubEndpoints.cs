@@ -69,7 +69,9 @@ public sealed record CompanyHubCommissionResponse(
     bool CanWork,
     bool CanReportProgress,
     string? WorkBlockedReason,
-    CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null);
+    CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null,
+    string? SheetUrl = null,
+    bool AwaitingSettlementConfirmation = false);
 
 public sealed record CompanyHubRosterMemberResponse(
     Guid AccountProfileId,
@@ -925,7 +927,16 @@ public sealed partial class CompanyHubService(
                     "The commissioner updated this commission."),
                 latest.CreatedAtUtc);
         }
-        return ProjectCommission(order) with { UnreadCommissionerUpdate = attention };
+        var projection = ProjectCommission(order);
+        return projection with
+        {
+            UnreadCommissionerUpdate = attention,
+            SheetUrl = BuildPublicUrl(projection.PublicBriefId),
+            AwaitingSettlementConfirmation =
+                order.Status == TradeOrderStatus.Completed &&
+                commission.SettlementState == CompanyCommissionSettlementState.Pending &&
+                commission.SettlementPayment.CrafterReceived == null
+        };
     }
 
     private static CompanyHubCommissionResponse ProjectCommission(TradeOrder order)

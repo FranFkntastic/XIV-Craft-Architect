@@ -486,11 +486,111 @@ h2 {
   line-height: 1.4;
 }
 
-.comment-form {
+.message-thread {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: 10px;
+  max-height: 420px;
+  min-height: 120px;
+  margin: 0;
+  padding: 14px 12px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--panel-soft);
+}
+
+.message-thread:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+
+.message-thread .empty-row {
+  align-self: center;
+  padding: 18px 0;
+  text-align: center;
+}
+
+.message {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  max-width: min(78%, 560px);
+}
+
+.message.is-mine {
+  justify-self: end;
+  justify-items: end;
+}
+
+.message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.message-meta strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.message-role {
+  color: var(--blue);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.message.is-mine .message-role {
+  color: var(--gold);
+}
+
+.message-body {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid #3f5260;
+  border-radius: 8px 8px 8px 2px;
+  background: #1d292f;
+  color: #dcebf3;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.is-mine .message-body {
+  border-color: #5e4d1b;
+  border-radius: 8px 8px 2px 8px;
+  background: #2b2618;
+  color: var(--text);
+}
+
+.message-compose {
+  display: grid;
   gap: 8px;
   padding: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.message-compose textarea {
+  min-height: 72px;
+}
+
+.message-compose-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.message-count {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.message-count.is-near-limit {
+  color: var(--amber);
 }
 
 textarea,
@@ -927,8 +1027,19 @@ textarea {
     width: 62px;
   }
 
+  .message {
+    max-width: 92%;
+  }
+
+  .message-thread {
+    max-height: 60vh;
+  }
+
+  .message-compose-actions .button {
+    flex: 1;
+  }
+
   .material-group-heading,
-  .comment-form,
   .optional-ca,
   .form-grid {
     grid-template-columns: 1fr;

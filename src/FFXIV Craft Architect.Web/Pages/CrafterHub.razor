@@ -72,6 +72,7 @@
                     @foreach (var work in MyWork)
                     {
                         var unread = work.Commission.UnreadCommissionerUpdate != null;
+                        var confirmPayment = work.Commission.AwaitingSettlementConfirmation;
                         <div class="row">
                             <div class="row-copy">
                                 <h3>@work.Commission.Title</h3>
@@ -82,14 +83,14 @@
                                 {
                                     <span class="badge freelancer" title="@FreelancerTitle">Freelancer</span>
                                 }
-                                <div class="state"><span class="dot @StatusTone(work.Status)"></span>@StatusLabel(work.Status)</div>
+                                <div class="state"><span class="dot @StatusTone(work.Status)"></span>@(confirmPayment ? $"Confirm {work.Commission.Payment.Total:N0} gil received" : StatusLabel(work.Status))</div>
                                 @if (unread)
                                 {
                                     <span class="unread" title="Commissioner update">1</span>
                                 }
                                 @if (WorkspaceTarget(work) != null)
                                 {
-                                    <button type="button" class="button small @(unread ? "primary" : null)" disabled="@_busy" @onclick="@(() => OpenWorkAsync(work))">Open workspace</button>
+                                    <button type="button" class="button small @(unread || confirmPayment ? "primary" : null)" disabled="@_busy" @onclick="@(() => OpenWorkAsync(work))">@(confirmPayment ? "Confirm payment" : "Open workspace")</button>
                                 }
                             </div>
                         </div>

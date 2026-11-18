@@ -359,6 +359,17 @@ public sealed partial class CompanyHubClient(
             new { Method = method, Recipient = recipient, Note = note },
             cancellationToken);
 
+    // Final-payment receipt for the signed-in claimant's own delivered commission.
+    public async Task ConfirmSettlementReceivedAsync(
+        CompanyHubCommission commission,
+        string note,
+        CancellationToken cancellationToken = default) =>
+        await SendParticipantCommandAsync(
+            commission,
+            "confirm-settlement-received",
+            new { commission.TermsVersion, Note = note },
+            cancellationToken);
+
     public async Task<IReadOnlyList<CompanyMember>> LoadCompanyMembersAsync(string companyId, CancellationToken cancellationToken = default) =>
         await GetListAsync<CompanyMember>($"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships", cancellationToken);
 
@@ -704,7 +715,7 @@ public sealed record CompanyHubStanding(string State, string? Role);
 public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int AcceptedQuantity);
 public sealed record CompanyHubPayment(string Schedule, string Label, decimal Total);
 public sealed record CompanyHubUpdate(Guid Id, string Title, string Body, string AuthorDisplayName, DateTime PublishedAtUtc, DateTime? EditedAtUtc, bool IsPinned);
-public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate);
+public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate, string? SheetUrl = null, bool AwaitingSettlementConfirmation = false);
 public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, string Text, DateTime CreatedAtUtc);
 public sealed record CompanyHubAttentionRead(long ReadRevision);
 public sealed record CompanyHubRosterMember(Guid AccountProfileId, string DisplayName, string Role);

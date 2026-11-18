@@ -82,6 +82,26 @@
                     </form>
                 </section>
 
+                <section class="brief-section messages" id="messages" aria-labelledby="messagesTitle" hidden>
+                    <div class="brief-section-head">
+                        <h2 id="messagesTitle">Messages</h2>
+                        <span id="messagesWith"></span>
+                    </div>
+                    <ol class="message-thread" id="messageThread" role="log" aria-labelledby="messagesTitle" tabindex="0"></ol>
+                    <form class="message-compose" id="commentForm">
+                        <label class="sr-only" for="commentText">Message</label>
+                        <textarea id="commentText"
+                                  rows="3"
+                                  maxlength="1000"
+                                  aria-keyshortcuts="Control+Enter Meta+Enter"
+                                  placeholder="Message the commissioner…"></textarea>
+                        <div class="message-compose-actions">
+                            <span class="message-count" id="commentCount" aria-hidden="true">0 / 1000</span>
+                            <button class="button primary" type="submit" title="Send (Ctrl+Enter)">Send</button>
+                        </div>
+                    </form>
+                </section>
+
                 <section class="brief-section">
                     <div class="brief-section-head">
                         <h2>Material responsibility</h2>
@@ -113,19 +133,6 @@
                     </div>
                 </section>
 
-                <section class="brief-section">
-                    <div class="brief-section-head">
-                        <h2>Operational update</h2>
-                        <span>Visible to crafter and commissioner</span>
-                    </div>
-                    <form class="comment-form" id="commentForm">
-                        <label class="sr-only" for="commentText">Operational update</label>
-                        <textarea id="commentText"
-                                  maxlength="1000"
-                                  placeholder="Add a concise delivery, material, or scheduling update…"></textarea>
-                        <button class="button" type="submit">Post update</button>
-                    </form>
-                </section>
             </div>
 
             <aside class="brief-side">

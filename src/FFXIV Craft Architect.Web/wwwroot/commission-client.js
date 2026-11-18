@@ -68,11 +68,13 @@ const enumMaps = {
 };
 
 export class CommissionClientError extends Error {
-    constructor(message, code = "unknown", status = 0) {
+    constructor(message, code = "unknown", status = 0, details = null) {
         super(message);
         this.name = "CommissionClientError";
         this.code = code;
         this.status = status;
+        // The refusal body as sent, for coded errors that carry data (claim_price_changed).
+        this.details = details;
     }
 }
 
@@ -1156,10 +1158,20 @@ async function adaptResponse(response) {
         return payload;
     }
 
-    const code = optionalText(payload?.errorCode ?? payload?.error ?? payload?.code) ??
+    const code = optionalText(payload?.errorCode) ??
+        optionalText(payload?.error) ??
+        optionalText(payload?.code) ??
+        optionalText(payload?.error?.code) ??
         statusCode(response.status);
-    const message = optionalText(payload?.errorMessage ?? payload?.message) ?? statusMessage(response.status);
-    throw new CommissionClientError(message, code, response.status);
+    const message = optionalText(payload?.errorMessage) ??
+        optionalText(payload?.message) ??
+        optionalText(payload?.error?.message) ??
+        statusMessage(response.status);
+    throw new CommissionClientError(
+        message,
+        code,
+        response.status,
+        payload && typeof payload === "object" ? payload : null);
 }
 
 function adaptPublicBrief(source) {

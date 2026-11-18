@@ -190,7 +190,9 @@
 .workspace-gate { display: flex; justify-content: space-between; gap: 16px; margin: 0 15px 13px; padding: 10px 11px; font-size: 12px; border: 1px solid #3f6652; border-radius: 6px; background: #213129; }
 .workspace-gate.blocked { border-color: #6f6038; background: #312c20; }
 .workspace-gate span { color: #b8c3bc; }
-.detail-actions { display: flex; justify-content: flex-end; gap: 7px; padding: 0 15px; }
+.detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; padding: 0 15px; }
+.settlement-confirm { display: grid; gap: 7px; margin: 0 15px 13px; padding: 10px 11px; font-size: 12px; border: 1px solid var(--hub-accent); border-radius: 6px; background: color-mix(in srgb, var(--hub-accent) 9%, transparent); }
+.settlement-confirm input { width: 100%; padding: 8px 10px; color: #eee; font: inherit; border: 1px solid #4a4a4a; border-radius: 6px; background: #1b1b1b; }
 
 .about { margin-top: 14px; padding: 15px; }
 .about p { margin: 8px 0 0; }

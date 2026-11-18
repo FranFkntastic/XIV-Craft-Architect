@@ -748,7 +748,7 @@ public partial class TradeOrders
             owner => CommissionOperations.AddCommentAsync(
                 owner,
                 _commissionSharedComment),
-            "Shared commission comment added");
+            "Message sent");
 
     private Task RecoverCommissionParticipantAsync() =>
         RunCommissionCommandAsync(
@@ -1098,7 +1098,7 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.SettlementPaymentSentRecorded => "Final payment sent",
             CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed => "Final payment receipt confirmed",
             CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted => "Final-payment confirmation retracted",
-            CompanyCommissionActivityKind.CommentAdded => "Comment",
+            CompanyCommissionActivityKind.CommentAdded => "Message",
             CompanyCommissionActivityKind.CommissionCanceled => "Commission canceled",
             CompanyCommissionActivityKind.ClaimResolutionRequired => "Company resolution required",
             CompanyCommissionActivityKind.CommissionReopened => "Commission reopened",
