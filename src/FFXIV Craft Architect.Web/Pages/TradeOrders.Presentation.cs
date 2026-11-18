@@ -82,10 +82,13 @@ public partial class TradeOrders
         return TradeOrderPaymentDisplayFormatter.FormatCraftLaborBasis(breakdown);
     }
 
-    private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material, bool showAgreed)
+    private CompanyCommissionTermsVersion? SelectedPaymentTerms =>
+        (SelectedCanonicalCommission ?? _selectedOrder?.CompanyCommission)?.CurrentTerms;
+
+    private string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material, bool showAgreed)
     {
         return TradeOrderPaymentDisplayFormatter.FormatMaterialPaymentImpact(
-            material, requireRecordedCash: showAgreed);
+            material, requireRecordedCash: showAgreed, materials: SelectedPaymentTerms?.Materials);
     }
 
     private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)

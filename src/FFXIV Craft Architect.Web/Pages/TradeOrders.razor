@@ -2400,9 +2400,9 @@
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
-        <strong title="Active crafter procurement cash only; excludes labor, material bonus, and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
+        <strong title="Active crafter procurement cash only; excludes labor, material bonus, and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow || HasAgreedPaymentTerms
             ? row.PaymentImpact.HasValue ? FormatGilAllowZero(row.PaymentImpact.Value)
-                : HasAgreedPaymentTerms ? "Not itemized in terms" : "Impact unavailable"
+                : row.PaymentImpactUnavailableReason ?? "Impact unavailable"
             : row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
                 ? FormatGilAllowZero(0) : FormatGil(row.TotalCost))</strong>
         <span>
@@ -2416,6 +2416,8 @@
                     ? row.TotalCost > 0
                         ? $"{FormatGil(row.TotalCost)} material value"
                         : "Replacement value unavailable"
+                    : HasAgreedPaymentTerms
+                        ? row.TermsUnitCost is decimal unit ? $"{FormatGil(unit)} each (terms v{SelectedPaymentTerms?.Version})" : null
                     : row.UnitCost > 0
                         ? $"{FormatGil(row.UnitCost)} each"
                         : row.UnitCostExplanation)

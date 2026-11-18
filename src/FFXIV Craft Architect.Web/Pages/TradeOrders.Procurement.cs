@@ -67,7 +67,8 @@ public partial class TradeOrders
             GetSelectedOrderResponsibilityProjection(),
             WorkerProjections.Shell.PlanId,
             GetVisibleLiveProcurementSnapshot(),
-            useRecordedPayment: HasAgreedPaymentTerms);
+            useRecordedPayment: HasAgreedPaymentTerms,
+            materials: SelectedPaymentTerms?.Materials);
     }
 
     private TradeOrder GetSelectedOrderPricingWorkPackage()

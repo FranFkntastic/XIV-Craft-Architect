@@ -30,7 +30,8 @@ public static class TradeOrderPaymentDisplayFormatter
 
     public static string FormatMaterialPaymentImpact(
         TradeCommissionPaymentMaterial material,
-        bool requireRecordedCash = false)
+        bool requireRecordedCash = false,
+        IReadOnlyList<CompanyCommissionMaterialTerm>? materials = null)
     {
         ArgumentNullException.ThrowIfNull(material);
 
@@ -41,7 +42,8 @@ public static class TradeOrderPaymentDisplayFormatter
 
         if (requireRecordedCash)
         {
-            return "Not itemized in terms";
+            var impact = TradeProcurementPaymentImpact.FromTerms(materials, material.ItemId, material.RequiresHq, material.Quantity);
+            return impact.Cash is decimal cash ? FormatGil(cash) : impact.UnavailableReason!;
         }
 
         if (material.TotalCost <= 0)

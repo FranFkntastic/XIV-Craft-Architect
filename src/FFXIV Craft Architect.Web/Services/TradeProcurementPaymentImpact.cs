@@ -6,14 +6,33 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// <summary>Attributes frontier cash to graph subtrees, never adding craft summaries to purchases.</summary>
 public static class TradeProcurementPaymentImpact
 {
-    public static IReadOnlyDictionary<(int ItemId, bool RequiresHq), decimal?> CalculateAll(
+    public readonly record struct Impact(decimal? Cash, decimal? TermsUnitCost = null, string? UnavailableReason = null);
+
+    internal static Impact FromTerms(
+        IReadOnlyList<CompanyCommissionMaterialTerm>? materials, int itemId, bool hq, long quantity)
+    {
+        var matches = materials?.Where(line => line.ItemId == itemId && line.RequiresHq == hq &&
+            line.Responsibility == CommissionMaterialResponsibility.Crafter).Take(2).ToArray();
+        if (matches is not [var line] || line.Quantity != quantity)
+        {
+            return new(null, UnavailableReason: PlanMismatch);
+        }
+        return line.UnitCost > 0
+            ? new(line.UnitCost * quantity, line.UnitCost)
+            : new(null, UnavailableReason: "Not itemized in terms");
+    }
+
+    private const string PlanMismatch = "Plan differs from terms";
+
+    public static IReadOnlyDictionary<(int ItemId, bool RequiresHq), Impact> CalculateAll(
         WorkerTradeProjection snapshot,
         IReadOnlyDictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> responsibilities,
-        bool requireRecordedCash = false)
+        bool requireRecordedCash = false,
+        IReadOnlyList<CompanyCommissionMaterialTerm>? materials = null)
     {
         var impacts = snapshot.AcquisitionRows
             .Select(row => (row.ItemId, row.MustBeHq)).Distinct()
-            .ToDictionary(key => key, _ => (decimal?)null);
+            .ToDictionary(key => key, _ => default(Impact));
         var occurrences = snapshot.PlanOccurrences;
         if (occurrences == null || occurrences.Count == 0 ||
             occurrences.Any(node => string.IsNullOrWhiteSpace(node.NodeId)) ||
@@ -56,7 +75,7 @@ public static class TradeProcurementPaymentImpact
         {
             if (targetsByItem.ContainsKey(row.ItemId))
             {
-                impacts[(row.ItemId, row.MustBeHq)] = 0m;
+                impacts[(row.ItemId, row.MustBeHq)] = new(0m);
             }
         }
         var frontierGroups = occurrences.Where(node => node.IsActiveProcurement && !node.IsSuppressed && node.Quantity > 0)
@@ -66,27 +85,33 @@ public static class TradeProcurementPaymentImpact
             .ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var (key, peers) in frontierGroups)
         {
-            var source = peers[0].Source;
-            var quantity = peers.Sum(node => (long)node.Quantity);
-            decimal? cash = null;
-            if (peers.All(node => node.Source == AcquisitionSource.OnHand) ||
-                responsibilities.GetValueOrDefault(key) == CommissionMaterialResponsibility.Provided)
+            var uncovered = peers.Where(peer => !paths[peer.NodeId].Any(node =>
+                node.Source == AcquisitionSource.OnHand ||
+                responsibilities.GetValueOrDefault((node.ItemId, node.MustBeHq)) == CommissionMaterialResponsibility.Provided)).ToArray();
+            if (uncovered.Length == 0)
             {
-                cash = 0m;
+                continue;
             }
-            else if (peers.All(node => node.Source == source) &&
+            var source = uncovered[0].Source;
+            var quantity = peers.Sum(node => (long)node.Quantity);
+            decimal? unit = null;
+            Impact recorded = default;
+            if (uncovered.All(node => node.Source == source) &&
                 source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy)
             {
-                // Accepted terms without cash itemization must not use live reference prices.
-                if (!requireRecordedCash &&
-                    materialLines.TryGetValue(key, out var lines) && lines.Length == 1 &&
+                if (requireRecordedCash)
+                {
+                    recorded = FromTerms(materials, key.ItemId, key.MustBeHq, quantity);
+                    unit = recorded.TermsUnitCost;
+                }
+                else if (materialLines.TryGetValue(key, out var lines) && lines.Length == 1 &&
                     lines[0].Quantity == quantity && TradeOrderWorkflow.IsResolvedMaterialEvidence(
                         lines[0].UnitCost, lines[0].UnitCost * quantity, lines[0].EvidenceSource))
                 {
-                    cash = lines[0].UnitCost * quantity;
+                    unit = lines[0].UnitCost;
                 }
             }
-            foreach (var frontier in peers)
+            foreach (var frontier in uncovered)
             {
                 foreach (var ancestor in paths[frontier.NodeId]
                     .Select(node => (node.ItemId, node.MustBeHq)).Distinct())
@@ -96,7 +121,9 @@ public static class TradeProcurementPaymentImpact
                         continue;
                     }
 
-                    impacts[ancestor] = cash >= 0 ? current + cash * frontier.Quantity / quantity : null;
+                    impacts[ancestor] = new(current.Cash + unit * frontier.Quantity,
+                        ancestor == key ? recorded.TermsUnitCost : current.TermsUnitCost,
+                        recorded.UnavailableReason == PlanMismatch ? PlanMismatch : current.UnavailableReason ?? recorded.UnavailableReason);
                 }
             }
         }
@@ -107,7 +134,7 @@ public static class TradeProcurementPaymentImpact
                 targets.Any(node => !node.IsSuppressed &&
                     (node.MustBeHq != row.MustBeHq || node.Source != row.Source)))
             {
-                impacts[(row.ItemId, row.MustBeHq)] = null;
+                impacts[(row.ItemId, row.MustBeHq)] = default;
             }
         }
         return impacts;
