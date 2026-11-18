@@ -287,6 +287,11 @@
     private string _activeTab = "market";
     private bool _disposed = false;
     private bool _resetMainScrollAfterRender;
+    // A bare launch whose synced "Open the app to" preference may still be on its way.
+    private bool _startLandingPending;
+    private CancellationTokenSource? _startLandingRetry;
+    private DateTime _startLandingUntilUtc;
+    private static readonly TimeSpan StartLandingWindow = TimeSpan.FromSeconds(30);
     private bool _debugToolsMenuOpen;
     private bool IsDebugToolsAvailable => AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
@@ -374,12 +379,54 @@
     private void OnWorkerProjectionChanged() =>
         _ = InvokeAsync(StateHasChanged);
 
-    private void OnPortableSettingsApplied() =>
+    private void OnPortableSettingsApplied()
+    {
         _ = InvokeAsync(async () =>
         {
             await LoadSettingsAsync();
             StateHasChanged();
         });
+        if (_startLandingPending && DateTime.UtcNow > _startLandingUntilUtc)
+        {
+            _startLandingPending = false;
+        }
+        if (_startLandingPending)
+        {
+            ScheduleStartLandingRetry();
+        }
+    }
+
+    // Account settings arrive one key at a time; wait for the batch to settle, then try
+    // the start landing once more.
+    private void ScheduleStartLandingRetry()
+    {
+        _startLandingRetry?.Cancel();
+        var retry = _startLandingRetry = new CancellationTokenSource();
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(300), retry.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            if (!_startLandingPending || _disposed)
+            {
+                return;
+            }
+            _startLandingPending = false;
+            try
+            {
+                await TryApplyStartLandingAsync();
+            }
+            catch (Exception exception)
+            {
+                Logger.LogWarning(exception, "Synced start workspace preference could not be applied.");
+            }
+        });
+    }
 
     private void OnAppStateChanged(AppStateChange change)
     {
@@ -455,15 +502,11 @@
     {
         try
         {
-            var relative = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-            if (relative.Length == 0 && await TradeAccess.OpensToTradeAsync())
+            _startLandingPending = IsBareLaunch(NavigationManager.Uri);
+            _startLandingUntilUtc = DateTime.UtcNow + StartLandingWindow;
+            if (await TryApplyStartLandingAsync())
             {
-                var landing = await TradeAccess.ResolveLandingAsync();
-                if (NavigationManager.ToBaseRelativePath(NavigationManager.Uri).Length == 0)
-                {
-                    NavigationManager.NavigateTo(landing, replace: true);
-                    return;
-                }
+                return;
             }
             await RefreshTradeAccessAsync();
         }
@@ -472,6 +515,25 @@
             Logger.LogWarning(exception, "Start workspace preference could not be applied.");
         }
     }
+
+    private async Task<bool> TryApplyStartLandingAsync()
+    {
+        if (!IsBareLaunch(NavigationManager.Uri) || !await TradeAccess.OpensToTradeAsync())
+        {
+            return false;
+        }
+        var landing = await TradeAccess.ResolveLandingAsync();
+        if (!IsBareLaunch(NavigationManager.Uri))
+        {
+            return false;
+        }
+        _startLandingPending = false;
+        NavigationManager.NavigateTo(landing, replace: true);
+        return true;
+    }
+
+    private bool IsBareLaunch(string uri) =>
+        NavigationManager.ToBaseRelativePath(uri).Length == 0;
 
     private async Task OpenTradeArchitectAsync()
     {
@@ -503,6 +565,11 @@
         if (_disposed) return;
         
         UpdateActiveTab(e.Location);
+        if (!IsBareLaunch(e.Location))
+        {
+            // Once the user is somewhere, a late preference never moves them.
+            _startLandingPending = false;
+        }
         _ = InvokeAsync(RefreshTradeAccessAsync);
         _resetMainScrollAfterRender = true;
         _ = InvokeAsync(StateHasChanged);
@@ -1061,6 +1128,8 @@
             WebSettings.PortableSettingsApplied -= OnPortableSettingsApplied;
             WorkerProjections.Changed -= OnWorkerProjectionChanged;
             TradeAccess.Changed -= OnTradeAccessChanged;
+            _startLandingRetry?.Cancel();
+            _startLandingRetry?.Dispose();
             
             _disposed = true;
         }
