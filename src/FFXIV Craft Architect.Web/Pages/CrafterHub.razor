@@ -433,7 +433,7 @@
         var open = _hub.OpenCommissions.FirstOrDefault(item => item.Commission.CommissionId == CommissionIdQuery);
         if (!string.IsNullOrWhiteSpace(open?.PublicUrl))
         {
-            Navigation.NavigateTo(open.PublicUrl);
+            Navigation.NavigateTo(ClaimUrl(open));
         }
     }
 
