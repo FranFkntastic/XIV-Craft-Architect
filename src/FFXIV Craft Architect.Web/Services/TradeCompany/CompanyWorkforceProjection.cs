@@ -156,7 +156,7 @@ public static class CompanyWorkforceProjection
             var assignmentIds = AssignmentIdsForRecord(recordId, bindings);
             rows.Add(new CompanyWorkforceRow(
                 $"record:{recordId:N}",
-                record?.DisplayName ?? candidate?.DisplayName ?? "Unnamed contractor",
+                record?.DisplayName ?? candidate?.DisplayName ?? "Unnamed freelancer",
                 record != null ? FormatLocation(record.WorldName, record.DataCenter) : FormatLocation(candidate?.WorldName, null),
                 invitation != null ? CompanyWorkforceRelationship.Invited : CompanyWorkforceRelationship.Contractor,
                 invitation != null ? CompanyWorkforceAccess.Pending : CompanyWorkforceAccess.None,

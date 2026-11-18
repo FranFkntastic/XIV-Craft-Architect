@@ -67,7 +67,7 @@
             {
                 <div class="workforce-inline-form">
                     <CompactSelectField Id="workforce-member-connect"
-                                        Label="Connect contractor record"
+                                        Label="Connect freelancer record"
                                         Value="@(_connectRecordId?.ToString("D") ?? string.Empty)"
                                         ValueChanged="SetConnectRecord"
                                         Options="AvailableRecordOptions" />
@@ -101,7 +101,7 @@
                         {
                             <strong>Transfer ownership to @member.DisplayName?</strong>
                             <span>
-                                This keeps the company ID and moves @CountLabel(_transferPreview.Counts.CompanyProfiles, "company profile"), @CountLabel(_transferPreview.Counts.Orders, "order"), @CountLabel(_transferPreview.Counts.Crafters, "contractor record"), @CountLabel(_transferPreview.Counts.Publications, "publication"), @CountLabel(_transferPreview.Counts.PayrollDrafts, "payroll draft"), @CountLabel(_transferPreview.Counts.LinkedPlans, "linked plan"), and @CountLabel(_transferPreview.Counts.DeepArchivedOrders, "archived order").
+                                This keeps the company ID and moves @CountLabel(_transferPreview.Counts.CompanyProfiles, "company profile"), @CountLabel(_transferPreview.Counts.Orders, "order"), @CountLabel(_transferPreview.Counts.Crafters, "freelancer record"), @CountLabel(_transferPreview.Counts.Publications, "publication"), @CountLabel(_transferPreview.Counts.PayrollDrafts, "payroll draft"), @CountLabel(_transferPreview.Counts.LinkedPlans, "linked plan"), and @CountLabel(_transferPreview.Counts.DeepArchivedOrders, "archived order").
                                 @if (_transferPreview.Counts.Collisions > 0)
                                 {
                                     <span> @_transferPreview.Counts.Collisions shared records will keep the current company's canonical version.</span>
@@ -215,7 +215,7 @@
 
     private bool CanRevoke(CompanyMember member) => member.Role != "owner" || ViewerRole == "owner";
 
-    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Contractor record";
+    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Freelancer record";
 
     private static string FormatRole(string role) => role switch
     {
@@ -298,7 +298,7 @@
         if (await RunAsync(() => HubClient.ConnectLegacyCrafterAsync(CompanyId, recordId, member.AccountProfileId)))
         {
             _connectRecordId = null;
-            Snackbar.Add("Contractor record connected.", Severity.Success);
+            Snackbar.Add("Freelancer record connected.", Severity.Success);
         }
     }
 
@@ -306,7 +306,7 @@
     {
         if (await RunAsync(() => HubClient.DisconnectLegacyCrafterAsync(CompanyId, recordId)))
         {
-            Snackbar.Add("Contractor record disconnected.", Severity.Success);
+            Snackbar.Add("Freelancer record disconnected.", Severity.Success);
         }
     }
 

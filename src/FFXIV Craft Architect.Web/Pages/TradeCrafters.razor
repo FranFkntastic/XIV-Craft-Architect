@@ -54,7 +54,7 @@
                 }
                 @if (CanEditRecords)
                 {
-                    <button type="button" class="workforce-button is-primary" @onclick="OpenNewRecord">Add contractor</button>
+                    <button type="button" class="workforce-button is-primary" @onclick="OpenNewRecord">Add freelancer</button>
                 }
             </div>
         </header>
@@ -154,7 +154,7 @@
                     {
                         <tr>
                             <td colspan="6" class="workforce-empty">
-                                @(_rows.Count == 0 ? "No members or contractors yet." : "No one matches this search.")
+                                @(_rows.Count == 0 ? "No members or freelancers yet." : "No one matches this search.")
                             </td>
                         </tr>
                     }
@@ -163,7 +163,7 @@
         </div>
         <div class="workforce-summary">
             <span><strong>@_rows.Count(row => row.AccountProfileId.HasValue && row.Access == CompanyWorkforceAccess.Active)</strong> authenticated members</span>
-            <span><strong>@_rows.Count(row => !row.IsMemberSide)</strong> external contractors</span>
+            <span><strong>@_rows.Count(row => !row.IsMemberSide)</strong> external freelancers</span>
             @if (_isAdmin)
             {
                 <span><strong>@RequestedRows.Count</strong> pending requests</span>
@@ -172,7 +172,7 @@
 
         <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Record && (_selectedCrafter != null || CanEditRecords))"
                          OnClose="CloseDrawer"
-                         Title="@(_selectedCrafter?.DisplayName ?? "Add contractor")"
+                         Title="@(_selectedCrafter?.DisplayName ?? "Add freelancer")"
                          Eyebrow="@(_selectedCrafter == null ? "Company workforce" : RecordEyebrow(_selectedCrafter.Id))"
                          Wide="@(_selectedCrafter != null)">
             <ChildContent>
@@ -340,10 +340,10 @@
                 {
                     <button type="button"
                             class="workforce-button is-primary"
-                            aria-label="Create contractor"
+                            aria-label="Create freelancer"
                             disabled="@string.IsNullOrWhiteSpace(_newCrafterName)"
                             @onclick="CreateCrafterAsync">
-                        Create contractor
+                        Create freelancer
                     </button>
                 }
                 else if (_selectedCrafter != null && CanEditRecords)
@@ -353,7 +353,7 @@
                             class="workforce-button is-primary"
                             disabled="@string.IsNullOrWhiteSpace(_detailName)"
                             @onclick="SaveSelectedCrafterAsync">
-                        Save contractor
+                        Save freelancer
                     </button>
                 }
             </Actions>
@@ -440,7 +440,7 @@
                                     class="workforce-button is-primary"
                                     disabled="@_lodestoneIsBusy"
                                     @onclick="CreateCrafterFromLodestoneAsync">
-                                Add as contractor
+                                Add as freelancer
                             </button>
                         }
                         else
@@ -666,7 +666,7 @@
     private string RecordEyebrow(Guid recordId)
     {
         var row = _rows.FirstOrDefault(candidate => candidate.RecordIds.Contains(recordId));
-        return row?.Member != null ? $"Character profile · {row.DisplayName}" : "Contractor";
+        return row?.Member != null ? $"Character profile · {row.DisplayName}" : "Freelancer";
     }
 
     private void OpenDrawer(WorkforceDrawerKind drawer) => _drawer = drawer;
@@ -708,7 +708,7 @@
         var crafter = _crafters.FirstOrDefault(candidate => candidate.Id == recordId);
         if (crafter == null)
         {
-            Snackbar.Add("That contractor record is not available in this workspace yet.", Severity.Warning);
+            Snackbar.Add("That freelancer record is not available in this workspace yet.", Severity.Warning);
             return;
         }
 
@@ -1072,7 +1072,7 @@
 
         if (string.IsNullOrWhiteSpace(_newCrafterName))
         {
-            Snackbar.Add("Contractor display name is required.", Severity.Warning);
+            Snackbar.Add("Freelancer display name is required.", Severity.Warning);
             return;
         }
 
@@ -1091,19 +1091,19 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to save contractor.", Severity.Error);
+            Snackbar.Add("Failed to save freelancer.", Severity.Error);
             return;
         }
 
         _newCrafterName = string.Empty;
         await ReloadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectCrafterAfterReload(crafter.Id, "Contractor was saved, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Freelancer was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Contractor added", Severity.Success);
+        Snackbar.Add("Freelancer added", Severity.Success);
     }
 
     private async Task SearchLodestoneAsync()
@@ -1185,20 +1185,20 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to save Lodestone contractor.", Severity.Error);
+            Snackbar.Add("Failed to save Lodestone freelancer.", Severity.Error);
             return;
         }
 
         await ReloadAsync();
         if (_loadError != null ||
-            !SelectCrafterAfterReload(crafter.Id, "Contractor imported, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Freelancer imported, but it could not be loaded."))
         {
             return;
         }
 
         _lodestoneTarget = null;
         _drawer = WorkforceDrawerKind.Record;
-        Snackbar.Add("Contractor imported from Lodestone", Severity.Success);
+        Snackbar.Add("Freelancer imported from Lodestone", Severity.Success);
     }
 
     private async Task UpdateSelectedCrafterFromLodestoneAsync()
@@ -1220,20 +1220,20 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to update contractor from Lodestone.", Severity.Error);
+            Snackbar.Add("Failed to update freelancer from Lodestone.", Severity.Error);
             return;
         }
 
         await ReloadAsync();
         if (_loadError != null ||
-            !SelectCrafterAfterReload(crafter.Id, "Contractor updated, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Freelancer updated, but it could not be loaded."))
         {
             return;
         }
 
         _lodestoneTarget = null;
         _drawer = WorkforceDrawerKind.Record;
-        Snackbar.Add("Contractor updated from Lodestone", Severity.Success);
+        Snackbar.Add("Freelancer updated from Lodestone", Severity.Success);
     }
 
     private void SelectCrafter(TradeCrafterProfile crafter)
@@ -1306,18 +1306,18 @@
         var saved = await SaveCrafterAsync(crafterToSave);
         if (!saved)
         {
-            Snackbar.Add("Failed to save contractor.", Severity.Error);
+            Snackbar.Add("Failed to save freelancer.", Severity.Error);
             return;
         }
 
         await ReloadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectCrafterAfterReload(crafterId, "Contractor was saved, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafterId, "Freelancer was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Contractor saved", Severity.Success);
+        Snackbar.Add("Freelancer saved", Severity.Success);
     }
 
     private int GetJobLevel(TradeCraftingJob job)
