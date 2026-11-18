@@ -350,7 +350,7 @@
         {
             var uri = await DiscordIdentityClient.StartSignInAsync(
                 ProfileHostClient.DefaultHostUrl,
-                "/" + TradeWorkspaceAccessService.HubRoute);
+                Navigation.ToAbsoluteUri(Navigation.Uri).PathAndQuery);
             Navigation.NavigateTo(uri.AbsoluteUri, true);
         }
         catch (Exception exception)
