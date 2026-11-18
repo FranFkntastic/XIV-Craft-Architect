@@ -258,6 +258,10 @@
             _hub = (await LocalState.LoadConnectionSettingsAsync()).IsConfigured
                 ? await HubClient.LoadCrafterHubAsync()
                 : null;
+            if (_hub != null)
+            {
+                await TradeAccess.ObserveHostAnswerAsync(_hub.CanOperate);
+            }
         }
         catch (Exception exception)
         {
@@ -366,7 +370,7 @@
     {
         if (await RunAsync(() => HubClient.AcceptCrafterHubInvitationAsync(invitationId)))
         {
-            TradeAccess.Invalidate();
+            TradeAccess.Refresh();
         }
     }
 
@@ -437,7 +441,7 @@
                 Console.Error.WriteLine(
                     $"[CrafterHub] New company {profile.Id:D} saved locally; hosting will retry on the next sync. {exception.GetType().Name}: {exception.Message}");
             }
-            TradeAccess.Invalidate();
+            TradeAccess.Refresh();
             Navigation.NavigateTo("trade/orders");
         }
         finally

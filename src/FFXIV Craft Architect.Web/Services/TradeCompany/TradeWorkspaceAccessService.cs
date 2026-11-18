@@ -29,7 +29,13 @@ public sealed class TradeWorkspaceAccessService : IDisposable
     private readonly TradeOperationsPersistenceService _persistence;
     private readonly ProfileSyncService _sync;
     private readonly WebSettingsService _settings;
-    private Task<bool>? _canOperate;
+    // A settled answer is cached until invalidated. Answers guessed while the host was
+    // unreachable are not: the next call asks again, and the guess keeps the last known
+    // answer so the tabs never vanish on a blip.
+    private bool? _settled;
+    private bool? _lastKnown;
+    private Task<bool>? _inflight;
+    private int _generation;
 
     public TradeWorkspaceAccessService(
         CompanyHubClient hubs,
@@ -48,16 +54,55 @@ public sealed class TradeWorkspaceAccessService : IDisposable
 
     public event Action? Changed;
 
-    /// <summary>The last resolved answer, or null before the first resolution finishes.</summary>
-    public bool? CanOperate =>
-        _canOperate is { IsCompletedSuccessfully: true } resolved ? resolved.Result : null;
+    /// <summary>The last known answer, or null before anything has resolved.</summary>
+    public bool? CanOperate => _settled ?? _lastKnown;
 
-    public Task<bool> CanOperateAsync() => _canOperate ??= ResolveAsync();
+    /// <summary>Whether <see cref="CanOperate"/> is a confirmed answer rather than a fallback.</summary>
+    public bool IsSettled => _settled.HasValue;
 
+    public Task<bool> CanOperateAsync()
+    {
+        if (_settled is { } settled)
+        {
+            return Task.FromResult(settled);
+        }
+        return _inflight ??= ResolveOnceAsync();
+    }
+
+    /// <summary>Forgets every answer, e.g. after the connected account changes.</summary>
     public void Invalidate()
     {
-        _canOperate = null;
+        _generation++;
+        _settled = null;
+        _lastKnown = null;
+        _inflight = null;
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Asks again on the next call (after a role-changing action) while the last known
+    /// answer stays on screen.
+    /// </summary>
+    public void Refresh()
+    {
+        _generation++;
+        _settled = null;
+        _inflight = null;
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Applies the host's role answer that arrived with fresh hub data, so promotions and
+    /// demotions take effect without a reload.
+    /// </summary>
+    public async Task ObserveHostAnswerAsync(bool hostCanOperate)
+    {
+        var generation = _generation;
+        var value = hostCanOperate || await HasLocalOnlyCompanyAsync();
+        if (generation == _generation)
+        {
+            Settle(value);
+        }
     }
 
     public async Task<string> ResolveLandingAsync()
@@ -76,7 +121,57 @@ public sealed class TradeWorkspaceAccessService : IDisposable
             "trade",
             StringComparison.OrdinalIgnoreCase);
 
-    private async Task<bool> ResolveAsync()
+    private async Task<bool> ResolveOnceAsync()
+    {
+        var generation = _generation;
+        try
+        {
+            var (value, settled) = await ResolveAsync();
+            if (generation != _generation)
+            {
+                return value;
+            }
+            if (settled)
+            {
+                Settle(value);
+            }
+            else
+            {
+                Remember(value);
+            }
+            return value;
+        }
+        finally
+        {
+            if (generation == _generation)
+            {
+                _inflight = null;
+            }
+        }
+    }
+
+    private void Settle(bool value)
+    {
+        var changed = CanOperate != value || !IsSettled;
+        _settled = value;
+        _lastKnown = value;
+        if (changed)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    private void Remember(bool value)
+    {
+        var changed = CanOperate != value;
+        _lastKnown = value;
+        if (changed)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    private async Task<(bool Value, bool Settled)> ResolveAsync()
     {
         IReadOnlyList<TradeCompanyProfile> local;
         try
@@ -87,33 +182,48 @@ public sealed class TradeWorkspaceAccessService : IDisposable
         {
             Console.Error.WriteLine(
                 $"[TradeAccess] Local company profiles unavailable; keeping operations tabs. {exception.GetType().Name}: {exception.Message}");
-            return true;
+            return (_lastKnown ?? true, false);
         }
         if (local.Any(profile => profile.SyncState == TradeSyncState.LocalOnly))
         {
-            return true;
+            return (true, true);
         }
 
         var connection = await _localState.LoadConnectionSettingsAsync();
         if (!connection.IsConfigured)
         {
-            return local.Count > 0;
+            return (local.Count > 0, true);
         }
         try
         {
             var hosted = await _hubs.LoadCrafterHubAccessAsync();
             if (hosted.HasValue)
             {
-                return hosted.Value;
+                return (hosted.Value, true);
             }
-            Console.Error.WriteLine("[TradeAccess] Host could not resolve company roles; falling back to local companies.");
+            Console.Error.WriteLine("[TradeAccess] Host could not resolve company roles; keeping the last known answer until the next navigation.");
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine(
-                $"[TradeAccess] Host role lookup failed; falling back to local companies. {exception.GetType().Name}: {exception.Message}");
+                $"[TradeAccess] Host role lookup failed; keeping the last known answer until the next navigation. {exception.GetType().Name}: {exception.Message}");
         }
-        return local.Count > 0;
+        return (_lastKnown ?? local.Count > 0, false);
+    }
+
+    private async Task<bool> HasLocalOnlyCompanyAsync()
+    {
+        try
+        {
+            return (await _persistence.LoadCompanyProfilesAsync())
+                .Any(profile => profile.SyncState == TradeSyncState.LocalOnly);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine(
+                $"[TradeAccess] Local company profiles unavailable while applying hub roles. {exception.GetType().Name}: {exception.Message}");
+            return false;
+        }
     }
 
     public void Dispose() => _sync.ConnectionChanged -= Invalidate;

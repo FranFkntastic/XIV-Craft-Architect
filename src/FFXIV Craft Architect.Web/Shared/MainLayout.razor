@@ -552,7 +552,9 @@
             return;
         }
         var canOperate = await TradeAccess.CanOperateAsync();
-        if (!canOperate && _activeTab is "orders" or "crafters" or "margins")
+        // Only a confirmed answer moves someone off an operations page; a host blip
+        // never does.
+        if (!canOperate && TradeAccess.IsSettled && _activeTab is "orders" or "crafters" or "margins")
         {
             NavigationManager.NavigateTo(TradeWorkspaceAccessService.HubRoute, replace: true);
             return;
