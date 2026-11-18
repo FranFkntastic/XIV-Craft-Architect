@@ -36,12 +36,14 @@ public interface IUniversalisService
     /// <param name="worldOrDc">World or data center name</param>
     /// <param name="itemIds">Item IDs to fetch</param>
     /// <param name="useParallel">Whether to use parallel fetching (default: true)</param>
+    /// <param name="historyEntriesPerItem">Optional sale-history limit; zero requests listings without history.</param>
     /// <param name="ct">Cancellation token</param>
     Task<Dictionary<int, UniversalisResponse>> GetMarketDataBulkAsync(
         string worldOrDc,
         IEnumerable<int> itemIds,
         bool useParallel = true,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        int? historyEntriesPerItem = null);
 
     /// <summary>
     /// Get world and data center information.

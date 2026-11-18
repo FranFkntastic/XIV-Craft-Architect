@@ -32,6 +32,7 @@ builder.Services.AddScoped<IUniversalisService>(sp => sp.GetRequiredService<Univ
 builder.Services.AddScoped<RecipeCalculationService>();
 builder.Services.AddScoped<TradeMarginCalculator>();
 builder.Services.AddScoped<TradeWorkspaceProfileResolver>();
+builder.Services.AddScoped<TradeMarginQuickPass>();
 builder.Services.AddScoped<IRecipePlanBuilder, RecipeCalculationPlanBuilder>();
 builder.Services.AddScoped<IVendorCacheService, VendorCacheService>();
 builder.Services.AddScoped<ITeamcraftRecipeService, TeamcraftRecipeService>();
