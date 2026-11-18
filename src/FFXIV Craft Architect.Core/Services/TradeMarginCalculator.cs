@@ -13,8 +13,31 @@ public sealed class TradeMarginCalculator(
     IGarlandService garland, IMarketCacheService market, IVendorCacheService vendors,
     IRecipeResolutionService resolution)
 {
+    public sealed class PreparedRow
+    {
+        internal int[] Leaves { get; } = [];
+        internal TradeMarginCost? Issue { get; }
+        internal Func<MarketEvidenceSet, CancellationToken, Task<TradeMarginCost>> Price { get; }
+
+        internal PreparedRow(TradeMarginCost issue)
+        {
+            Issue = issue;
+            Price = (_, _) => Task.FromResult(issue);
+        }
+
+        internal PreparedRow(int[] leaves, Func<MarketEvidenceSet, CancellationToken, Task<TradeMarginCost>> price)
+        {
+            Leaves = leaves;
+            Price = price;
+        }
+    }
+
     public async Task<TradeMarginCost> CalculateAsync(
-        int itemId, TradeCompanyPricingScope? scope, bool refresh = false, CancellationToken ct = default)
+        int itemId, TradeCompanyPricingScope? scope, bool refresh = false, CancellationToken ct = default) =>
+        await CalculateFullAsync(await PrepareAsync(itemId, scope, ct), scope, refresh, ct);
+
+    public async Task<PreparedRow> PrepareAsync(
+        int itemId, TradeCompanyPricingScope? scope, CancellationToken ct = default)
     {
         // Invocation-local recipe and demand state never clears the planner's mutable cache.
         var data = new Dictionary<int, GarlandItem>();
@@ -24,12 +47,12 @@ public sealed class TradeMarginCalculator(
         var root = await garland.GetItemAsync(itemId, ct);
         if (root == null)
         {
-            return new("Item unavailable", 0, null, null, null, [], "Item data unavailable");
+            return new(new TradeMarginCost("Item unavailable", 0, null, null, null, [], "Item data unavailable"));
         }
 
         if (root.Crafts?.Count is not > 0 && root.CompanyCrafts?.Count is not > 0)
         {
-            return new(root.Name, root.IconId, null, null, null, [], "Not craftable");
+            return new(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Not craftable"));
         }
 
         async Task Discover(int id)
@@ -74,11 +97,11 @@ public sealed class TradeMarginCalculator(
         try { await Discover(itemId); }
         catch (ItemDataUnavailableException)
         {
-            return new(root.Name, root.IconId, null, null, null, [], "Item data unavailable");
+            return new(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Item data unavailable"));
         }
         catch (InvalidOperationException)
         {
-            return new(root.Name, root.IconId, null, null, null, [], "Recipe mismatch");
+            return new(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Recipe mismatch"));
         }
         order.Reverse();
         // Cost one full root batch; Units lets callers report per-unit figures.
@@ -101,29 +124,47 @@ public sealed class TradeMarginCalculator(
         }
         if (scope is not { IsValid: true })
         {
-            return new(root.Name, root.IconId, null, synths, null, [], "Pricing scope missing", units);
+            return new(new TradeMarginCost(root.Name, root.IconId, null, synths, null, [], "Pricing scope missing", units));
         }
 
         var leaves = order.Where(id => !edges.ContainsKey(id)).ToArray();
-        var evidence = await MarketEvidenceLoader.LoadAsync(market, leaves, scope.MarketFetchScope,
+        var items = leaves.Select(id => new MaterialAggregate { ItemId = id, Name = data[id].Name, TotalQuantity = demand[id] }).ToArray();
+        return new(leaves, (evidence, token) => PriceAsync(root, units, synths, items, evidence, token));
+    }
+
+    public async Task<TradeMarginCost> CalculateFullAsync(PreparedRow row, TradeCompanyPricingScope? scope, bool refresh, CancellationToken ct)
+    {
+        if (row.Issue != null)
+        {
+            return row.Issue;
+        }
+        ArgumentNullException.ThrowIfNull(scope);
+        var evidence = await MarketEvidenceLoader.LoadAsync(market, row.Leaves, scope.MarketFetchScope,
             scope.EffectiveDataCenter, scope.Region, forceRefreshData: refresh, ct: ct);
+        return await row.Price(evidence, ct);
+    }
+
+    private async Task<TradeMarginCost> PriceAsync(GarlandItem root, int units, int synths,
+        MaterialAggregate[] items, MarketEvidenceSet evidence, CancellationToken ct)
+    {
         var analyses = await new MarketPriceLadderAnalysisService().AnalyzeAsync(new MarketAnalysisRequest
         {
             Evidence = evidence,
-            Items = leaves.Select(id => new MaterialAggregate { ItemId = id, Name = data[id].Name, TotalQuantity = demand[id] }).ToArray()
+            Items = items
         }, ct: ct);
         decimal materials = 0;
         DateTime? oldest = null;
         var unknownAge = false;
         var missing = new List<string>();
-        foreach (var id in leaves)
+        foreach (var item in items)
         {
+            var id = item.ItemId;
             var analysis = analyses.Single(entry => entry.ItemId == id);
             var marketPrice = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
             var vendor = (await vendors.GetOrFetchAsync(id, ct))?.CheapestGilPrice ?? 0;
             var price = vendor > 0 && (marketPrice <= 0 || vendor <= marketPrice) ? vendor : marketPrice;
-            if (price <= 0) { missing.Add(data[id].Name); continue; }
-            materials += price * demand[id];
+            if (price <= 0) { missing.Add(item.Name); continue; }
+            materials += price * item.TotalQuantity;
             if (price == vendor && vendor > 0)
             {
                 continue;
