@@ -1823,7 +1823,18 @@ public static class CompanyCommissionCommandWorkflow
         TradeOrderSourceSnapshot snapshot,
         CompanyCommissionPricingEvidence evidence)
     {
-        snapshot.MaterialQuote = evidence.MaterialQuote == null ? null : snapshot.MaterialQuote ?? evidence.MaterialQuote;
+        // Keep the full route for the next responsibility edit only if it backs this agreement.
+        if (snapshot.MaterialQuote is { } full && evidence.MaterialQuote is { } agreed)
+        {
+            var projected = TradePaymentCalculator.ProjectCrafterQuote(full,
+                agreed.Lines.Select(line => (line.ItemId, line.RequiresHq)).ToHashSet());
+            Require(JsonSerializer.Serialize(projected) == JsonSerializer.Serialize(agreed),
+                "The draft source route does not match the agreed material quote.");
+        }
+        else
+        {
+            snapshot.MaterialQuote = evidence.MaterialQuote;
+        }
         snapshot.MaterialQuoteFailureReason = evidence.MaterialQuote == null
             ? evidence.MaterialQuoteFailureReason
             : null;

@@ -72,15 +72,26 @@ public sealed class CompanyMemberCommissionContractTests
             MarketAnalysisVersion = 1,
             MaterialQuote = new()
             {
-                CompanyProfileId = company, SourcePlanId = "mixed", PlanSessionVersion = 1, MarketAnalysisVersion = 1,
-                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(policy), AppliedPolicy = policy,
-                RouteSelectionKey = "full-route", QuotedAtUtc = now, ExpiresAtUtc = now.AddHours(1),
-                RouteCashRequired = 300, SafetyAllowance = 30, MaterialReimbursement = 330, WorldStops = 1,
+                CompanyProfileId = company,
+                SourcePlanId = "mixed",
+                PlanSessionVersion = 1,
+                MarketAnalysisVersion = 1,
+                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(policy),
+                AppliedPolicy = policy,
+                RouteSelectionKey = "full-route",
+                QuotedAtUtc = now,
+                ExpiresAtUtc = now.AddHours(1),
+                RouteCashRequired = 300,
+                SafetyAllowance = 30,
+                MaterialReimbursement = 330,
+                WorldStops = 1,
                 Lines = [new(1, "A", 1, false, 100, ["Siren"], now), new(2, "B", 1, false, 200, ["Siren"], now)]
             }
         };
         var brief = new CommissionBriefDocument
         {
+            Title = order.Title,
+            Reference = commission.Reference,
             Outputs = [new(100, "Output", 2, false)],
             CrafterMaterials = [new(1, "A", 1, false, 100, 100)],
             CompanyMaterials = [new(2, "B", 1, false, 200, 200)],
@@ -94,8 +105,11 @@ public sealed class CompanyMemberCommissionContractTests
         order = CompanyCommissionCommandWorkflow.Apply(order, new UpdateCompanyCommissionDraftCommand(Context(), draft, Package()), actor, now).UpdatedOrder;
         order = TradeCompanyCommissionMigrationService.BindPublishedBrief(order, new()
         {
-            Ownership = order.CommissionPublication!.Ownership, PublicId = order.CommissionPublication.PublicId,
-            Version = 1, PublishedAtUtc = now, Brief = brief
+            Ownership = order.CommissionPublication!.Ownership,
+            PublicId = order.CommissionPublication.PublicId,
+            Version = 1,
+            PublishedAtUtc = now,
+            Brief = brief
         }, now);
         var published = order.CompanyCommission!.CurrentTerms;
         Assert.Equal(1, Assert.Single(published.PricingEvidence.MaterialQuote!.Lines).ItemId);
@@ -133,7 +147,10 @@ public sealed class CompanyMemberCommissionContractTests
         order.SourceSnapshot.MaterialQuote = result.Quote;
         order.SourceSnapshot.Materials = result.MaterialLines.Select(line => new TradeOrderMaterialSnapshot(
             line.ItemId, line.Name, line.Quantity, line.RequiresHq, line.UnitCost, line.Quantity * line.UnitCost, line.EvidenceSource)).ToArray();
+        order.SourceSnapshot.CraftLabor = [new("craft", 100, "Output", 1, 1)];
         var payment = TradeCommissionPaymentSummary.FromOrder(order, null);
+        Assert.True(payment.Active.IsAvailable);
+        Assert.Equal(13, payment.CommissionAmount);
         Assert.Equal(100, payment.OnHandMaterialValueTotal);
         Assert.Equal(30, payment.MaterialReimbursementTotal);
         Assert.Equal(130, payment.EstimatedProcurementTotal);

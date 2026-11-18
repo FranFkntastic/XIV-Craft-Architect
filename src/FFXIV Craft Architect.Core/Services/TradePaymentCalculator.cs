@@ -244,6 +244,12 @@ public sealed class TradePaymentCalculator
     public static TradeMaterialQuote ProjectCrafterQuote(TradeMaterialQuote quote,
         IReadOnlySet<(int ItemId, bool RequiresHq)> crafter)
     {
+        if (quote.Lines.Any(line => line.CashRequired < 0 || line.RequiredQuantity <= 0) ||
+            quote.SafetyAllowance < 0 || quote.RouteCashRequired != quote.Lines.Sum(line => line.CashRequired) ||
+            quote.MaterialReimbursement != quote.RouteCashRequired + quote.SafetyAllowance)
+        {
+            throw new InvalidOperationException("The source quote does not reconcile to its purchase lines.");
+        }
         var (cash, allowance) = CrafterShare(quote, crafter);
         return quote with
         {

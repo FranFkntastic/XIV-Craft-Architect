@@ -40,10 +40,16 @@ public sealed class TradeMaterialQuoteService
             var normalized = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
             return new(new TradeMaterialQuote
             {
-                RouteSelectionKey = "on-hand", WorldStops = 0, RouteCashRequired = 0,
-                MaterialReimbursement = 0, SafetyAllowance = 0, Lines = stockCoverage,
-                AppliedPolicy = normalized, PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(normalized),
-                QuotedAtUtc = now, ExpiresAtUtc = now.AddMinutes(normalized.QuoteLifetimeMinutes)
+                RouteSelectionKey = "on-hand",
+                WorldStops = 0,
+                RouteCashRequired = 0,
+                MaterialReimbursement = 0,
+                SafetyAllowance = 0,
+                Lines = stockCoverage,
+                AppliedPolicy = normalized,
+                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(normalized),
+                QuotedAtUtc = now,
+                ExpiresAtUtc = now.AddMinutes(normalized.QuoteLifetimeMinutes)
             }, stockLines, null);
         }
 
