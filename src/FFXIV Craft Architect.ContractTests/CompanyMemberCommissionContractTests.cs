@@ -416,6 +416,15 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(HttpStatusCode.OK, claimantResponse.StatusCode);
         Assert.NotNull((await fixture.LoadCanonicalOrderAsync())
             .CompanyCommission!.SettlementPayment.CrafterReceived);
+        var revision = (await fixture.LoadPublicBriefAsync())!.ProjectionRevision;
+        foreach (var outsider in new[] { other, fixture.Owner })
+        {
+            using var denied = await fixture.ConfirmSettlementAsync(outsider, revision, retract: true);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        }
+        using var retracted = await fixture.ConfirmSettlementAsync(claimant, revision, retract: true);
+        Assert.Equal(HttpStatusCode.OK, retracted.StatusCode);
+        Assert.Null((await fixture.LoadCanonicalOrderAsync()).CompanyCommission!.SettlementPayment.CrafterReceived);
     }
 
     [Fact]
@@ -790,9 +799,10 @@ public sealed class CompanyMemberCommissionContractTests
 
         public Task<HttpResponseMessage> ConfirmSettlementAsync(
             Account account,
-            long projectionRevision) =>
+            long projectionRevision,
+            bool retract = false) =>
             CreateClient(account.Key).PostAsJsonAsync(
-                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/commands/confirm-settlement-received",
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/commands/{(retract ? "retract-settlement" : "confirm-settlement-received")}",
                 new PublicCompanyCommissionCommandEnvelope
                 {
                     ProtocolVersion = CompanyCommissionProtocol.Version1,
@@ -802,7 +812,8 @@ public sealed class CompanyMemberCommissionContractTests
                     Command = JsonSerializer.SerializeToElement(new
                     {
                         termsVersion = 1,
-                        note = "Received by mail"
+                        note = "Received by mail",
+                        reason = "Receipt entered in error"
                     })
                 });
 

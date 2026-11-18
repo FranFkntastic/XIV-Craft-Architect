@@ -1276,10 +1276,9 @@ public static class CompanyCommissionEndpoints
             return MissingCanonicalCommission();
         }
 
-        // Final-payment confirmation is the one participant command that belongs after
-        // delivery is accepted (Completed); the workflow re-checks the settlement state.
+        // Settlement attestations are made and retracted after delivery is accepted.
         var settlementAfterDelivery =
-            route == "confirm-settlement-received" &&
+            route is "confirm-settlement-received" or "retract-settlement" &&
             snapshot.Order.Status == TradeOrderStatus.Completed;
         var activeClaim = commission.ActiveClaim;
         var participantIsLive =
