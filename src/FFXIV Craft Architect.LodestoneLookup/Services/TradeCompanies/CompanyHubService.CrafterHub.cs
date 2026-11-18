@@ -246,8 +246,15 @@ public sealed partial class CompanyHubService
                 }
             }
 
-            var isFreelancer = !isMember && (bound || ownsAny);
-            if (isMember || (bound && company.Profile.FreelancerOpenCommissions))
+            // A denied or revoked relationship is closed: no open commissions and no
+            // Freelancer label, though the account's own active claims stay in My work.
+            var requested = !isMember && membership is { State: MembershipState.Pending };
+            var closed = !isMember && !requested && await IsMembershipClosedAsync(
+                companyId,
+                account.ProfileId,
+                cancellationToken);
+            var isFreelancer = !isMember && !closed && (bound || ownsAny);
+            if (isMember || (isFreelancer && bound && company.Profile.FreelancerOpenCommissions))
             {
                 foreach (var order in orders.Where(IsOpen))
                 {
@@ -276,16 +283,12 @@ public sealed partial class CompanyHubService
                         false)));
             }
 
-            var requested = !isMember && membership is { State: MembershipState.Pending };
             var pendingInvitation = isMember ? null : invitation;
-            if (!isMember && !isFreelancer && !requested && pendingInvitation == null)
+            if (!isMember && !isFreelancer && !requested && pendingInvitation == null &&
+                !(closed && ownsAny))
             {
                 continue;
             }
-            var closed = !isMember && !requested && await IsMembershipClosedAsync(
-                companyId,
-                account.ProfileId,
-                cancellationToken);
             var rank = role switch
             {
                 "owner" or "operator" => 0,

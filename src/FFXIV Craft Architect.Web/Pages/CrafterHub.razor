@@ -51,7 +51,7 @@
                                 <div class="meta"><span class="co">@work.CompanyName</span> · @work.Commission.Reference · @OutputSummary(work.Commission)</div>
                             </div>
                             <div class="right">
-                                @if (work.IsFreelance)
+                                @if (work.IsFreelance && IsFreelancerIn(work.CompanyId))
                                 {
                                     <span class="badge freelancer" title="@FreelancerTitle">Freelancer</span>
                                 }
@@ -277,6 +277,10 @@
                 string.Equals(item.CompanyId, _filter, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(item.Slug, _filter, StringComparison.OrdinalIgnoreCase))?.CompanyId;
     }
+
+    // A denied or revoked relationship keeps its own claims but carries no badge.
+    private bool IsFreelancerIn(string companyId) =>
+        Companies.Any(item => item.CompanyId == companyId && item.IsFreelancer);
 
     private IReadOnlyList<T> Filtered<T>(IReadOnlyList<T>? items, Func<T, string> companyId) =>
         _filter == null
