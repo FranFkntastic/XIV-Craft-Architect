@@ -274,8 +274,8 @@ public sealed class MembershipInvitationDiscordDelivery(
         }
     }
 
-    // The accept flow lives on the web app's company page; the web app is served from the
-    // same origin as the configured commission pages.
+    // The short invitation link is served from the same origin as the configured commission
+    // pages and forwards into the web app's accept flow.
     private bool TryBuildInvitationUrl(CompanyMembershipInvitation invitation, out string url)
     {
         url = string.Empty;
@@ -289,8 +289,8 @@ public sealed class MembershipInvitationDiscordDelivery(
 
         url = new UriBuilder(baseUri)
         {
-            Path = $"/companies/{invitation.CompanyId.Value:D}",
-            Query = $"invite={Uri.EscapeDataString(invitation.Token!)}",
+            Path = $"/join/{Uri.EscapeDataString(invitation.Token!)}",
+            Query = string.Empty,
             Fragment = string.Empty
         }.Uri.AbsoluteUri;
         return true;
