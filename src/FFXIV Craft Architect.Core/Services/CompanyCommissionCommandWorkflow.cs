@@ -1619,6 +1619,12 @@ public static class CompanyCommissionCommandWorkflow
         var quote = terms.PricingEvidence.MaterialQuote;
         if (quote == null)
         {
+            // Before procurement-route pricing, published reimbursement was the agreement.
+            // New publications and amendments must pass ValidateTerms with a route quote.
+            if (terms.PricingEvidence.IsPreRoutePricing)
+            {
+                return;
+            }
             throw new InvalidOperationException(
                 "Crafter-procured materials require a material quote before work can begin.");
         }

@@ -17,6 +17,57 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CompanyMemberCommissionContractTests
 {
     [Fact]
+    public void V1PublishedMaterialPaymentSurvivesMigrationAndSettlement()
+    {
+        var order = MemberCommissionFixture.CreateOrder(Guid.NewGuid());
+        var commission = order.CompanyCommission!;
+        var now = commission.CreatedAtUtc;
+        var terms = commission.CurrentTerms with
+        {
+            Materials = [new(Guid.NewGuid(), 42, "Ingredient", 2, false, CommissionMaterialResponsibility.Crafter, 75, 150)],
+            Payment = commission.CurrentTerms.Payment with { MaterialReimbursement = 150, Total = 1150 },
+            PricingEvidence = new("MarketRecommendation", "World", "Cactuar", now)
+        };
+        order.CompanyCommission = commission with { SchemaVersion = 1, TermsVersions = [terms] };
+        order = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(order, null, commission.CompanyId, 0, now, null);
+        Assert.Equal(2, order.CompanyCommission!.SchemaVersion);
+        var crafter = new CompanyCommissionActor("crafter", CompanyCommissionActorKind.Crafter);
+        var owner = terms.CreatedBy;
+        CompanyCommissionCommandContext Context() => new(commission.CompanyId, order.Id, new(1), new(1), Guid.NewGuid(), 1);
+        void Apply(ICompanyCommissionCommand command, CompanyCommissionActor actor) =>
+            order = CompanyCommissionCommandWorkflow.Apply(order, command, actor, now).UpdatedOrder;
+
+        Apply(new ClaimCompanyCommissionCommand(Context(), 1, null, Guid.NewGuid(),
+            new(Guid.NewGuid(), "123456789012345678", "Crafter")), crafter);
+        Assert.True(order.CompanyCommission!.ClearedToWork);
+        var output = Assert.Single(terms.Outputs);
+        Apply(new ReportCompanyCommissionProgressCommand(Context(), [new(output.LineId, output.ItemId, 2, 2)]), crafter);
+        Assert.True(order.CompanyCommission!.DeliveryReadiness.IsReady);
+        Apply(new AcceptCompanyCommissionDeliveryCommand(Context()), owner);
+        Apply(new RecordCompanyCommissionSettlementCommand(Context(), "Paid agreed amount"), owner);
+        Apply(new ConfirmCompanyCommissionSettlementReceivedCommand(Context(), 1, "Received"), crafter);
+        Assert.Equal(CompanyCommissionSettlementState.Satisfied, order.CompanyCommission!.SettlementState);
+        Assert.Equal(terms.Payment, order.CompanyCommission.CurrentTerms.Payment);
+        Assert.Null(order.CompanyCommission.CurrentTerms.PricingEvidence.MaterialQuote);
+    }
+
+    [Fact]
+    public void StoredPaymentModeControlsLegacyPercentConversion()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        foreach (var (mode, expected) in new[] { (0, 20m), (1, 0m) })
+        {
+            var policy = JsonSerializer.Deserialize<TradePaymentPolicy>(
+                $$"""{"activeContract":{{mode}},"LegacyCommissionPercent":20,"laborGilPerSynth":200}""", options)!;
+            var normalized = TradePaymentPolicyNormalizer.Normalize(policy);
+            Assert.Equal(expected, normalized.MaterialValueBonusPercent);
+            Assert.Null(normalized.LegacyCommissionPercent);
+            Assert.Equal(normalized, TradePaymentPolicyNormalizer.Normalize(normalized));
+        }
+        Assert.Equal(TradePaymentPolicy.Default, TradePaymentPolicyNormalizer.Normalize(TradePaymentPolicy.Default));
+    }
+
+    [Fact]
     public async Task PublicBriefUsesPublicationProfileWhenOrderIdentityIsDuplicated()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();

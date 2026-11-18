@@ -9,7 +9,9 @@ public static class TradePaymentPolicyNormalizer
         ArgumentNullException.ThrowIfNull(policy);
 
         var materialValueBonusPercent = policy.MaterialValueBonusPercent;
-        if (materialValueBonusPercent == 0 && policy.LegacyCommissionPercent.HasValue)
+        if (materialValueBonusPercent == 0 &&
+            policy.ActiveContract == TradePaymentContractMode.LegacyCommission &&
+            policy.LegacyCommissionPercent.HasValue)
         {
             materialValueBonusPercent = policy.LegacyCommissionPercent.Value;
         }
