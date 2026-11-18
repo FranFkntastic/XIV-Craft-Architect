@@ -448,6 +448,29 @@ export class LodestoneExistenceClient {
     }
 }
 
+// A claim saved before the claimant-character rename still names its character
+// "provisionalCrafter" and carries retired contact fields. Replay it in the current
+// shape so an in-flight claim survives the release instead of being refused.
+function upgradeLegacyPendingClaim(access) {
+    const payload = access.pending?.kind === "claim" ? access.pending.payload : null;
+    if (!payload?.provisionalCrafter || payload.claimantCharacter) {
+        return access;
+    }
+    const { provisionalCrafter, ...rest } = payload;
+    const { provisionalCrafterId, contactMethod, contactValue, ...character } = provisionalCrafter;
+    return {
+        ...access,
+        pending: {
+            ...access.pending,
+            payload: {
+                ...rest,
+                claimIdentityVersion: 2,
+                claimantCharacter: { claimantCharacterId: provisionalCrafterId, ...character }
+            }
+        }
+    };
+}
+
 export class ParticipantAccessStore {
     constructor(publicId, storage = window.localStorage) {
         this.publicId = publicId;
@@ -477,7 +500,7 @@ export class ParticipantAccessStore {
                 value.participantSecret.length < 40) {
                 throw new Error("Invalid participant access record.");
             }
-            return value;
+            return upgradeLegacyPendingClaim(value);
         } catch {
             throw new CommissionClientError(
                 "Saved participant access is damaged. Open your private workspace link or signed-in company workspace.",
@@ -701,7 +724,10 @@ export class PortableMembershipRequestStore {
                 publicId: this.publicId,
                 companyId: requiredGuid(value.companyId, "Company ID"),
                 accountProfileId: requiredGuid(value.accountProfileId, "Account profile ID"),
-                claimantCharacterId: requiredGuid(value.claimantCharacterId, "Claimant character ID"),
+                // Intents saved before the rename carry the same ID as provisionalCrafterId.
+                claimantCharacterId: requiredGuid(
+                    value.claimantCharacterId ?? value.provisionalCrafterId,
+                    "Claimant character ID"),
                 requestNote: optionalText(value.requestNote),
                 state: requiredEnum(value.state, ["intended", "sent", "failed"], "Membership request state"),
                 error: value.error

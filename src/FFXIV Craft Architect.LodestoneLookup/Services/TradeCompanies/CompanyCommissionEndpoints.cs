@@ -698,6 +698,7 @@ public static class CompanyCommissionEndpoints
                         recordedClaim,
                         capability.CompanyId,
                         crafterAccounts,
+                        memberships,
                         cancellationToken);
                 }
                 else if (command is ClaimCompanyCommissionCommand claim &&
@@ -1479,6 +1480,7 @@ public static class CompanyCommissionEndpoints
         RecordedCompanyCommissionCommand recorded,
         CompanyId companyId,
         LegacyCrafterAccountResolver crafterAccounts,
+        SqliteMembershipStore memberships,
         CancellationToken cancellationToken)
     {
         if (HostedCompanyCommissionService.MatchesRecordedFingerprint(claim, recorded) ||
@@ -1494,19 +1496,32 @@ public static class CompanyCommissionEndpoints
             return asSent;
         }
 
-        var reused = await crafterAccounts.ResolveClaimantCrafterIdAsync(
+        // Resolve the crafter the way the claim itself does. Claims committed before the
+        // exact-character resolver shipped were bound by the account resolver, so that
+        // result stays a candidate. Only a recorded-fingerprint match is ever returned.
+        var (exact, _) = await ResolveExactClaimCrafterAsync(
+            companyId,
+            evidence.ProfileId,
+            claim.ClaimantCharacter.LodestoneCharacterId,
+            crafterAccounts,
+            memberships,
+            cancellationToken);
+        var accountReused = await crafterAccounts.ResolveClaimantCrafterIdAsync(
             companyId,
             evidence.ProfileId,
             claim.ClaimantCharacter.LodestoneCharacterId,
             cancellationToken);
         // The claim may have been confirmed after it committed, so the current claim
         // cannot say which form was recorded; accept whichever form matches.
-        foreach (var confirmed in new[] { false, true })
+        foreach (var reused in new[] { exact, accountReused }.Distinct())
         {
-            var rebuilt = BindClaimToAccount(claim, reused, evidence, confirmed && reused.HasValue);
-            if (HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded))
+            foreach (var confirmed in new[] { false, true })
             {
-                return rebuilt;
+                var rebuilt = BindClaimToAccount(claim, reused, evidence, confirmed && reused.HasValue);
+                if (HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded))
+                {
+                    return rebuilt;
+                }
             }
         }
         return claim;
