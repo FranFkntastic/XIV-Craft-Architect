@@ -224,9 +224,9 @@ public static class DiscordCommissionMessage
         {
             $"materials {FormatGil(payment.MaterialReimbursement)}"
         };
-        if (payment.MaterialBonus > 0)
+        if (payment.HistoricalAmount != 0)
         {
-            components.Add($"bonus {FormatGil(payment.MaterialBonus)}");
+            components.Add($"historical payment {FormatGil(payment.HistoricalAmount)}");
         }
 
         if (payment.CraftLabor > 0)

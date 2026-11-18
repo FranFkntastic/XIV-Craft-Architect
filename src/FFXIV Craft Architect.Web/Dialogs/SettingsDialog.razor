@@ -418,16 +418,6 @@
                     <MudDivider Class="my-4" />
 
                     <MudNumericField T="decimal"
-                                     id="legacy-material-commission-percent"
-                                     @bind-Value="_companyMaterialValueBonusPercent"
-                                     Label="Material value bonus"
-                                     Variant="Variant.Outlined"
-                                     Margin="Margin.Dense"
-                                     HideSpinButtons="true"
-                                     Min="0m"
-                                     Max="100m"
-                                     Class="my-2" />
-                    <MudNumericField T="decimal"
                                      id="labor-gil-per-synth"
                                      @bind-Value="_companyLaborGilPerSynth"
                                      Label="Labor pay per synth"
@@ -1100,7 +1090,6 @@
     private bool _companyProfileIsHosted;
     private long? _companyProfileRevision;
     private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
-    private decimal _companyMaterialValueBonusPercent = TradePaymentPolicy.DefaultMaterialValueBonusPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
     private decimal _materialMaximumPremiumPercent = 5m;
     private int _materialMaximumWorldStops = 8;
@@ -1645,7 +1634,6 @@
         _companyPricingDataCenter = profile.CommissionPricingScope?.DataCenter ?? string.Empty;
         var policy = TradePaymentPolicyNormalizer.Normalize(
             profile.PaymentPolicy ?? TradePaymentPolicy.Default);
-        _companyMaterialValueBonusPercent = policy.MaterialValueBonusPercent;
         _companyLaborGilPerSynth = policy.LaborGilPerSynth;
         var materialPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(profile.MaterialPricingPolicy);
         _materialMaximumPremiumPercent = materialPolicy.MaximumConsolidationPremiumPercent;
@@ -1675,18 +1663,11 @@
         _companyFreelancerOpenCommissions.ToString(),
         _companyPricingRegion,
         _companyPricingDataCenter,
-        _companyMaterialValueBonusPercent.ToString(CultureInfo.InvariantCulture),
         _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture),
         TradeMaterialPricingPolicyNormalizer.Fingerprint(BuildCompanyMaterialPricingPolicy()));
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
     {
-        if (_companyMaterialValueBonusPercent < 0 || _companyMaterialValueBonusPercent > 100)
-        {
-            Snackbar.Add("Material value bonus must be between 0 and 100 percent.", Severity.Error);
-            return null;
-        }
-
         if (_companyLaborGilPerSynth <= 0)
         {
             Snackbar.Add("Labor pay per synth must be greater than zero.", Severity.Error);
@@ -1695,7 +1676,6 @@
 
         return new TradePaymentPolicy(
             TradePaymentContractMode.LaborStandard,
-            _companyMaterialValueBonusPercent,
             _companyLaborGilPerSynth);
     }
 

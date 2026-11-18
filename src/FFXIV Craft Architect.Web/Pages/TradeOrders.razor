@@ -1023,19 +1023,19 @@
                                             <span>@(termsBasis ?? "Executable route cash + shopping allowance")</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
-                                        @if (termsBasis != null || paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
+                                        @if (termsBasis != null && (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms.Payment.HistoricalAmount is > 0 and var recorded)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
-                                                <span>@(termsBasis != null ? "Material adjustment" : "Material value bonus")</span>
-                                                <span>@(termsBasis ?? $"{paymentSummary.Active.CommissionPercent:N0}% of material value")</span>
-                                                <strong>@FormatGilAllowZero(paymentSummary.Active.CommissionAmount)</strong>
-                                            </div>
-                                            <div class="trade-orders-payment-breakdown-row">
-                                                <span>Craft labor</span>
-                                                <span>@FormatCraftLaborBasis(paymentSummary.Active)</span>
-                                                <strong>@FormatGilAllowZero(paymentSummary.Active.CraftLaborTotal)</strong>
+                                                <span>Historical payment</span>
+                                                <span>@termsBasis</span>
+                                                <strong>@FormatGilAllowZero(recorded)</strong>
                                             </div>
                                         }
+                                        <div class="trade-orders-payment-breakdown-row">
+                                            <span>Craft labor</span>
+                                            <span>@FormatCraftLaborBasis(paymentSummary.Active)</span>
+                                            <strong>@FormatGilAllowZero(paymentSummary.Active.CraftLaborTotal)</strong>
+                                        </div>
                                         <div class="trade-orders-payment-breakdown-row is-total">
                                             <span>Total payment</span>
                                             <span>@(termsBasis ?? FormatPaymentContract(paymentSummary.Active.Contract))</span>
@@ -2359,7 +2359,7 @@
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
-        <strong title="Active crafter procurement cash only; excludes labor, material bonus, and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
+        <strong title="Active crafter procurement cash only; excludes labor and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
             ? row.PaymentImpact.HasValue ? FormatGilAllowZero(row.PaymentImpact.Value)
                 : HasAgreedPaymentTerms ? "Not itemized in terms" : "Impact unavailable"
             : row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand

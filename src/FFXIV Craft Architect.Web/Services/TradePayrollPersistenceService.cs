@@ -78,8 +78,6 @@ public sealed class TradePayrollPersistenceService
             AssignedCrafterId = assignedCrafterId,
             AssignedCrafterDisplayName = assignedCrafterDisplayName,
             ActivePaymentContract = paymentPolicy?.ActiveContract ?? TradePaymentContractMode.LaborStandard,
-            CommissionPercent = paymentPolicy?.MaterialValueBonusPercent
-                ?? TradePaymentPolicy.DefaultMaterialValueBonusPercent,
             LaborGilPerSynth = paymentPolicy?.LaborGilPerSynth > 0
                 ? paymentPolicy.LaborGilPerSynth
                 : TradePaymentPolicy.DefaultLaborGilPerSynth,

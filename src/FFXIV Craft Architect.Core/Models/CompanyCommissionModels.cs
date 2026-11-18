@@ -140,14 +140,21 @@ public sealed record CompanyCommissionPaymentTerms(
     CompanyCommissionPaymentSchedule Schedule,
     string ContractLabel,
     decimal MaterialReimbursement,
-    decimal MaterialAdjustment,
+    [property: System.Text.Json.Serialization.JsonPropertyName("materialAdjustment"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    decimal HistoricalAmount,
     decimal CraftLabor,
     decimal Total,
     string? CustomTerms = null,
     int CraftSynthCount = 0,
-    decimal GilPerSynth = 0,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    decimal? MaterialAdjustmentPercent = null);
+    decimal GilPerSynth = 0)
+{
+    public CompanyCommissionPaymentTerms ForNewWork() => this with
+    {
+        ContractLabel = Services.CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(ContractLabel),
+        HistoricalAmount = 0,
+        Total = HistoricalAmount == 0 ? Total : MaterialReimbursement + CraftLabor
+    };
+}
 
 public sealed record CompanyCommissionPricingEvidence(
     string CostBasis,

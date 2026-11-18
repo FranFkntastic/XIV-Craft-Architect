@@ -74,7 +74,7 @@
                         <span>Qty</span>
                         <span>Responsibility</span>
                         <span>Unit Cost</span>
-                        <span>Payroll Basis</span>
+                        <span>Material value</span>
                     </div>
                     @foreach (var line in _lines)
                     {
@@ -95,7 +95,7 @@
                                                 Options="MaterialResponsibilityOptions"
                                                 Class="trade-responsibility-select" />
                             <span title="@line.UnitCostExplanation">@FormatGil(line.UnitCost)</span>
-                            <span title="@line.ResponsibilityExplanation">@FormatGil(line.MaterialBasis)</span>
+                            <span>@FormatGil(line.EstimatedMaterialCost)</span>
                         </div>
                     }
                 </div>
@@ -157,18 +157,16 @@
 
                 <section class="trade-panel trade-totals">
                     <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll</MudText>
-                    <div><span>Crafter procures</span><strong>@FormatGil(_payroll.MaterialBasisTotal)</strong></div>
                     <div><span>Provided by commissioner</span><strong>@FormatGil(GetProvidedMaterialTotal())</strong></div>
-                    <div><span>Commission (@_commissionPercent.ToString("N0")%)</span><strong>@FormatGil(_payroll.CommissionAmount)</strong></div>
-                    <div class="trade-total"><span>Total pay</span><strong>@FormatGil(_payroll.TotalPay)</strong></div>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="trade-payroll-note">
-                        Commission is @_commissionPercent.ToString("N0")% of full estimated material cost. Crafter-responsible materials are also reimbursed.
-                    </MudText>
-                    @if (GetLinkedOrderPaymentComparison() is { } comparison)
+                    @if (_payment is { IsAvailable: true } payment)
                     {
-                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
-                            Labor-standard comparison: @FormatPaymentBreakdown(comparison.LaborStandard)
-                        </MudAlert>
+                        <div><span>Material reimbursement</span><strong>@FormatGil(payment.MaterialReimbursementTotal)</strong></div>
+                        <div><span>Craft labor</span><strong>@FormatGil(payment.CraftLaborTotal)</strong></div>
+                        <div class="trade-total"><span>Total pay</span><strong>@FormatGil(payment.Total)</strong></div>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true">@PaymentUnavailableReason</MudAlert>
                     }
                     <MudButton FullWidth="true"
                                Variant="Variant.Filled"
@@ -201,7 +199,6 @@
     private CommissionPayrollRun? _payroll;
     private string? _unavailableReason;
     private List<TradePayrollLineEditor> _lines = [];
-    private decimal _commissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
     private TradeCompanyProfile? _companyProfile;
     private TradePayrollWorkflowDraft? _workflowDraft;
     private TradeOrder? _linkedOrder;
@@ -210,6 +207,8 @@
     private Guid? _assignedCrafterId;
     private bool _hasLoaded;
     private WorkerTradeProjection? _activePlan;
+    private TradePaymentContractBreakdown? _payment;
+    private string PaymentUnavailableReason => _payment?.Warnings.FirstOrDefault() ?? "Payment evidence is unavailable.";
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [
         new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
@@ -258,7 +257,8 @@
 
     private async Task CreateDraftAsync()
     {
-        _activePlan = await WorkerSession.GetTradeProjectionAsync();
+        _companyProfile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs);
+        _activePlan = await WorkerSession.GetTradeProjectionAsync(includeCraftLabor: true, materialPricingPolicy: _companyProfile.MaterialPricingPolicy);
         var result = _activePlan == null
             ? TradePayrollDraftCreateResult.Unavailable(
                 "The Worker did not publish the active craft plan.")
@@ -279,29 +279,22 @@
         _unavailableReason = null;
         _source = result.Draft.Source;
         _payroll = result.Draft.Payroll;
-        ResetPolicy(result.Draft.Payroll.Policy);
         await LoadTradeWorkflowAsync();
         var lines = _workflowDraft != null
             ? TradePayrollPersistence.ApplyResponsibilities(_source.Lines, _workflowDraft)
             : _source.Lines;
         _lines = lines.Select(TradePayrollLineEditor.FromInput).ToList();
-        if (_workflowDraft != null)
-        {
-            _commissionPercent = _workflowDraft.CommissionPercent;
-        }
-
         Recalculate();
         _hasLoaded = true;
     }
 
     private async Task LoadTradeWorkflowAsync()
     {
-        if (_source == null)
+        if (_source == null || _companyProfile == null)
         {
             return;
         }
 
-        _companyProfile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs);
         _companyMembers = await CompanyHubs.LoadAssignmentMembersAsync(_companyProfile.Id);
         _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
         _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
@@ -343,11 +336,6 @@
             .Where(order => !TradeOrderStatusWorkflow.IsArchived(order.Status))
             .OrderByDescending(order => order.CommissionedAtUtc)
             .FirstOrDefault();
-    }
-
-    private void ResetPolicy(CommissionPayoutPolicy policy)
-    {
-        _commissionPercent = policy.CommissionPercent;
     }
 
     private async Task SetAssignedCrafterAsync(Guid? crafterId)
@@ -470,14 +458,6 @@
             return;
         }
 
-        _workflowDraft.CommissionPercent = _commissionPercent;
-        _workflowDraft.Responsibilities = _lines
-            .Select(line => new TradePayrollResponsibilityLine(
-                line.ItemId,
-                line.RequiresHq,
-                line.Responsibility))
-            .ToArray();
-
         var saved = await TradePayrollPersistence.SaveDraftAsync(_workflowDraft);
         if (!saved)
         {
@@ -527,8 +507,25 @@
             return;
         }
 
-        var policy = new CommissionPayoutPolicy(_commissionPercent);
-        _payroll = PayrollService.Calculate(_lines.Select(line => line.ToInputLine()), policy);
+        _payroll = PayrollService.Calculate(_lines.Select(line => line.ToInputLine()));
+        if (_activePlan is { } plan && _workflowDraft != null)
+        {
+            _workflowDraft.Responsibilities = _lines.Select(line =>
+                new TradePayrollResponsibilityLine(line.ItemId, line.RequiresHq, line.Responsibility)).ToArray();
+            var snapshot = new TradeOrderSourceSnapshot
+            {
+                Materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(plan.MaterialLines),
+                MaterialQuote = plan.MaterialQuote,
+                MaterialQuoteFailureReason = plan.MaterialQuoteFailureReason,
+                CraftLabor = plan.CraftLabor,
+                Warnings = plan.Warnings
+            };
+            _payment = TradeCommissionPaymentSummary.FromSnapshot(snapshot, _workflowDraft, GetLinkedOrderEffectivePaymentPolicy()).Active;
+        }
+        else
+        {
+            _payment = null;
+        }
     }
 
     private async Task CopyPayrollSummaryAsync()
@@ -563,9 +560,16 @@
         summary.AppendLine();
         AppendMaterialSection(summary, "Provided by commissioner", _payroll.Lines.Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided));
         summary.AppendLine();
-        summary.AppendLine($"Materials reimbursement: {FormatGil(_payroll.MaterialBasisTotal)}");
-        summary.AppendLine($"Commission ({_payroll.Policy.CommissionPercent:N0}%): {FormatGil(_payroll.CommissionAmount)}");
-        summary.AppendLine($"Total pay: {FormatGil(_payroll.TotalPay)}");
+        if (_payment is { IsAvailable: true } payment)
+        {
+            summary.AppendLine($"Materials reimbursement: {FormatGil(payment.MaterialReimbursementTotal)}");
+            summary.AppendLine($"Craft labor: {FormatGil(payment.CraftLaborTotal)}");
+            summary.AppendLine($"Total pay: {FormatGil(payment.Total)}");
+        }
+        else
+        {
+            summary.AppendLine(PaymentUnavailableReason);
+        }
 
         if (_payroll.Warnings.Count > 0)
         {
@@ -634,13 +638,6 @@
             .Sum(line => line.EstimatedMaterialCost) ?? 0m;
     }
 
-    private TradeCommissionPaymentSummary? GetLinkedOrderPaymentComparison()
-    {
-        return _linkedOrder == null
-            ? null
-            : TradeCommissionPaymentSummary.FromOrder(_linkedOrder, _workflowDraft, GetLinkedOrderEffectivePaymentPolicy());
-    }
-
     private TradePaymentPolicy? GetLinkedOrderEffectivePaymentPolicy()
     {
         if (_linkedOrder == null)
@@ -649,23 +646,12 @@
                 ? _companyProfile?.PaymentPolicy
                 : new TradePaymentPolicy(
                     _workflowDraft.ActivePaymentContract,
-                    _workflowDraft.CommissionPercent,
                     _workflowDraft.LaborGilPerSynth > 0
                         ? _workflowDraft.LaborGilPerSynth
                         : TradePaymentPolicy.DefaultLaborGilPerSynth);
         }
 
         return TradeOrderWorkflow.ResolvePaymentPolicy(_linkedOrder, _companyProfile?.PaymentPolicy);
-    }
-
-    private static string FormatPaymentBreakdown(TradePaymentContractBreakdown breakdown)
-    {
-        if (breakdown.IsAvailable)
-        {
-            return FormatGil(breakdown.Total);
-        }
-
-        return "Needs reprice";
     }
 
     private string FormatAssignedCrafterName()
@@ -808,12 +794,6 @@
         public DateTime? EvidenceTimestampUtc { get; init; }
         public IReadOnlyList<string> Warnings { get; init; } = [];
         public decimal EstimatedMaterialCost => Quantity * UnitCost;
-        public decimal MaterialBasis => Responsibility == CommissionMaterialResponsibility.Crafter
-            ? EstimatedMaterialCost
-            : 0m;
-        public string ResponsibilityExplanation => Responsibility == CommissionMaterialResponsibility.Crafter
-            ? "Crafter is responsible for this material; it is included in reimbursable material basis."
-            : "Material is provided by the guild; it is excluded from reimbursable material basis.";
 
         public static TradePayrollLineEditor FromInput(CommissionPayrollInputLine line)
         {

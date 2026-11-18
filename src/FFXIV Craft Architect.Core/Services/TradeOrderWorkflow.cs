@@ -244,7 +244,6 @@ public static class TradeOrderWorkflow
             SourcePlanName = draft.SourcePlanName,
             AssignedCrafterId = draft.AssignedCrafterId,
             AssignedCrafterDisplayName = draft.AssignedCrafterDisplayName,
-            CommissionPercent = draft.CommissionPercent,
             ActivePaymentContract = draft.ActivePaymentContract,
             LaborGilPerSynth = draft.LaborGilPerSynth,
             Responsibilities = (draft.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>()).ToArray(),
