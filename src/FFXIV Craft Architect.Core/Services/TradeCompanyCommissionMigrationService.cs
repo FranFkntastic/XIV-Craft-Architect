@@ -622,7 +622,11 @@ public static class TradeCompanyCommissionMigrationService
                 evidence?.MarketScope ?? order.SourceSnapshot.MarketFetchScope?.ToString() ?? "Unspecified",
                 evidence?.Location ?? ResolveLocation(order.SourceSnapshot),
                 evidence?.CapturedAtUtc ?? order.SourceSnapshot.ImportedAtUtc,
-                order.SourceSnapshot.MaterialQuote,
+                order.SourceSnapshot.MaterialQuote is { } fullQuote
+                    ? TradePaymentCalculator.ProjectCrafterQuote(fullQuote, materials
+                        .Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter)
+                        .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet())
+                    : null,
                 pricingWarnings,
                 materialQuoteFailureReason),
             ContactInstructions = brief?.Contact ?? string.Empty,
