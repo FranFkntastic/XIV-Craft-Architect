@@ -69,7 +69,7 @@ function commissionFor(index, orderId) {
           createdBy: { actorId: 'acceptance-commissioner', kind: 0, displayName: 'Commissioner' },
           outputs: [{ lineId: guid(4000 + index), itemId: 2, name: 'Cobalt Ingot', requiredQuantity: 10, mustBeHq: false }],
           materials: [],
-          payment: { schedule: 0, contractLabel: 'Labor standard', materialReimbursement: 0, materialAdjustment: 0, craftLabor: 3000, total: 3000 },
+          payment: { schedule: 0, contractLabel: 'Labor standard', materialReimbursement: 0, craftLabor: 3000, total: 3000 },
           deliveryInstructions: 'Meet at the company workshop.',
           pricingEvidence: { costBasis: 'Fixture', marketScope: 'Aether', location: 'Adamantoise', capturedAtUtc: fixedNow },
           contactInstructions: 'Discord', changeSummary: null
