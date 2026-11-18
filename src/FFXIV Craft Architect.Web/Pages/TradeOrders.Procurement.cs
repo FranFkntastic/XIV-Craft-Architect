@@ -44,14 +44,22 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
+        var terms = (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms;
+        var historicalPricing = HasAgreedPaymentTerms && terms?.PricingEvidence.IsPreRoutePricing == true;
         var summary = TradeCommissionPaymentSummary.FromOrder(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
-            GetOrderEffectivePaymentPolicy(workPackage));
+            GetOrderEffectivePaymentPolicy(workPackage),
+            requireMaterialRouteQuote: !historicalPricing);
         if (!IsEditingCommissionTermsRevision &&
             (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms.Payment is { } canonicalPayment)
         {
             summary = TradeOrderPaymentDisplayFormatter.ApplyCanonicalPayment(summary, canonicalPayment);
+            if (historicalPricing)
+            {
+                // Today's live route (or its failure) cannot change agreed pre-quote terms.
+                return summary;
+            }
         }
         return ReconcileVisibleQuoteWarnings(
             summary,
