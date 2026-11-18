@@ -53,7 +53,8 @@ const state = {
     membership: null,
     claimReceipt: null,
     accountClaimRequested: false,
-    accountClaim: false
+    accountClaim: false,
+    claimPriceChange: null
 };
 
 const activityLabels = {
@@ -78,7 +79,7 @@ const activityLabels = {
     CompanyMaterialsReceived: "Company materials received",
     WorkClearanceAchieved: "Work cleared",
     ProgressReported: "Progress reported",
-    CommentAdded: "Operational update",
+    CommentAdded: "Message",
     DeliveryReadinessDeclared: "Sent for delivery review",
     DeliveryReadinessWithdrawn: "Readiness withdrawn",
     DeliveryReturnedToWork: "Returned to work",
@@ -334,6 +335,8 @@ async function load() {
     render();
     byId("briefMessage").hidden = true;
     byId("briefShell").hidden = false;
+    const thread = byId("messageThread");
+    thread.scrollTop = thread.scrollHeight;
     void resumeMembershipFollowUp();
     if (signInResult?.kind === "error") {
         showNotice(
@@ -597,7 +600,10 @@ async function waitUntilProjectionRefreshIsSafe() {
         const editing = active instanceof HTMLElement &&
             active.matches("input, textarea, select") &&
             Boolean(active.closest("form"));
-        if (!editing) {
+        // Rendering never touches the message draft, so replies keep arriving while
+        // the crafter types, unless an action form is open (rendering would reset it).
+        const composingMessage = active?.id === "commentText" && byId("nextStepForm").hidden;
+        if (!editing || composingMessage) {
             return;
         }
 
@@ -635,7 +641,7 @@ function render() {
     renderAccess();
     renderActivity();
     renderTermsReview();
-    renderCommentForm();
+    renderMessages();
 }
 
 function buildSubtitle(projection) {
@@ -769,6 +775,11 @@ function resolveNextStep() {
                 body: "This stable public link is view-only. Use the company's claim link to reserve the commission.",
                 tone: "waiting"
             };
+        }
+        if (state.claimPriceChange &&
+            pending?.kind === "claim" &&
+            pending.commandId === state.claimPriceChange.commandId) {
+            return resolveClaimPriceChangeStep();
         }
         if (!state.account && state.accountVerificationError) {
             return {
@@ -1423,7 +1434,10 @@ function renderActivity() {
                 null,
                 `${item.actorDisplayName ?? formatWords(item.actorKind)} · terms v${item.termsVersion}`)
         );
-        if (item.comment) detail.append(element("p", null, item.comment));
+        // Message bodies live in the Messages thread; the history keeps the event itself.
+        if (item.comment && item.kind !== "CommentAdded") {
+            detail.append(element("p", null, item.comment));
+        }
         event.append(element("time", null, formatShortDate(item.createdAtUtc)), detail);
         target.append(event);
     }
@@ -1516,11 +1530,106 @@ function renderTermsReview() {
     }
 }
 
-function renderCommentForm() {
-    const allowed = canUseActiveParticipantMutations(state.projection);
+const MESSAGE_MAX_LENGTH = 1000;
+
+// The conversation between the crafter (this page's participant) and the commissioner.
+// Posting follows the participant-mutation rules; outside them the thread stays readable.
+function renderMessages() {
+    const projection = state.projection;
+    const section = byId("messages");
     const form = byId("commentForm");
+    section.hidden = projection.kind !== "participant";
+    if (section.hidden) {
+        form.onsubmit = null;
+        return;
+    }
+    const allowed = canUseActiveParticipantMutations(projection);
     form.hidden = !allowed;
     form.onsubmit = allowed ? submitComment : null;
+    const commissioner = latestCommissionerName(projection);
+    setText("messagesWith", `With ${commissioner ?? "the commissioner"}`);
+    byId("commentText").placeholder = `Message ${commissioner ?? "the commissioner"}…`;
+
+    const currentClaimRevision = latestActivityRevision(projection, "ClaimAccepted");
+    const messages = projection.activity
+        .filter(item => item.kind === "CommentAdded")
+        .sort((left, right) => left.commissionRevision - right.commissionRevision);
+    renderMessageThread(messages, allowed, currentClaimRevision);
+}
+
+function latestCommissionerName(projection) {
+    return [...projection.activity]
+        .filter(item => item.actorKind === "Commissioner" && item.actorDisplayName)
+        .sort((left, right) => right.commissionRevision - left.commissionRevision)[0]
+        ?.actorDisplayName ?? null;
+}
+
+// Appends only new messages so the log region announces just those; anything else
+// (a different history, the empty state) rebuilds the thread quietly.
+function renderMessageThread(messages, allowed, currentClaimRevision) {
+    const thread = byId("messageThread");
+    const rendered = [...thread.querySelectorAll("[data-event-id]")]
+        .map(node => node.dataset.eventId);
+    const extendsRendered = rendered.length > 0 &&
+        rendered.length <= messages.length &&
+        rendered.every((eventId, index) => messages[index].eventId === eventId);
+    const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 48;
+
+    if (!messages.length) {
+        thread.setAttribute("aria-busy", "true");
+        thread.replaceChildren(element(
+            "li",
+            "empty-row",
+            allowed ? "No messages yet. Start the conversation." : "No messages."));
+        thread.removeAttribute("aria-busy");
+        return;
+    }
+    if (!extendsRendered) {
+        thread.setAttribute("aria-busy", "true");
+        thread.replaceChildren();
+    }
+    let appendedMine = false;
+    for (const message of messages.slice(extendsRendered ? rendered.length : 0)) {
+        const node = createMessage(message, currentClaimRevision);
+        appendedMine ||= node.classList.contains("is-mine");
+        thread.append(node);
+    }
+    thread.removeAttribute("aria-busy");
+    if (!extendsRendered || nearBottom || appendedMine) {
+        thread.scrollTop = thread.scrollHeight;
+    }
+}
+
+function createMessage(item, currentClaimRevision) {
+    // Crafter messages from before the current claim belong to an earlier crafter.
+    const mine = item.actorKind === "Crafter" && item.commissionRevision >= currentClaimRevision;
+    const node = element("li", mine ? "message is-mine" : "message");
+    node.dataset.eventId = item.eventId;
+    const author = mine
+        ? "You"
+        : item.actorDisplayName ??
+            (item.actorKind === "Crafter"
+                ? "Earlier crafter"
+                : item.actorKind === "Commissioner" ? "Commissioner" : formatWords(item.actorKind));
+    const role = item.actorKind === "Crafter"
+        ? "Crafter"
+        : item.actorKind === "Commissioner" ? "Commissioner" : null;
+    const meta = element("div", "message-meta");
+    meta.append(element("strong", null, author));
+    if (role && role !== author) meta.append(element("span", "message-role", role));
+    const time = element("time", null, formatShortDate(item.createdAtUtc));
+    time.dateTime = new Date(item.createdAtUtc).toISOString();
+    meta.append(time);
+    node.append(meta, element("p", "message-body", item.comment ?? ""));
+    return node;
+}
+
+function updateCommentCount() {
+    const length = byId("commentText").value.length;
+    const count = byId("commentCount");
+    count.textContent = `${length} / ${MESSAGE_MAX_LENGTH}`;
+    count.hidden = length < MESSAGE_MAX_LENGTH * 0.8;
+    count.classList.toggle("is-near-limit", length >= MESSAGE_MAX_LENGTH * 0.9);
 }
 
 function formatPaymentSchedule(value) {
@@ -2177,6 +2286,13 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         await reloadProjection(successMessage);
         carryMembershipIntent(access.pending, state.projection);
     } catch (caught) {
+        if (!applied && command === "claim" &&
+            caught?.status === 409 && caught?.code === "claim_price_changed") {
+            // Not a refusal: prices were refreshed and the claim waits for the crafter
+            // to accept the new payment. The exact saved claim stays as it is.
+            await presentClaimPriceChange(caught, access);
+            return;
+        }
         const refreshableConflict = !applied &&
             caught?.status === 409 &&
             ["projection_conflict", "revision_conflict"].includes(caught?.code);
@@ -2259,6 +2375,123 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
     if (applied && command === "claim") {
         await completeClaimFollowUp();
     }
+}
+
+// claim_price_changed carries previousPayment, currentPayment, changePercent and
+// termsVersion; read them defensively in case they arrive nested.
+function readClaimPriceChange(error) {
+    const body = error?.details;
+    const sources = [body, body?.details, body?.error, body?.data]
+        .filter(value => value && typeof value === "object");
+    const pick = name => {
+        for (const source of sources) {
+            const value = source[name];
+            if (value != null && value !== "" && Number.isFinite(Number(value))) return Number(value);
+        }
+        return null;
+    };
+    return {
+        previousPayment: pick("previousPayment"),
+        currentPayment: pick("currentPayment"),
+        termsVersion: pick("termsVersion")
+    };
+}
+
+async function presentClaimPriceChange(error, access) {
+    const change = readClaimPriceChange(error);
+    console.warn(
+        "[Commission] claim_price_changed:",
+        change.previousPayment,
+        "->",
+        change.currentPayment,
+        "terms",
+        change.termsVersion);
+    try {
+        const refreshed = await loadPortableCommissionProjection(
+            state.client,
+            state.capabilities,
+            state.access);
+        state.projection = refreshed.projection;
+        state.capabilities.participantCapability = refreshed.participantCapability;
+    } catch (caught) {
+        console.warn(
+            "[Commission] claim_price_change_refresh_failed:",
+            caught?.code,
+            caught?.message);
+    }
+    state.claimPriceChange = { ...change, commandId: access.pending.commandId };
+    render();
+    const nextStep = byId("nextStep");
+    nextStep.scrollIntoView({ behavior: "smooth", block: "center" });
+    nextStep.querySelector(".button.primary")?.focus({ preventScroll: true });
+}
+
+function resolveClaimPriceChangeStep() {
+    const change = state.claimPriceChange;
+    const terms = state.projection.public.terms;
+    // The loaded terms are authoritative once they are at least as new as the notice.
+    if (change.termsVersion == null || terms.version > change.termsVersion) {
+        change.termsVersion = terms.version;
+        change.currentPayment = terms.payment.total;
+    }
+    const current = change.currentPayment ?? terms.payment.total;
+    const previous = change.previousPayment;
+    let body = "The payment changed. Review the terms and claim again.";
+    if (previous != null && previous > 0 && current !== previous) {
+        const delta = current - previous;
+        const percent = Math.round(Math.abs(delta) / previous * 1000) / 10;
+        body = `Material prices were refreshed. Your payment ${delta > 0 ? "went up" : "went down"} ` +
+            `from ${formatGil(previous)} to ${formatGil(current)} (${delta > 0 ? "+" : "−"}${percent}%). ` +
+            "You haven't claimed it yet.";
+    }
+    return {
+        title: `Payment is now ${formatGil(current)}`,
+        body,
+        tone: "waiting",
+        actions: [
+            {
+                label: `Claim at ${formatGil(current)}`,
+                primary: true,
+                run: claimAtChangedPayment
+            },
+            {
+                label: "Don't claim",
+                run: abandonPriceChangedClaim
+            }
+        ]
+    };
+}
+
+// Resends the exact saved claim (same character and membership choice) naming the
+// current terms. A new command identity keeps it distinct from the refused attempt.
+async function claimAtChangedPayment() {
+    const saved = state.store.load();
+    if (saved?.pending?.kind !== "claim") {
+        state.claimPriceChange = null;
+        render();
+        throw new CommissionClientError("No saved claim command is available.", "missing-pending-claim");
+    }
+    const termsVersion = state.claimPriceChange?.termsVersion ?? state.projection.public.terms.version;
+    state.claimPriceChange = null;
+    state.store.discard();
+    const access = state.store.beginAuthorityExchange("claim", {
+        ...saved.pending.payload,
+        termsVersion
+    });
+    state.access = access;
+    await sendAuthorityExchange(
+        "claim",
+        access,
+        state.capabilities.claimCapability,
+        "Commission claimed. Your private workspace link is ready; keep it private.");
+}
+
+function abandonPriceChangedClaim() {
+    state.claimPriceChange = null;
+    state.store.discard();
+    state.membershipStore.discard();
+    state.access = null;
+    render();
 }
 
 function openPaymentRequestForm() {
@@ -2541,11 +2774,26 @@ async function submitComment(event) {
     event.preventDefault();
     const input = byId("commentText");
     const comment = input.value.trim();
-    if (!comment) return;
-    await runParticipantCommand("add-comment", { comment }, "Operational update posted.");
-    input.value = "";
+    if (!comment) {
+        input.focus();
+        return;
+    }
+    // The draft is kept unless the message was actually recorded.
+    if (await runParticipantCommand("add-comment", { comment }, "Message sent.")) {
+        input.value = "";
+        updateCommentCount();
+    }
+    input.focus();
 }
 
+function handleCommentKeydown(event) {
+    if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    const form = byId("commentForm");
+    if (!form.hidden && !state.busy) form.requestSubmit();
+}
+
+// Returns true once the host recorded the command, even if the refresh afterwards failed.
 async function runParticipantCommand(command, payload, successMessage) {
     const allowed = SETTLEMENT_COMMANDS.has(command)
         ? canUseSettlementCommands(state.projection)
@@ -2554,14 +2802,14 @@ async function runParticipantCommand(command, payload, successMessage) {
         showNotice(
             "Participant action unavailable",
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
-        return;
+        return false;
     }
     if (command === "report-progress" &&
         requiresTermsAcknowledgement(state.projection)) {
         showNotice(
             "Accept the current terms first",
             "Review and accept the revised terms before continuing work on this commission.");
-        return;
+        return false;
     }
     setBusy(true);
     clearNotice();
@@ -2581,8 +2829,12 @@ async function runParticipantCommand(command, payload, successMessage) {
     } finally {
         setBusy(false);
     }
+    return applied;
 }
 
 byId("progressForm").addEventListener("submit", submitProgress);
+byId("commentText").addEventListener("keydown", handleCommentKeydown);
+byId("commentText").addEventListener("input", updateCommentCount);
+updateCommentCount();
 window.addEventListener("pagehide", () => state.projectionStream?.stop(), { once: true });
 load().catch(showFatal);

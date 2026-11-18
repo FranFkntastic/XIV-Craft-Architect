@@ -1883,13 +1883,13 @@
                                                      class="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "is-active" : string.Empty)"
                                                      aria-pressed="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared)"
                                                      @onclick="@(() => _timelineComposerVisibility = CommissionTimelineVisibility.Shared)">
-                                                 Share with crafter
+                                                 Message crafter
                                              </button>
                                          </div>
                                      }
                                      <MudTextField @bind-Value="_timelineComment"
                                                    id="selected-order-timeline-comment"
-                                                   Label="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "Crafter update" : "Company note")"
+                                                   Label="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "Message to crafter" : "Company note")"
                                                    Variant="Variant.Outlined"
                                                    Margin="Margin.Dense"
                                                    Immediate="true"
@@ -1900,7 +1900,7 @@
                                                     Color="Color.Primary"
                                                     OnClick="AddTimelineEntryAsync"
                                                     Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_timelineComment))">
-                                             Add to Timeline
+                                             @(HasCanonicalCommission && _timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "Send message" : "Add to Timeline")
                                          </MudButton>
                                      </div>
                                  </div>

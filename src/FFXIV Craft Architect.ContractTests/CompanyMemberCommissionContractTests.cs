@@ -247,6 +247,38 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task OnlyTheClaimantAccountCanConfirmFinalPaymentAfterDelivery()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.AddActiveMemberAsync("Claimant");
+        var other = await fixture.AddActiveMemberAsync("Other member");
+        using var claimed = await fixture.ClaimAsync(claimant);
+        claimed.EnsureSuccessStatusCode();
+        var projection = (await claimed.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+        await fixture.MarkDeliveredWithSettlementPendingAsync();
+
+        using var otherResponse = await fixture.ConfirmSettlementAsync(
+            other,
+            projection.Public.ProjectionRevision);
+        using var ownerResponse = await fixture.ConfirmSettlementAsync(
+            fixture.Owner,
+            projection.Public.ProjectionRevision);
+
+        Assert.Equal(HttpStatusCode.Forbidden, otherResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, ownerResponse.StatusCode);
+        Assert.Null((await fixture.LoadCanonicalOrderAsync())
+            .CompanyCommission!.SettlementPayment.CrafterReceived);
+
+        using var claimantResponse = await fixture.ConfirmSettlementAsync(
+            claimant,
+            projection.Public.ProjectionRevision);
+
+        Assert.Equal(HttpStatusCode.OK, claimantResponse.StatusCode);
+        Assert.NotNull((await fixture.LoadCanonicalOrderAsync())
+            .CompanyCommission!.SettlementPayment.CrafterReceived);
+    }
+
+    [Fact]
     public async Task RevokedParticipantCapabilityRetainsUnauthorizedContract()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -590,6 +622,49 @@ public sealed class CompanyMemberCommissionContractTests
             string capability,
             long projectionRevision) =>
             PostProgressAsync(application.CreateClient(), capability, projectionRevision);
+
+        public async Task MarkDeliveredWithSettlementPendingAsync()
+        {
+            var envelope = await Profiles.LoadObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                CancellationToken.None);
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                envelope!.PayloadJson,
+                JsonOptions)!;
+            order.Status = TradeOrderStatus.Completed;
+            order.CompanyCommission = order.CompanyCommission! with
+            {
+                SettlementState = CompanyCommissionSettlementState.Pending
+            };
+            var orderPut = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(order, JsonOptions),
+                expectedRevision: envelope.Revision,
+                ct: CancellationToken.None);
+            Assert.True(orderPut.Success);
+        }
+
+        public Task<HttpResponseMessage> ConfirmSettlementAsync(
+            Account account,
+            long projectionRevision) =>
+            CreateClient(account.Key).PostAsJsonAsync(
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/commands/confirm-settlement-received",
+                new PublicCompanyCommissionCommandEnvelope
+                {
+                    ProtocolVersion = CompanyCommissionProtocol.Version1,
+                    PublicBriefId = Order.CommissionPublication.PublicId,
+                    ExpectedProjectionRevision = projectionRevision,
+                    CommandId = Guid.NewGuid(),
+                    Command = JsonSerializer.SerializeToElement(new
+                    {
+                        termsVersion = 1,
+                        note = "Received by mail"
+                    })
+                });
 
         public async Task<string> IssueParticipantCapabilityAsync()
         {
