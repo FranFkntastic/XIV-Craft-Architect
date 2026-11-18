@@ -111,6 +111,35 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task OnHandStockKeepsItsBonusValueWithoutAddingPurchaseCash()
+    {
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new() { ItemId = 1, Name = "Stock", Source = AcquisitionSource.OnHand, Quantity = 2, CanBuyFromVendor = true, VendorPrice = 50 },
+                new() { ItemId = 2, Name = "Purchase", Source = AcquisitionSource.VendorBuy, Quantity = 3, CanBuyFromVendor = true, VendorPrice = 10 }
+            ]
+        };
+        var demand = new RecipeDemandProjectionService().Build(plan, null);
+        var rows = demand.ActiveProcurementDemand;
+        var basis = new CommissionCostBasisResolver().BuildSelectedSourceLines(rows, []);
+        var result = await new TradeMaterialQuoteService().PriceAsync(new MarketShoppingService(null!), [],
+            demand.ToSelectedProcurementMaterialAggregates(), rows.ToDictionary(r => (r.ItemId, r.MustBeHq), r => r.Source),
+            new() { MinimumSafetyAllowanceGil = 0, SafetyAllowancePercent = 0 }, DateTime.UtcNow, basis);
+        Assert.True(result.IsComplete, result.FailureReason);
+        Assert.Equal(0, Assert.Single(result.Quote!.Lines, line => line.ItemId == 1).CashRequired);
+        var order = MemberCommissionFixture.CreateOrder(Guid.NewGuid());
+        order.SourceSnapshot.MaterialQuote = result.Quote;
+        order.SourceSnapshot.Materials = result.MaterialLines.Select(line => new TradeOrderMaterialSnapshot(
+            line.ItemId, line.Name, line.Quantity, line.RequiresHq, line.UnitCost, line.Quantity * line.UnitCost, line.EvidenceSource)).ToArray();
+        var payment = TradeCommissionPaymentSummary.FromOrder(order, null);
+        Assert.Equal(100, payment.OnHandMaterialValueTotal);
+        Assert.Equal(30, payment.MaterialReimbursementTotal);
+        Assert.Equal(130, payment.EstimatedProcurementTotal);
+    }
+
+    [Fact]
     public void StoredPaymentModeControlsLegacyPercentConversion()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);

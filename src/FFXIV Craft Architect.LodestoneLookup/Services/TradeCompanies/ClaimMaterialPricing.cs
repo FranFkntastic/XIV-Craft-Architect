@@ -33,7 +33,11 @@ public sealed class ClaimMaterialPricing(
         var plan = CorePlanSessionLoadService.RestorePlan(stored.PlanJson, stored.PlanStateJson, requireComplete: true)
             ?? throw new InvalidOperationException("Empty linked plan.");
         var projector = new RecipeDemandProjectionService();
-        var candidates = projector.Build(plan, null).ToMarketAnalysisMaterialAggregates();
+        var initial = projector.Build(plan, null);
+        var stockOnlyIds = initial.AllPlanDemand.GroupBy(row => row.ItemId)
+            .Where(group => group.All(row => row.Source == AcquisitionSource.OnHand))
+            .Select(group => group.Key).ToHashSet();
+        var candidates = initial.ToMarketAnalysisMaterialAggregates().Where(item => !stockOnlyIds.Contains(item.ItemId)).ToList();
         IReadOnlyList<DetailedShoppingPlan> plans = [];
         if (candidates.Count > 0)
         {
@@ -71,7 +75,8 @@ public sealed class ClaimMaterialPricing(
             .ToDictionary(group => group.Key, group => group.Select(row => row.Source).Distinct().Single());
         var now = clock.GetUtcNow().UtcDateTime;
         var result = await new TradeMaterialQuoteService().PriceAsync(new MarketShoppingService(cache),
-            plans, items, sources, old.AppliedPolicy, now, ct);
+            plans, items, sources, old.AppliedPolicy, now,
+            new CommissionCostBasisResolver().BuildSelectedSourceLines(demand.ActiveProcurementDemand, [], plans), ct);
         var quote = result.Quote ?? throw new InvalidOperationException(result.FailureReason);
         if (string.IsNullOrWhiteSpace(quote.RouteSelectionKey))
         {

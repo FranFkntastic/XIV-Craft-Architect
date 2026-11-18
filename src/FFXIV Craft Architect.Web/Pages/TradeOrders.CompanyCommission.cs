@@ -207,7 +207,9 @@ public partial class TradeOrders
                 material.RequiresHq,
                 material.UnitCost,
                 material.TotalCost,
-                terms.PricingEvidence.CostBasis,
+                source.SourceSnapshot.Materials.FirstOrDefault(item =>
+                    item.ItemId == material.ItemId && item.RequiresHq == material.RequiresHq)?.EvidenceSource
+                    ?? terms.PricingEvidence.CostBasis,
                 $"Canonical terms v{terms.Version}",
                 terms.PricingEvidence.CapturedAtUtc)).ToArray();
         copy.SourceSnapshot.CraftLabor = terms.Payment.CraftSynthCount <= 0

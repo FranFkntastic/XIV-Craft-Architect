@@ -19,9 +19,35 @@ public sealed class TradeMaterialQuoteService
         IReadOnlyDictionary<(int ItemId, bool RequiresHq), AcquisitionSource> sources,
         TradeMaterialPricingPolicy policy,
         DateTime now,
+        IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines,
         CancellationToken ct = default)
     {
-        var input = PrepareOptimizationInput(plans, demand, sources, policy, now);
+        var stock = demand.Where(item => sources.GetValueOrDefault((item.ItemId, item.RequiresHq)) == AcquisitionSource.OnHand).ToArray();
+        var purchases = demand.Except(stock).ToArray();
+        var references = selectedSourceLines.Where(line => line.EvidenceSource == TradeOrderWorkflow.OnHandEvidenceSource)
+            .ToDictionary(line => (line.ItemId, line.RequiresHq));
+        if (stock.Any(item => !references.TryGetValue((item.ItemId, item.RequiresHq), out var line) ||
+            line.Quantity != item.TotalQuantity))
+        {
+            return Failure("On-hand quantities do not match the selected-source material evidence.");
+        }
+
+        var stockLines = stock.Select(item => references[(item.ItemId, item.RequiresHq)]).ToArray();
+        var stockCoverage = stock.Select(item => new TradeMaterialQuoteLine(
+            item.ItemId, item.Name, item.TotalQuantity, item.RequiresHq, 0, [], null)).ToArray();
+        if (stock.Length > 0 && purchases.Length == 0)
+        {
+            var normalized = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
+            return new(new TradeMaterialQuote
+            {
+                RouteSelectionKey = "on-hand", WorldStops = 0, RouteCashRequired = 0,
+                MaterialReimbursement = 0, SafetyAllowance = 0, Lines = stockCoverage,
+                AppliedPolicy = normalized, PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(normalized),
+                QuotedAtUtc = now, ExpiresAtUtc = now.AddMinutes(normalized.QuoteLifetimeMinutes)
+            }, stockLines, null);
+        }
+
+        var input = PrepareOptimizationInput(plans, purchases, sources, policy, now);
         var optimization = await shopping.OptimizeProcurementRouteWithDecisionAsync(
             input, new MarketAnalysisConfig
             {
@@ -30,7 +56,10 @@ public sealed class TradeMaterialQuoteService
                 TravelTolerance = 11
             }, includeSplitPurchases: policy.AllowSplitPurchases,
             executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
-        return Build(optimization, demand, policy, now);
+        var result = Build(optimization, purchases, policy, now);
+        return result.Quote is { } quote && stock.Length > 0
+            ? new(quote with { Lines = [.. quote.Lines, .. stockCoverage] }, [.. result.MaterialLines, .. stockLines], null)
+            : result;
     }
 
     public static string DescribeNoExecutableRoute(
