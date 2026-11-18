@@ -61,7 +61,8 @@ public static class TradeProcurementRowBuilder
         TradePayrollWorkflowDraft? draft,
         string? activePlanId,
         WorkerTradeProjection? liveSnapshot,
-        bool useRecordedPayment = false)
+        bool useRecordedPayment = false,
+        IReadOnlyList<CompanyCommissionMaterialTerm>? materials = null)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -73,9 +74,16 @@ public static class TradeProcurementRowBuilder
                 liveSnapshot?.HasPlan == true,
                 liveSnapshot?.PlanId))
         {
-            return expectsLivePlan
-                ? Array.Empty<TradeOrderProcurementRow>()
-                : TradeOrderWorkflow.BuildProcurementRows(order, draft);
+            if (expectsLivePlan)
+            {
+                return [];
+            }
+            var rows = TradeOrderWorkflow.BuildProcurementRows(order, draft);
+            return !useRecordedPayment ? rows : rows.Select(row => WithImpact(row,
+                row.Responsibility == CommissionMaterialResponsibility.Provided ||
+                string.Equals(row.EvidenceSource, TradeOrderWorkflow.OnHandEvidenceSource, StringComparison.OrdinalIgnoreCase)
+                    ? new(0m)
+                    : TradeProcurementPaymentImpact.FromTerms(materials, row.ItemId, row.RequiresHq, row.Quantity))).ToArray();
         }
 
         var snapshot = liveSnapshot!;
@@ -98,16 +106,17 @@ public static class TradeProcurementRowBuilder
         // The cost cell and subtree attribution consume the same recovered evidence.
         var paymentSnapshot = snapshot with { MaterialLines = lines.Values.ToArray() };
         var impacts = TradeProcurementPaymentImpact.CalculateAll(paymentSnapshot, responsibilities,
-            requireRecordedCash: useRecordedPayment);
+            requireRecordedCash: useRecordedPayment, materials: materials);
 
         return snapshot.AcquisitionRows
-            .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities) with
-            {
-                PaymentImpact = impacts.GetValueOrDefault((row.ItemId, row.MustBeHq))
-            })
+            .Select(row => WithImpact(ToTradeRow(row, lines, retainedEvidence, responsibilities),
+                impacts[(row.ItemId, row.MustBeHq)]))
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static TradeOrderProcurementRow WithImpact(TradeOrderProcurementRow row, TradeProcurementPaymentImpact.Impact impact) =>
+        row with { PaymentImpact = impact.Cash, TermsUnitCost = impact.TermsUnitCost, PaymentImpactUnavailableReason = impact.UnavailableReason };
 
     private static Dictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> BuildResponsibilityLookup(
         TradePayrollWorkflowDraft? draft)
