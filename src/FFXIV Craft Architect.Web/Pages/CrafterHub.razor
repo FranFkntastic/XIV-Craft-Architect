@@ -7,8 +7,12 @@
 @inject TradeWorkspaceAccessService TradeAccess
 @inject ProfileSyncService ProfileSync
 @inject ProfileSyncLocalStateService LocalState
+@inject DiscordIdentityClient DiscordIdentityClient
+@inject ProfileHostClient ProfileHostClient
+@inject IDialogService DialogService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@implements IDisposable
 
 <PageTitle>Crafter hub</PageTitle>
 
@@ -31,6 +35,29 @@
     @if (_loading)
     {
         <MudProgressLinear Indeterminate="true" />
+    }
+    else if (!_signedIn)
+    {
+        <div class="hub-grid">
+            <div class="hub-col">
+                <section class="card">
+                    <div class="card-head"><h2>My work</h2></div>
+                    <div class="row">
+                        <div class="meta">Sign in to see your work.</div>
+                        <div class="right">@SignInButton</div>
+                    </div>
+                </section>
+            </div>
+            <div class="hub-col">
+                <section class="card">
+                    <div class="card-head"><h2>Companies</h2></div>
+                    <div class="row co-row">
+                        <div class="meta">Sign in to see your companies.</div>
+                        <div class="right">@SignInButton</div>
+                    </div>
+                </section>
+            </div>
+        </div>
     }
     else
     {
@@ -224,6 +251,9 @@
     private CrafterHubProjection? _hub;
     private string? _filter;
     private bool _loading = true;
+    private bool _signedIn;
+    private bool _discordSignIn;
+    private bool _accountOpen;
     private bool _busy;
     private bool _creatingCompany;
     private string _newCompanyName = string.Empty;
@@ -234,6 +264,23 @@
     private IReadOnlyList<CrafterHubOpenCommission> OpenCommissions => Filtered(_hub?.OpenCommissions, item => item.CompanyId);
     private IReadOnlyList<CrafterHubUpdate> Updates => Filtered(_hub?.Updates, item => item.CompanyId);
     private int NewUpdateCount => Updates.Count(item => item.IsNew);
+
+    private RenderFragment SignInButton => __builder =>
+    {
+        if (_discordSignIn)
+        {
+            <button type="button" class="button small primary" disabled="@_busy" @onclick="SignInWithDiscordAsync">Sign in with Discord</button>
+        }
+        else
+        {
+            <button type="button" class="button small primary" disabled="@_accountOpen" @onclick="OpenAccountAsync">Connect account</button>
+        }
+    };
+
+    protected override void OnInitialized()
+    {
+        ProfileSync.ConnectionChanged += OnConnectionChanged;
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -255,9 +302,12 @@
         try
         {
             // Without a connected account there is nothing account-scoped to load.
-            _hub = (await LocalState.LoadConnectionSettingsAsync()).IsConfigured
-                ? await HubClient.LoadCrafterHubAsync()
-                : null;
+            _signedIn = (await LocalState.LoadConnectionSettingsAsync()).IsConfigured;
+            _hub = _signedIn ? await HubClient.LoadCrafterHubAsync() : null;
+            if (!_signedIn)
+            {
+                _discordSignIn = await IsDiscordSignInEnabledAsync();
+            }
             if (_hub != null)
             {
                 await TradeAccess.ObserveHostAnswerAsync(_hub.CanOperate);
@@ -271,6 +321,65 @@
         NormalizeFilter();
         _loading = false;
     }
+
+    private async Task<bool> IsDiscordSignInEnabledAsync()
+    {
+        try
+        {
+            return (await DiscordIdentityClient.GetSignInStatusAsync(ProfileHostClient.DefaultHostUrl)).Enabled;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"[CrafterHub] Discord sign-in status unavailable. {exception.GetType().Name}: {exception.Message}");
+            return false;
+        }
+    }
+
+    private async Task SignInWithDiscordAsync()
+    {
+        _busy = true;
+        try
+        {
+            var uri = await DiscordIdentityClient.StartSignInAsync(
+                ProfileHostClient.DefaultHostUrl,
+                "/" + TradeWorkspaceAccessService.HubRoute);
+            Navigation.NavigateTo(uri.AbsoluteUri, true);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"[CrafterHub] Discord sign-in could not start. {exception.GetType().Name}: {exception.Message}");
+            Snackbar.Add("Discord sign-in could not start.", Severity.Warning);
+            _busy = false;
+        }
+    }
+
+    private async Task OpenAccountAsync()
+    {
+        _accountOpen = true;
+        try
+        {
+            var parameters = new DialogParameters
+            {
+                [nameof(SettingsDialog.InitialSection)] = SettingsSection.Profile
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = false, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
+            var dialog = await DialogService.ShowAsync<SettingsDialog>("Settings", parameters, options);
+            await dialog.Result;
+        }
+        finally
+        {
+            _accountOpen = false;
+        }
+    }
+
+    private void OnConnectionChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        });
+
+    public void Dispose() => ProfileSync.ConnectionChanged -= OnConnectionChanged;
 
     // ?company= accepts a company id or slug; anything the hub does not list shows all.
     private void NormalizeFilter()
