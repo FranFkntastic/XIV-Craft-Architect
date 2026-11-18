@@ -965,10 +965,19 @@ export async function loadPortableCommissionProjection(
             caught instanceof CommissionClientError &&
             caught.status === 401 &&
             Boolean(loadSecret && access?.pending);
-        if (!pendingAuthorityIsNotInstalled) throw caught;
+        // A saved participant credential the host rejects belongs to a claim that ended
+        // (released, replaced, or revoked); this browser falls back to the public view.
+        const savedParticipantWasRevoked =
+            caught instanceof CommissionClientError &&
+            caught.status === 401 &&
+            !hasAuthorityFragment &&
+            !access?.pending &&
+            Boolean(loadSecret && loadSecret === access?.participantSecret);
+        if (!pendingAuthorityIsNotInstalled && !savedParticipantWasRevoked) throw caught;
         return {
             projection: await client.load(),
-            participantCapability
+            participantCapability,
+            discardSavedAccess: savedParticipantWasRevoked
         };
     }
 }

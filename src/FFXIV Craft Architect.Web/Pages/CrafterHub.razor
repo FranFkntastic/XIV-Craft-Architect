@@ -433,7 +433,7 @@
         var open = _hub.OpenCommissions.FirstOrDefault(item => item.Commission.CommissionId == CommissionIdQuery);
         if (!string.IsNullOrWhiteSpace(open?.PublicUrl))
         {
-            Navigation.NavigateTo(ClaimUrl(open));
+            Navigation.NavigateTo(ClaimUrl(open), forceLoad: true);
         }
     }
 
@@ -480,8 +480,13 @@
                     $"[CrafterHub] Read mark failed for commission {work.Commission.CommissionId}. {exception.GetType().Name}: {exception.Message}");
             }
         }
-        Navigation.NavigateTo(target);
+        // The commission page is a static page outside the Blazor router.
+        Navigation.NavigateTo(target, forceLoad: !IsAppRoute(target));
     }
+
+    private static bool IsAppRoute(string target) =>
+        target.StartsWith("companies/", StringComparison.Ordinal) ||
+        target.StartsWith("trade/", StringComparison.Ordinal);
 
     private async Task RequestMembershipAsync(CrafterHubCompany company)
     {

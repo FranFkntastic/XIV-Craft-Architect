@@ -284,6 +284,11 @@ async function load() {
         state.access);
     state.projection = loaded.projection;
     state.capabilities.participantCapability = loaded.participantCapability;
+    if (loaded.discardSavedAccess) {
+        console.warn("[Commission] saved_participant_revoked: showing the public commission.");
+        state.store.discard();
+        state.access = null;
+    }
     if (state.projection.kind !== "participant" &&
         state.access?.pending?.kind === "claim" &&
         state.access.pending.payload.termsVersion < state.projection.public.terms.version) {
