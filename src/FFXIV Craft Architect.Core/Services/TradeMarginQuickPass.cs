@@ -29,6 +29,11 @@ public sealed class TradeMarginQuickPass(IMarketCacheService market, IUniversali
                 return;
             }
 
+            // A refresh stores each world's newest reading, whichever fetch it came from,
+            // because Universalis can answer from an older copy. Mirror that here or the
+            // preview shows older readings than the cache already holds. A normal load
+            // discards stale entries before fetching, so it has nothing to merge.
+            var retained = refresh ? await market.GetManyAsync(pairs, TimeSpan.FromDays(36500)) : null;
             var worlds = await api.GetWorldDataAsync(ct);
             var batches = missing.GroupBy(pair => pair.dataCenter)
                 .SelectMany(group => group.Select(pair => pair.itemId).Chunk(10).Select(ids => (dc: group.Key, ids)));
@@ -59,7 +64,8 @@ public sealed class TradeMarginQuickPass(IMarketCacheService market, IUniversali
             }));
             foreach (var entry in fetched.SelectMany(batch => batch))
             {
-                entries[(entry.ItemId, entry.DataCenter)] = entry;
+                var key = (entry.ItemId, entry.DataCenter);
+                entries[key] = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained?.GetValueOrDefault(key), entry);
             }
             var evidence = new MarketEvidenceSet(entries, pairs, scope.MarketFetchScope, centers,
                 scope.EffectiveDataCenter, scope.Region, null, fetched.Sum(batch => batch.Length), DateTime.UtcNow);
