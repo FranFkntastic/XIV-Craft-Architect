@@ -12,7 +12,6 @@ public static class TradeOrderPaymentDisplayFormatter
         {
             IsAvailable = true,
             MaterialReimbursementTotal = payment.MaterialReimbursement,
-            CommissionAmount = payment.MaterialAdjustment,
             CraftLaborTotal = payment.CraftLabor,
             CraftSynthCount = payment.CraftSynthCount,
             GilPerSynth = payment.GilPerSynth,
@@ -22,10 +21,8 @@ public static class TradeOrderPaymentDisplayFormatter
         return summary with
         {
             MaterialReimbursementTotal = payment.MaterialReimbursement,
-            CommissionAmount = payment.MaterialAdjustment,
             TotalPayment = payment.Total,
-            Active = breakdown,
-            LaborStandard = breakdown with { Contract = TradePaymentContractMode.LaborStandard }
+            Active = breakdown
         };
     }
 

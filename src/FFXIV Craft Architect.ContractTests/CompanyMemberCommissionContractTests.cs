@@ -125,7 +125,7 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
-    public async Task OnHandStockKeepsItsBonusValueWithoutAddingPurchaseCash()
+    public async Task OnHandStockDoesNotAddPurchaseCash()
     {
         var plan = new CraftingPlan
         {
@@ -150,26 +150,10 @@ public sealed class CompanyMemberCommissionContractTests
         order.SourceSnapshot.CraftLabor = [new("craft", 100, "Output", 1, 1)];
         var payment = TradeCommissionPaymentSummary.FromOrder(order, null);
         Assert.True(payment.Active.IsAvailable);
-        Assert.Equal(13, payment.CommissionAmount);
+        Assert.Equal(230, payment.TotalPayment);
         Assert.Equal(100, payment.OnHandMaterialValueTotal);
         Assert.Equal(30, payment.MaterialReimbursementTotal);
         Assert.Equal(130, payment.EstimatedProcurementTotal);
-    }
-
-    [Fact]
-    public void StoredPaymentModeControlsLegacyPercentConversion()
-    {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        foreach (var (mode, expected) in new[] { (0, 20m), (1, 0m) })
-        {
-            var policy = JsonSerializer.Deserialize<TradePaymentPolicy>(
-                $$"""{"activeContract":{{mode}},"LegacyCommissionPercent":20,"laborGilPerSynth":200}""", options)!;
-            var normalized = TradePaymentPolicyNormalizer.Normalize(policy);
-            Assert.Equal(expected, normalized.MaterialValueBonusPercent);
-            Assert.Null(normalized.LegacyCommissionPercent);
-            Assert.Equal(normalized, TradePaymentPolicyNormalizer.Normalize(normalized));
-        }
-        Assert.Equal(TradePaymentPolicy.Default, TradePaymentPolicyNormalizer.Normalize(TradePaymentPolicy.Default));
     }
 
     [Fact]
@@ -1221,14 +1205,13 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Theory]
-    [InlineData(1050, true, false, true)]
-    [InlineData(950, true, false, false)]
-    [InlineData(1051, true, true, false)]
-    [InlineData(949, true, true, true)]
-    [InlineData(2000, false, false, true)]
-    [InlineData(-1, true, false, false)]
-    [InlineData(1010, true, false, false, true)]
-    public async Task ClaimRefreshCommitsOnlyTheAcceptedPayment(int listingPrice, bool knownRate, bool conflict, bool useLink, bool mixed = false)
+    [InlineData(1050, false, true)]
+    [InlineData(950, false, false)]
+    [InlineData(1051, true, false)]
+    [InlineData(949, true, true)]
+    [InlineData(-1, false, false)]
+    [InlineData(1010, false, false, true)]
+    public async Task ClaimRefreshCommitsOnlyTheAcceptedPayment(int listingPrice, bool conflict, bool useLink, bool mixed = false)
     {
         // A sealed single-listing route exercises the real optimizer and CAS without a market server or an account key.
         var root = Directory.CreateTempSubdirectory("claim-pricing-");
@@ -1285,8 +1268,7 @@ public sealed class CompanyMemberCommissionContractTests
             };
             terms = terms with
             {
-                Payment = new(CompanyCommissionPaymentSchedule.OnDelivery, "Commission", 1000, 100, 0, 1100,
-                    MaterialAdjustmentPercent: knownRate ? 10 : null),
+                Payment = new(CompanyCommissionPaymentSchedule.OnDelivery, "Commission", 1000, 0, 0, 1000),
                 Materials = [new(Guid.NewGuid(), 100, "Market item", 1, false, CommissionMaterialResponsibility.Crafter, 1000, 1000)],
                 PricingEvidence = new("ProcurementRoute", "DC", "Aether", old.QuotedAtUtc, old)
             };
@@ -1295,7 +1277,7 @@ public sealed class CompanyMemberCommissionContractTests
                 terms = terms with
                 {
                     Materials = [.. terms.Materials, provided],
-                    Payment = terms.Payment with { MaterialAdjustment = 110, MaterialReimbursement = 1100, Total = 1210 }
+                    Payment = terms.Payment with { MaterialReimbursement = 1100, Total = 1100 }
                 };
             }
             order.CompanyCommission = commission with { TermsVersions = [terms] };
@@ -1361,14 +1343,14 @@ public sealed class CompanyMemberCommissionContractTests
             {
                 result = await Submit(claim);
             }
-            var refreshed = knownRate && listingPrice > 0;
+            var refreshed = listingPrice > 0;
             if (refreshed)
             {
                 Assert.True(log.Warning == null, log.Warning);
             }
             else
             {
-                Assert.Contains(knownRate ? "Market data incomplete" : "rate is unknown", log.Warning);
+                Assert.Contains("Market data incomplete", log.Warning);
             }
             if (conflict)
             {
@@ -1378,7 +1360,7 @@ public sealed class CompanyMemberCommissionContractTests
                 Assert.Equal(409, ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)response).StatusCode);
                 var body = JsonSerializer.SerializeToElement(((Microsoft.AspNetCore.Http.IValueHttpResult)response).Value);
                 Assert.Equal("claim_price_changed", body.GetProperty("code").GetString());
-                Assert.Equal(1100m, body.GetProperty("previousPayment").GetDecimal());
+                Assert.Equal(1000m, body.GetProperty("previousPayment").GetDecimal());
                 Assert.Equal(result.Order.CompanyCommission.CurrentTerms.Payment.Total, body.GetProperty("currentPayment").GetDecimal());
                 Assert.Equal(2, body.GetProperty("termsVersion").GetInt32());
                 if (useLink)
@@ -1422,12 +1404,11 @@ public sealed class CompanyMemberCommissionContractTests
                 Assert.Equal(101, quote.SafetyAllowance);
                 Assert.Equal(1111, quote.MaterialReimbursement);
                 Assert.Equal(quote.MaterialReimbursement, final.CurrentTerms.Payment.MaterialReimbursement);
-                Assert.Equal(111, final.CurrentTerms.Payment.MaterialAdjustment);
-                Assert.Equal(1222, final.CurrentTerms.Payment.Total);
+                Assert.Equal(1111, final.CurrentTerms.Payment.Total);
             }
             else
             {
-                Assert.Equal(refreshed ? listingPrice + decimal.Round(listingPrice / 10m, 0, MidpointRounding.AwayFromZero) : 1100m, final.CurrentTerms.Payment.Total);
+                Assert.Equal(refreshed ? listingPrice : 1000m, final.CurrentTerms.Payment.Total);
             }
             Assert.Equal(refreshed ? 1 : 0, final.Activity.Count(e => e.Kind == CompanyCommissionActivityKind.TermsAmended &&
                 e.Actor.Kind == CompanyCommissionActorKind.System && e.Visibility == CompanyCommissionActivityVisibility.Shared));

@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace FFXIV_Craft_Architect.Core.Models;
 
 public enum CommissionCostBasis
@@ -30,11 +28,6 @@ public enum CommissionMaterialResponsibility
     Provided
 }
 
-public sealed record CommissionPayoutPolicy(decimal CommissionPercent)
-{
-    public static CommissionPayoutPolicy Default { get; } = new(CommissionPercent: 20m);
-}
-
 public sealed record CommissionPayrollInputLine(
     int ItemId,
     string Name,
@@ -55,7 +48,6 @@ public sealed record CommissionPayrollLine(
     bool RequiresHq,
     CommissionMaterialResponsibility Responsibility,
     decimal EstimatedMaterialCost,
-    decimal MaterialBasis,
     string EvidenceSource,
     string UnitCostExplanation,
     DateTime? EvidenceTimestampUtc,
@@ -63,21 +55,16 @@ public sealed record CommissionPayrollLine(
 
 public sealed record CommissionPayrollRun(
     CommissionCostBasis CostBasis,
-    CommissionPayoutPolicy Policy,
     IReadOnlyList<CommissionPayrollLine> Lines,
-    decimal EstimatedMaterialTotal,
-    decimal MaterialBasisTotal,
-    decimal CommissionAmount,
-    decimal TotalPay,
     IReadOnlyList<string> Warnings);
 
 public enum TradePaymentContractMode
 {
-    LegacyCommission,
-    LaborStandard
+    LaborStandard = 1
 }
 
-public sealed record LegacyTradeLaborStandard
+/// <summary>Older stored policies expressed the labor rate as a benchmark payout over a synth count.</summary>
+public sealed record StoredLaborBenchmark
 {
     public decimal BenchmarkLaborPayout { get; init; }
 
@@ -86,23 +73,17 @@ public sealed record LegacyTradeLaborStandard
 
 public sealed record TradePaymentPolicy(
     TradePaymentContractMode ActiveContract,
-    decimal MaterialValueBonusPercent,
     decimal LaborGilPerSynth)
 {
-    public const decimal DefaultMaterialValueBonusPercent = 10m;
     public const decimal DefaultLaborGilPerSynth = 200m;
 
-    [JsonPropertyName("LegacyCommissionPercent")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public decimal? LegacyCommissionPercent { get; init; }
-
-    [JsonPropertyName("LaborStandard")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public LegacyTradeLaborStandard? LegacyLaborStandard { get; init; }
+    // Read only: the normalizer turns it into LaborGilPerSynth and it is never written back.
+    [System.Text.Json.Serialization.JsonPropertyName("LaborStandard")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public StoredLaborBenchmark? StoredLaborBenchmark { get; init; }
 
     public static TradePaymentPolicy Default { get; } = new(
         TradePaymentContractMode.LaborStandard,
-        DefaultMaterialValueBonusPercent,
         DefaultLaborGilPerSynth);
 }
 
@@ -151,8 +132,6 @@ public sealed record TradePaymentContractBreakdown(
     TradePaymentContractMode Contract,
     bool IsAvailable,
     decimal MaterialReimbursementTotal,
-    decimal CommissionPercent,
-    decimal CommissionAmount,
     decimal CraftLaborTotal,
     int CraftSynthCount,
     decimal GilPerSynth,
@@ -165,8 +144,6 @@ public sealed record TradePaymentComparisonSummary(
     decimal EstimatedProcurementTotal,
     decimal MaterialReimbursementTotal,
     decimal ProvidedMaterialTotal,
-    TradePaymentContractBreakdown Legacy,
-    TradePaymentContractBreakdown LaborStandard,
     TradePaymentContractBreakdown Active,
     decimal TotalPayment,
     IReadOnlyList<string> Warnings,

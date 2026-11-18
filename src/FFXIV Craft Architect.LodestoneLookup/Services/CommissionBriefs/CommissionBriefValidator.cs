@@ -35,16 +35,15 @@ public static class CommissionBriefValidator
                 material.UnitCost < 0 ||
                 material.TotalCost < 0) ||
             brief.Payment.MaterialReimbursement < 0 ||
-            brief.Payment.MaterialBonus < 0 ||
+            brief.Payment.HistoricalAmount < 0 ||
             brief.Payment.CraftLabor < 0 ||
             brief.Payment.Total <= 0 ||
-            brief.Payment.MaterialAdjustmentPercent is < 0 or > 100 ||
             brief.Payment.CraftSynthCount < 0 ||
             brief.Payment.GilPerSynth < 0 ||
             brief.Payment.Schedule == CompanyCommissionPaymentSchedule.Custom &&
                 string.IsNullOrWhiteSpace(brief.Payment.CustomTerms) ||
             brief.Payment.MaterialReimbursement +
-                brief.Payment.MaterialBonus +
+                brief.Payment.HistoricalAmount +
                 brief.Payment.CraftLabor != brief.Payment.Total)
         {
             return "The commission brief contains invalid delivery or payment values.";

@@ -162,9 +162,8 @@ public partial class TradeOrders
             return CanEditCanonicalDraft ? "Draft payment terms" : "Accepted payment terms";
         }
 
-        var policy = GetSelectedOrderEffectivePaymentPolicy() ?? TradePaymentPolicy.Default;
         var source = SelectedOrderUsesCompanyPaymentPolicy ? "Company default" : "Order override";
-        return $"{source}: labor, material-value bonus, and reimbursement";
+        return $"{source}: craft labor and material reimbursement";
     }
 
     private async Task SetSelectedOrderUseCompanyPolicyAsync(bool useCompanyPolicy)

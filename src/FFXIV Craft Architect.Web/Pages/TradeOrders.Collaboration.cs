@@ -831,10 +831,9 @@ public partial class TradeOrders
             Payment = new CommissionBriefPayment(
                 FormatCommissionPaymentContract(payment.Active.Contract),
                 payment.Active.MaterialReimbursementTotal,
-                payment.Active.CommissionAmount,
+                0,
                 payment.Active.CraftLaborTotal,
                 payment.Active.Total,
-                payment.Active.CommissionPercent,
                 payment.Active.CraftSynthCount,
                 payment.Active.GilPerSynth,
                 paymentTiming.Schedule,
@@ -911,10 +910,9 @@ public partial class TradeOrders
             Payment = new CommissionBriefPayment(
                 terms.Payment.ContractLabel,
                 terms.Payment.MaterialReimbursement,
-                terms.Payment.MaterialAdjustment,
+                terms.Payment.HistoricalAmount,
                 terms.Payment.CraftLabor,
                 terms.Payment.Total,
-                MaterialAdjustmentPercent: terms.Payment.MaterialAdjustmentPercent,
                 terms.Payment.CraftSynthCount,
                 terms.Payment.GilPerSynth,
                 terms.Payment.Schedule,
@@ -990,7 +988,7 @@ public partial class TradeOrders
 
     private static string FormatCommissionPaymentContract(TradePaymentContractMode contract) =>
         contract == TradePaymentContractMode.LaborStandard
-            ? "Labor + material-value bonus"
+            ? "Craft labor and material reimbursement"
             : "Agreed payment terms";
 
     private static string FormatCommissionLocation(TradeOrderSourceSnapshot source)

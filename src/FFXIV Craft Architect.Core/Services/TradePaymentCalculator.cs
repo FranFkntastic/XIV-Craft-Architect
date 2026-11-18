@@ -41,27 +41,15 @@ public sealed class TradePaymentCalculator
                 material.IsOnHand)
             .Sum(material => material.UnitCost * material.Quantity));
 
-        var legacy = BuildLegacy(
-            policy,
-            materialReimbursementTotal,
-            estimatedProcurementTotal,
-            materialQuoteAvailable,
-            materialQuoteUnavailableReason);
         var labor = BuildLaborStandard(
             policy,
             laborInputs,
             materialReimbursementTotal,
-            estimatedProcurementTotal,
             materialQuoteAvailable,
             materialQuoteUnavailableReason);
-        var active = policy.ActiveContract == TradePaymentContractMode.LaborStandard
-            ? labor
-            : legacy;
-        var includeLaborWarnings = policy.ActiveContract == TradePaymentContractMode.LaborStandard;
         var warnings = (request.Warnings ?? [])
             .Concat(materials.SelectMany(material => material.Warnings ?? []))
-            .Concat(legacy.Warnings)
-            .Concat(includeLaborWarnings ? labor.Warnings : [])
+            .Concat(labor.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
@@ -72,10 +60,8 @@ public sealed class TradePaymentCalculator
             estimatedProcurementTotal,
             materialReimbursementTotal,
             providedMaterialTotal,
-            legacy,
             labor,
-            active,
-            active.IsAvailable ? active.Total : 0m,
+            labor.IsAvailable ? labor.Total : 0m,
             warnings,
             onHandMaterialValueTotal);
     }
@@ -85,12 +71,6 @@ public sealed class TradePaymentCalculator
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
         TradePaymentPolicy policy)
     {
-        if (policy.MaterialValueBonusPercent is < 0 or > 100 ||
-            policy.LegacyCommissionPercent is < 0 or > 100)
-        {
-            throw new ArgumentOutOfRangeException(nameof(policy), "Material value bonus percent must be between 0 and 100.");
-        }
-
         if (policy.LaborGilPerSynth <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(policy), "Labor gil per synth must be greater than zero.");
@@ -107,42 +87,10 @@ public sealed class TradePaymentCalculator
         }
     }
 
-    private static TradePaymentContractBreakdown BuildLegacy(
-        TradePaymentPolicy policy,
-        decimal materialReimbursementTotal,
-        decimal estimatedProcurementTotal,
-        bool materialQuoteAvailable,
-        string materialQuoteUnavailableReason)
-    {
-        if (!materialQuoteAvailable)
-        {
-            return UnavailableContract(
-                TradePaymentContractMode.LegacyCommission,
-                materialQuoteUnavailableReason);
-        }
-
-        var percent = policy.LegacyCommissionPercent ?? policy.MaterialValueBonusPercent;
-        var commission = MaterialValueBonus(estimatedProcurementTotal, percent);
-
-        return new TradePaymentContractBreakdown(
-            TradePaymentContractMode.LegacyCommission,
-            IsAvailable: true,
-            materialReimbursementTotal,
-            percent,
-            commission,
-            CraftLaborTotal: 0m,
-            CraftSynthCount: 0,
-            GilPerSynth: 0m,
-            materialReimbursementTotal + commission,
-            CraftLaborLines: [],
-            Warnings: []);
-    }
-
     private static TradePaymentContractBreakdown BuildLaborStandard(
         TradePaymentPolicy policy,
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
         decimal materialReimbursementTotal,
-        decimal estimatedProcurementTotal,
         bool materialQuoteAvailable,
         string materialQuoteUnavailableReason)
     {
@@ -177,7 +125,6 @@ public sealed class TradePaymentCalculator
             .ToArray();
         var craftLaborTotal = RoundGil(lines.Sum(line => line.LaborTotal));
         var synthCount = lines.Sum(line => line.CraftCount);
-        var materialBonus = MaterialValueBonus(estimatedProcurementTotal, policy.MaterialValueBonusPercent);
         var warnings = lines
             .SelectMany(line => line.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -189,12 +136,10 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: true,
             materialReimbursementTotal,
-            policy.MaterialValueBonusPercent,
-            materialBonus,
             craftLaborTotal,
             synthCount,
             gilPerSynth,
-            materialReimbursementTotal + materialBonus + craftLaborTotal,
+            materialReimbursementTotal + craftLaborTotal,
             lines,
             warnings);
     }
@@ -205,8 +150,6 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: false,
             materialReimbursementTotal,
-            CommissionPercent: 0m,
-            CommissionAmount: 0m,
             CraftLaborTotal: 0m,
             CraftSynthCount: 0,
             GilPerSynth: 0m,
@@ -223,8 +166,6 @@ public sealed class TradePaymentCalculator
             contract,
             IsAvailable: false,
             MaterialReimbursementTotal: 0m,
-            CommissionPercent: 0m,
-            CommissionAmount: 0m,
             CraftLaborTotal: 0m,
             CraftSynthCount: 0,
             GilPerSynth: 0m,
@@ -259,9 +200,6 @@ public sealed class TradePaymentCalculator
             MaterialReimbursement = cash + allowance
         };
     }
-
-    public static decimal MaterialValueBonus(decimal estimatedProcurementTotal, decimal percent) =>
-        RoundGil(RoundGil(estimatedProcurementTotal) * percent / 100m);
 
     private static decimal RoundGil(decimal value)
     {

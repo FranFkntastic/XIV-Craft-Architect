@@ -364,7 +364,7 @@ public static class TradeCompanyCommissionMigrationService
             CompanyCommissionActorKind.Migration,
             "Hosted migration");
         var brief = publishedBrief?.Brief;
-        var terms = CreateTerms(copy, brief, migrationActor, migratedAtUtc, companyPaymentPolicy);
+        var terms = CreateTerms(copy, brief, migrationActor, migratedAtUtc, companyPaymentPolicy, preserveAgreement: publishedBrief != null);
         var outputs = terms.Outputs;
         var lifecycleProvesWorkBegan = copy.Status is
             TradeOrderStatus.InProgress or
@@ -499,7 +499,8 @@ public static class TradeCompanyCommissionMigrationService
         CommissionBriefDocument? brief,
         CompanyCommissionActor actor,
         DateTime createdAtUtc,
-        TradePaymentPolicy? companyPaymentPolicy)
+        TradePaymentPolicy? companyPaymentPolicy,
+        bool preserveAgreement = false)
     {
         var outputs = brief?.Outputs.Count > 0
             ? brief.Outputs.Select((output, index) => new CompanyCommissionOutputTerm(
@@ -559,7 +560,7 @@ public static class TradeCompanyCommissionMigrationService
                     material.UnitCost,
                     material.TotalCost)))
                 .ToArray();
-        var payment = brief?.Payment;
+        var payment = preserveAgreement ? brief?.Payment : brief?.Payment.ForNewWork();
         var authoringPolicy = brief == null
             ? order.PaymentPolicyOverride ?? companyPaymentPolicy ??
                 throw new InvalidOperationException(
@@ -607,15 +608,14 @@ public static class TradeCompanyCommissionMigrationService
             Materials = materials,
             Payment = new CompanyCommissionPaymentTerms(
                 payment?.Schedule ?? order.PaymentSchedule,
-                payment?.ContractLabel ?? "Labor + material-value bonus",
+                payment?.ContractLabel ?? "Craft labor and material reimbursement",
                 payment?.MaterialReimbursement ?? authoringPayment?.MaterialReimbursementTotal ?? 0,
-                payment?.MaterialBonus ?? authoringPayment?.CommissionAmount ?? 0,
+                payment?.HistoricalAmount ?? 0,
                 payment?.CraftLabor ?? authoringPayment?.CraftLaborTotal ?? 0,
                 payment?.Total ?? authoringPayment?.Total ?? 0,
                 CustomTerms: payment?.CustomTerms ?? order.CustomPaymentTerms,
                 CraftSynthCount: payment?.CraftSynthCount ?? authoringPayment?.CraftSynthCount ?? 0,
-                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0,
-                MaterialAdjustmentPercent: payment?.MaterialAdjustmentPercent ?? authoringPayment?.CommissionPercent),
+                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0),
             DeliveryInstructions = brief?.DeliveryInstructions ?? string.Empty,
             PricingEvidence = new CompanyCommissionPricingEvidence(
                 evidence?.CostBasis ?? order.SourceSnapshot.CostBasis?.ToString() ?? "Unspecified",
@@ -719,9 +719,7 @@ public static class TradeCompanyCommissionMigrationService
             string.Equals(brief.DeliveryInstructions, terms.DeliveryInstructions, StringComparison.Ordinal) &&
             string.Equals(payment.ContractLabel, terms.Payment.ContractLabel, StringComparison.Ordinal) &&
             payment.MaterialReimbursement == terms.Payment.MaterialReimbursement &&
-            payment.MaterialBonus == terms.Payment.MaterialAdjustment &&
-            (terms.Payment.MaterialAdjustmentPercent == null ||
-             payment.MaterialAdjustmentPercent == terms.Payment.MaterialAdjustmentPercent) &&
+            payment.HistoricalAmount == terms.Payment.HistoricalAmount &&
             payment.CraftLabor == terms.Payment.CraftLabor &&
             payment.Total == terms.Payment.Total &&
             payment.CraftSynthCount == terms.Payment.CraftSynthCount &&

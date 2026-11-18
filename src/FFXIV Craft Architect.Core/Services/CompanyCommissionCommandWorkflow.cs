@@ -139,6 +139,7 @@ public static class CompanyCommissionCommandWorkflow
             throw new InvalidOperationException(
                 "Draft edits require a canonical work package with at least one output.");
         }
+        command = command with { Terms = command.Terms with { Payment = command.Terms.Payment.ForNewWork() } };
         ValidateTerms(
             command.Terms,
             commission.CompanyId,
@@ -210,6 +211,7 @@ public static class CompanyCommissionCommandWorkflow
             commission.CurrentTerms.PricingEvidence.MaterialQuote?.IsLocked != true,
             "Terms cannot be repriced after work clearance locks the material quote.");
         RequireReason(command.Reason);
+        command = command with { Terms = command.Terms with { Payment = command.Terms.Payment.ForNewWork() } };
         ValidateTerms(command.Terms, commission.CompanyId, command.WorkPackage);
         Require(
             command.Terms.Version == checked(commission.CurrentTermsVersion + 1),
@@ -1768,17 +1770,16 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             terms.Payment.Total >= 0 &&
             terms.Payment.MaterialReimbursement >= 0 &&
-            terms.Payment.MaterialAdjustment >= 0 &&
-            terms.Payment.MaterialAdjustmentPercent is not (< 0 or > 100) &&
+            terms.Payment.HistoricalAmount >= 0 &&
             terms.Payment.CraftLabor >= 0 &&
             terms.Payment.CraftSynthCount >= 0 &&
             terms.Payment.GilPerSynth >= 0,
             "Payment amounts and labor basis cannot be negative.");
         Require(
             terms.Payment.MaterialReimbursement +
-                terms.Payment.MaterialAdjustment +
+                terms.Payment.HistoricalAmount +
                 terms.Payment.CraftLabor == terms.Payment.Total,
-            "The payment total must equal its material, adjustment, and labor components.");
+            "The payment total must equal its recorded components.");
         Require(
             terms.Payment.Schedule != CompanyCommissionPaymentSchedule.Custom ||
                 !string.IsNullOrWhiteSpace(terms.Payment.CustomTerms),

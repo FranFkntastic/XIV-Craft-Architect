@@ -17,15 +17,22 @@ public sealed record CommissionBriefMaterial(
 public sealed record CommissionBriefPayment(
     string ContractLabel,
     decimal MaterialReimbursement,
-    decimal MaterialBonus,
+    [property: System.Text.Json.Serialization.JsonPropertyName("materialBonus")]
+    decimal HistoricalAmount,
     decimal CraftLabor,
     decimal Total,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    decimal? MaterialAdjustmentPercent = null,
     int CraftSynthCount = 0,
     decimal GilPerSynth = 0,
     CompanyCommissionPaymentSchedule Schedule = CompanyCommissionPaymentSchedule.Advance,
-    string? CustomTerms = null);
+    string? CustomTerms = null)
+{
+    public CommissionBriefPayment ForNewWork() => this with
+    {
+        ContractLabel = Services.CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(ContractLabel),
+        HistoricalAmount = 0,
+        Total = HistoricalAmount == 0 ? Total : MaterialReimbursement + CraftLabor
+    };
+}
 
 public sealed record CommissionBriefEvidence(
     string CostBasis,

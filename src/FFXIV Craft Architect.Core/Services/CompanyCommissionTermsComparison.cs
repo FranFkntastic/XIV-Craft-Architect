@@ -50,10 +50,14 @@ public static class CompanyCommissionTermsComparison
             x => x.Name, x => $"{Number(x.Quantity)} × {(x.RequiresHq ? "HQ" : "NQ")} · {(x.Responsibility == CommissionMaterialResponsibility.Provided ? "Company supplies" : "Crafter supplies")}", "Material", Add);
         var a = before.Payment;
         var b = after.Payment;
-        var payment = new CommissionPaymentChange[] {
+        CommissionPaymentChange[] payment = [
             new("Reimbursement", a.MaterialReimbursement, b.MaterialReimbursement),
             new("Craft labor", a.CraftLabor, b.CraftLabor),
-            new("Adjustment", a.MaterialAdjustment, b.MaterialAdjustment), new("Total", a.Total, b.Total) };
+            .. (a.HistoricalAmount != 0 || b.HistoricalAmount != 0
+                ? new[] { new CommissionPaymentChange("Historical payment", a.HistoricalAmount, b.HistoricalAmount) }
+                : []),
+            new("Total", a.Total, b.Total)
+        ];
         foreach (var p in payment.Where(p => p.Delta != 0))
         {
             Add(p.Component, Money(p.Before), Money(p.After));
@@ -61,7 +65,7 @@ public static class CompanyCommissionTermsComparison
 
         Add("Payment timing", ScheduleLabel(a.Schedule), ScheduleLabel(b.Schedule));
         Add("Custom payment terms", a.CustomTerms, b.CustomTerms);
-        Add("Payment contract", a.ContractLabel, b.ContractLabel);
+        Add("Payment contract", CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(a.ContractLabel), CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(b.ContractLabel));
         Add("Labor calculation", $"{a.CraftSynthCount} × {Money(a.GilPerSynth)}", $"{b.CraftSynthCount} × {Money(b.GilPerSynth)}");
         Add("Delivery instructions", before.DeliveryInstructions, after.DeliveryInstructions);
         Add("Contact instructions", before.ContactInstructions, after.ContactInstructions);

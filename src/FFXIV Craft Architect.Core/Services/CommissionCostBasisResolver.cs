@@ -115,7 +115,7 @@ public sealed class CommissionCostBasisResolver
                 item.RequiresHq,
                 CommissionMaterialResponsibility.Crafter,
                 TradeOrderWorkflow.OnHandEvidenceSource,
-                $"Existing stock is not reimbursed. Material value uses {reference.SourceDescription}: " +
+                $"Existing stock is not reimbursed. Reference value uses {reference.SourceDescription}: " +
                 $"{reference.UnitCost:N0}g each.",
                 reference.EvidenceTimestampUtc,
                 Warnings: Array.Empty<string>());

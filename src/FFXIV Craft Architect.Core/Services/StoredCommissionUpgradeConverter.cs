@@ -17,7 +17,17 @@ public sealed class StoredCommissionUpgradeConverter : JsonConverter<TradeCompan
     {
         var stored = JsonNode.Parse(ref reader);
         TradeCompanyCommissionMigrationService.UpgradeStoredClaimIdentity(stored);
-        return stored.Deserialize<TradeCompanyCommission>(options);
+        var commission = stored.Deserialize<TradeCompanyCommission>(options);
+        if (commission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft)
+        {
+            return commission;
+        }
+        return commission with
+        {
+            TermsVersions = commission.TermsVersions.Select(terms => terms.Version == commission.CurrentTermsVersion
+                ? terms with { Payment = terms.Payment.ForNewWork() }
+                : terms).ToArray()
+        };
     }
 
     public override void Write(

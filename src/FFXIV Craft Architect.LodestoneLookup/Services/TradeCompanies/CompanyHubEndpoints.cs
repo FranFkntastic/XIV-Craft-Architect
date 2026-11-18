@@ -973,7 +973,7 @@ public sealed partial class CompanyHubService(
             }).ToArray(),
             new CompanyHubPaymentResponse(
                 terms.Payment.Schedule.ToString().ToLowerInvariant(),
-                ClampText(terms.Payment.ContractLabel, 240, "Commission"),
+                ClampText(CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(terms.Payment.ContractLabel), 240, "Commission"),
                 terms.Payment.Total),
             commission.SettlementState.ToString().ToLowerInvariant(),
             order.Status.ToString().ToLowerInvariant(),
