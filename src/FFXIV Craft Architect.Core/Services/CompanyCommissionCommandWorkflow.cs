@@ -1823,7 +1823,7 @@ public static class CompanyCommissionCommandWorkflow
         TradeOrderSourceSnapshot snapshot,
         CompanyCommissionPricingEvidence evidence)
     {
-        snapshot.MaterialQuote = evidence.MaterialQuote;
+        snapshot.MaterialQuote = evidence.MaterialQuote == null ? null : snapshot.MaterialQuote ?? evidence.MaterialQuote;
         snapshot.MaterialQuoteFailureReason = evidence.MaterialQuote == null
             ? evidence.MaterialQuoteFailureReason
             : null;

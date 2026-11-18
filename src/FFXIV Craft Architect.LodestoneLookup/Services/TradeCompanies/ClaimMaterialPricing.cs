@@ -86,18 +86,14 @@ public sealed class ClaimMaterialPricing(
         {
             throw new InvalidOperationException("Refreshed demand does not exactly match the published materials.");
         }
-        var (cash, allowance) = TradePaymentCalculator.CrafterShare(quote, crafter);
-        quote = quote with
+        var fullQuote = quote with
         {
             CompanyProfileId = old.CompanyProfileId,
             SourcePlanId = id,
             PlanSessionVersion = old.PlanSessionVersion,
-            MarketAnalysisVersion = checked(old.MarketAnalysisVersion + 1),
-            Lines = quote.Lines.Where(line => crafter.Contains((line.ItemId, line.RequiresHq))).ToArray(),
-            RouteCashRequired = cash,
-            SafetyAllowance = allowance,
-            MaterialReimbursement = cash + allowance
+            MarketAnalysisVersion = checked(old.MarketAnalysisVersion + 1)
         };
+        quote = TradePaymentCalculator.ProjectCrafterQuote(fullQuote, crafter);
         var materials = terms.Materials.Select(m =>
         {
             if (m.Responsibility == CommissionMaterialResponsibility.Provided)
@@ -119,7 +115,7 @@ public sealed class ClaimMaterialPricing(
             return new TradeOrderMaterialSnapshot(m.ItemId, m.Name, m.Quantity, m.RequiresHq, m.UnitCost, m.TotalCost,
                 line.EvidenceSource, line.UnitCostExplanation, line.EvidenceTimestampUtc, line.Warnings);
         }).ToArray();
-        snapshot.MaterialQuote = quote;
+        snapshot.MaterialQuote = fullQuote;
         snapshot.MarketAnalysisVersion = quote.MarketAnalysisVersion;
         snapshot.ImportedAtUtc = now;
         var bonus = TradePaymentCalculator.MaterialValueBonus(materials.Sum(m => m.UnitCost * m.Quantity), rate);

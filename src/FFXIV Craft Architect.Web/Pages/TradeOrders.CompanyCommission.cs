@@ -221,7 +221,7 @@ public partial class TradeOrders
                     terms.Outputs.Sum(output => output.RequiredQuantity),
                     terms.Payment.CraftSynthCount)
             ];
-        copy.SourceSnapshot.MaterialQuote = terms.PricingEvidence.MaterialQuote;
+        copy.SourceSnapshot.MaterialQuote = terms.PricingEvidence.MaterialQuote == null ? null : copy.SourceSnapshot.MaterialQuote ?? terms.PricingEvidence.MaterialQuote;
         copy.SourceSnapshot.MaterialQuoteFailureReason =
             terms.PricingEvidence.MaterialQuoteFailureReason;
         copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];

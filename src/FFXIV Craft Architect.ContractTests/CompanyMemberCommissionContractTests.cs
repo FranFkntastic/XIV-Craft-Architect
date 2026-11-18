@@ -52,6 +52,65 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public void MixedDraftCanBePublishedAndResponsibilityReversedInARevision()
+    {
+        var company = Guid.NewGuid();
+        var order = MemberCommissionFixture.CreateOrder(company);
+        var commission = order.CompanyCommission!;
+        var now = commission.CreatedAtUtc;
+        var actor = commission.CurrentTerms.CreatedBy;
+        order.CompanyCommission = commission with
+        {
+            PublicMetadata = commission.PublicMetadata with { ViewState = CompanyCommissionPublicViewState.Draft }
+        };
+        var policy = new TradeMaterialPricingPolicy();
+        order.CraftPlanId = "mixed";
+        order.SourceSnapshot = new()
+        {
+            RootItems = [new(100, "Output", 2, false, 0)],
+            PlanSessionVersion = 1,
+            MarketAnalysisVersion = 1,
+            MaterialQuote = new()
+            {
+                CompanyProfileId = company, SourcePlanId = "mixed", PlanSessionVersion = 1, MarketAnalysisVersion = 1,
+                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(policy), AppliedPolicy = policy,
+                RouteSelectionKey = "full-route", QuotedAtUtc = now, ExpiresAtUtc = now.AddHours(1),
+                RouteCashRequired = 300, SafetyAllowance = 30, MaterialReimbursement = 330, WorldStops = 1,
+                Lines = [new(1, "A", 1, false, 100, ["Siren"], now), new(2, "B", 1, false, 200, ["Siren"], now)]
+            }
+        };
+        var brief = new CommissionBriefDocument
+        {
+            Outputs = [new(100, "Output", 2, false)],
+            CrafterMaterials = [new(1, "A", 1, false, 100, 100)],
+            CompanyMaterials = [new(2, "B", 1, false, 200, 200)],
+            Payment = new("Commission", 110, 0, 0, 110),
+            Evidence = new("ProcurementRoute", "DC", "Aether", now)
+        };
+        CompanyCommissionDraftWorkPackage Package() => new([new(100, "Output", 2, false, 0)],
+            order.SourceSnapshot, order.CraftPlanId, null, null, order.CraftPlanLinkKind);
+        CompanyCommissionCommandContext Context() => new(new(company), order.Id, new(1), new(1), Guid.NewGuid(), 1);
+        var draft = TradeCompanyCommissionMigrationService.CreateDraftTerms(order, brief, commission.CurrentTerms, now);
+        order = CompanyCommissionCommandWorkflow.Apply(order, new UpdateCompanyCommissionDraftCommand(Context(), draft, Package()), actor, now).UpdatedOrder;
+        order = TradeCompanyCommissionMigrationService.BindPublishedBrief(order, new()
+        {
+            Ownership = order.CommissionPublication!.Ownership, PublicId = order.CommissionPublication.PublicId,
+            Version = 1, PublishedAtUtc = now, Brief = brief
+        }, now);
+        var published = order.CompanyCommission!.CurrentTerms;
+        Assert.Equal(1, Assert.Single(published.PricingEvidence.MaterialQuote!.Lines).ItemId);
+        Assert.Equal(110, published.Payment.MaterialReimbursement);
+        (brief.CrafterMaterials, brief.CompanyMaterials) = (brief.CompanyMaterials, brief.CrafterMaterials);
+        brief.Payment = brief.Payment with { MaterialReimbursement = 220, Total = 220 };
+        var revised = TradeCompanyCommissionMigrationService.CreateTermsRevision(order, brief, 2, "Swap materials", now);
+        order = CompanyCommissionCommandWorkflow.Apply(order, new AmendCompanyCommissionTermsCommand(Context(), revised, "Swap materials", Package()), actor, now).UpdatedOrder;
+        var final = order.CompanyCommission!.CurrentTerms;
+        Assert.Equal(2, Assert.Single(final.PricingEvidence.MaterialQuote!.Lines).ItemId);
+        Assert.Equal(220, final.PricingEvidence.MaterialQuote.MaterialReimbursement);
+        Assert.Equal(220, final.Payment.Total);
+    }
+
+    [Fact]
     public void StoredPaymentModeControlsLegacyPercentConversion()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
