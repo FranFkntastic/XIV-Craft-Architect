@@ -241,6 +241,25 @@ public sealed class TradePaymentCalculator
         return (cash, quote is { RouteCashRequired: > 0 } ? RoundGil(quote.SafetyAllowance * cash / quote.RouteCashRequired) : 0m);
     }
 
+    public static TradeMaterialQuote ProjectCrafterQuote(TradeMaterialQuote quote,
+        IReadOnlySet<(int ItemId, bool RequiresHq)> crafter)
+    {
+        if (quote.Lines.Any(line => line.CashRequired < 0 || line.RequiredQuantity <= 0) ||
+            quote.SafetyAllowance < 0 || quote.RouteCashRequired != quote.Lines.Sum(line => line.CashRequired) ||
+            quote.MaterialReimbursement != quote.RouteCashRequired + quote.SafetyAllowance)
+        {
+            throw new InvalidOperationException("The source quote does not reconcile to its purchase lines.");
+        }
+        var (cash, allowance) = CrafterShare(quote, crafter);
+        return quote with
+        {
+            Lines = quote.Lines.Where(line => crafter.Contains((line.ItemId, line.RequiresHq))).ToArray(),
+            RouteCashRequired = cash,
+            SafetyAllowance = allowance,
+            MaterialReimbursement = cash + allowance
+        };
+    }
+
     public static decimal MaterialValueBonus(decimal estimatedProcurementTotal, decimal percent) =>
         RoundGil(RoundGil(estimatedProcurementTotal) * percent / 100m);
 

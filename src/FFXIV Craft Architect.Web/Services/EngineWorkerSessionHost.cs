@@ -1668,7 +1668,7 @@ public static partial class ManagedHost
             var policy = TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy);
             var quoteResult = await new TradeMaterialQuoteService().PriceAsync(
                 new MarketShoppingService(SessionMarketCache), evidence.ShoppingPlans ?? [],
-                activeItems, selectedSources, policy, DateTime.UtcNow);
+                activeItems, selectedSources, policy, DateTime.UtcNow, materialLines);
             if (quoteResult.IsComplete)
             {
                 materialQuote = quoteResult.Quote;
