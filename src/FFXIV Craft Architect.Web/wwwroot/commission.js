@@ -284,6 +284,11 @@ async function load() {
         state.access);
     state.projection = loaded.projection;
     state.capabilities.participantCapability = loaded.participantCapability;
+    if (loaded.discardSavedAccess) {
+        console.warn("[Commission] saved_participant_revoked: showing the public commission.");
+        state.store.discard();
+        state.access = null;
+    }
     if (state.projection.kind !== "participant" &&
         state.access?.pending?.kind === "claim" &&
         state.access.pending.payload.termsVersion < state.projection.public.terms.version) {
@@ -1015,6 +1020,17 @@ function canUseActiveParticipantMutations(projection) {
         brief.status !== "Canceled" &&
         brief.status !== "ResolutionRequired" &&
         brief.status !== "Completed";
+}
+
+// Final-payment settlement happens after delivery is accepted (status Completed), when
+// ordinary participant changes are closed; the host requires exactly that state.
+const SETTLEMENT_COMMANDS = new Set(["confirm-settlement-received", "retract-settlement"]);
+
+function canUseSettlementCommands(projection) {
+    const brief = projection.public;
+    return projection.kind === "participant" &&
+        brief.viewState === "Published" &&
+        brief.status === "Completed";
 }
 
 function canReleaseBeforeWork(projection) {
@@ -2531,8 +2547,10 @@ async function submitComment(event) {
 }
 
 async function runParticipantCommand(command, payload, successMessage) {
-    if (!canUseActiveParticipantMutations(state.projection) ||
-        !state.access?.participantSecret) {
+    const allowed = SETTLEMENT_COMMANDS.has(command)
+        ? canUseSettlementCommands(state.projection)
+        : canUseActiveParticipantMutations(state.projection);
+    if (!allowed || !state.access?.participantSecret) {
         showNotice(
             "Participant action unavailable",
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
