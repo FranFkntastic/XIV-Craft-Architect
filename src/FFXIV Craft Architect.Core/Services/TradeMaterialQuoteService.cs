@@ -12,6 +12,27 @@ public sealed record TradeMaterialQuoteResult(
 
 public sealed class TradeMaterialQuoteService
 {
+    public async Task<TradeMaterialQuoteResult> PriceAsync(
+        MarketShoppingService shopping,
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        IReadOnlyList<MaterialAggregate> demand,
+        IReadOnlyDictionary<(int ItemId, bool RequiresHq), AcquisitionSource> sources,
+        TradeMaterialPricingPolicy policy,
+        DateTime now,
+        CancellationToken ct = default)
+    {
+        var input = PrepareOptimizationInput(plans, demand, sources, policy, now);
+        var optimization = await shopping.OptimizeProcurementRouteWithDecisionAsync(
+            input, new MarketAnalysisConfig
+            {
+                MaxWorldsPerItem = policy.MaximumWorldStops,
+                EnableSplitWorld = policy.AllowSplitPurchases,
+                TravelTolerance = 11
+            }, includeSplitPurchases: policy.AllowSplitPurchases,
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
+        return Build(optimization, demand, policy, now);
+    }
+
     public static string DescribeNoExecutableRoute(
         TradeMaterialPricingPolicy? requestedPolicy)
     {

@@ -1666,31 +1666,9 @@ public static partial class ManagedHost
         else
         {
             var policy = TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy);
-            var config = new MarketAnalysisConfig
-            {
-                MaxWorldsPerItem = policy.MaximumWorldStops,
-                EnableSplitWorld = policy.AllowSplitPurchases,
-                TravelTolerance = 11
-            };
-            var quoteService = new TradeMaterialQuoteService();
-            var quotedAtUtc = DateTime.UtcNow;
-            var optimizationInput = quoteService.PrepareOptimizationInput(
-                evidence.ShoppingPlans ?? [],
-                activeItems,
-                selectedSources,
-                policy,
-                quotedAtUtc);
-            var optimization = await new MarketShoppingService(SessionMarketCache)
-                .OptimizeProcurementRouteWithDecisionAsync(
-                    optimizationInput,
-                    config,
-                    includeSplitPurchases: policy.AllowSplitPurchases,
-                    executionOptions: MarketAnalysisExecutionOptions.Synchronous);
-            var quoteResult = quoteService.Build(
-                optimization,
-                activeItems,
-                policy,
-                quotedAtUtc);
+            var quoteResult = await new TradeMaterialQuoteService().PriceAsync(
+                new MarketShoppingService(SessionMarketCache), evidence.ShoppingPlans ?? [],
+                activeItems, selectedSources, policy, DateTime.UtcNow);
             if (quoteResult.IsComplete)
             {
                 materialQuote = quoteResult.Quote;

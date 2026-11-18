@@ -105,12 +105,7 @@ public sealed class CorePlanSessionLoadService
         {
             try
             {
-                plan = JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
-                if (plan is not null)
-                {
-                    StoredPlanRuntimeState.Apply(plan, storedPlan.PlanStateJson);
-                }
-                RestoreParentLinks(plan);
+                plan = RestorePlan(storedPlan.PlanJson, storedPlan.PlanStateJson);
             }
             catch (Exception ex)
             {
@@ -152,6 +147,17 @@ public sealed class CorePlanSessionLoadService
             marketRestore.RecipeBasis,
             CanLoad: true,
             warning);
+    }
+
+    public static CraftingPlan? RestorePlan(string json, string? runtimeState, bool requireComplete = false)
+    {
+        var plan = JsonSerializer.Deserialize<CraftingPlan>(json);
+        if (plan != null)
+        {
+            StoredPlanRuntimeState.Apply(plan, runtimeState, requireComplete);
+            RestoreParentLinks(plan);
+        }
+        return plan;
     }
 
     private static string? AppendWarning(string? existingWarning, string? warning)

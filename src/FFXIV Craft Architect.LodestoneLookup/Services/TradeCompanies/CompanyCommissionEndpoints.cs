@@ -1159,6 +1159,7 @@ public static class CompanyCommissionEndpoints
         if (!mutation.Success)
         {
             if (mutation.Status == CompanyCommissionMutationStatus.Conflict &&
+                mutation.ErrorCode != "claim_price_changed" &&
                 (await commissions.LoadPublishedAsync(
                     ownership,
                     publicId,
@@ -1897,6 +1898,8 @@ public static class CompanyCommissionEndpoints
     private static IResult ToCommandError(CompanyCommissionMutationResult mutation) =>
         mutation.Status switch
         {
+            CompanyCommissionMutationStatus.Conflict when mutation.ErrorCode == "claim_price_changed" =>
+                ClaimPriceChanged(mutation),
             CompanyCommissionMutationStatus.Conflict => Results.Conflict(new
             {
                 error = mutation.ErrorCode,
@@ -1914,6 +1917,24 @@ public static class CompanyCommissionEndpoints
                 message = mutation.ErrorMessage
             })
         };
+
+    internal static IResult ClaimPriceChanged(CompanyCommissionMutationResult mutation)
+    {
+        var commission = mutation.Order!.CompanyCommission!;
+        var terms = commission.CurrentTerms;
+        var previous = commission.TermsVersions.Single(t => t.Version == terms.Version - 1).Payment.Total;
+        return Results.Conflict(new
+        {
+            error = mutation.ErrorCode,
+            code = mutation.ErrorCode,
+            message = mutation.ErrorMessage,
+            previousPayment = previous,
+            currentPayment = terms.Payment.Total,
+            changePercent = previous == 0 ? (decimal?)null : (terms.Payment.Total - previous) / previous * 100m,
+            termsVersion = terms.Version,
+            projectionRevision = mutation.Activity!.CommissionRevision
+        });
+    }
 
     private static TradeCommissionOwnerCommandResponse ToOwnerResponse(
         CompanyCommissionMutationResult mutation,

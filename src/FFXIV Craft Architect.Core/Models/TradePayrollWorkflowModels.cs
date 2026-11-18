@@ -126,19 +126,9 @@ public sealed record TradeCommissionPaymentSummary(
         var requiresMaterialQuote = materials.Any(material =>
             material.Responsibility == CommissionMaterialResponsibility.Crafter &&
             !material.IsOnHand);
-        var quotedCrafterCash = quote?.Lines
-            .Where(line => materials.Any(material =>
-                material.ItemId == line.ItemId &&
-                material.RequiresHq == line.RequiresHq &&
-                material.Responsibility == CommissionMaterialResponsibility.Crafter &&
-                !material.IsOnHand))
-            .Sum(line => line.CashRequired) ?? 0m;
-        var appliedAllowance = quote is { RouteCashRequired: > 0 }
-            ? Math.Round(
-                quote.SafetyAllowance * quotedCrafterCash / quote.RouteCashRequired,
-                0,
-                MidpointRounding.AwayFromZero)
-            : 0m;
+        var (quotedCrafterCash, appliedAllowance) = TradePaymentCalculator.CrafterShare(quote,
+            materials.Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter && !m.IsOnHand)
+                .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet());
         var comparison = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             paymentMaterials,
             laborInputs,

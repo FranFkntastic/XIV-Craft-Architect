@@ -356,6 +356,7 @@ public static class CompanyCommissionCommandWorkflow
         updated.AssignedCrafterId = assignedCrafterId;
         var claimed = commission with
         {
+            ClaimPriceReview = null,
             ActiveClaim = new CompanyCommissionClaim(
                 claimId,
                 commission.CurrentTermsVersion,
@@ -1761,6 +1762,7 @@ public static class CompanyCommissionCommandWorkflow
             terms.Payment.Total >= 0 &&
             terms.Payment.MaterialReimbursement >= 0 &&
             terms.Payment.MaterialAdjustment >= 0 &&
+            terms.Payment.MaterialAdjustmentPercent is not (< 0 or > 100) &&
             terms.Payment.CraftLabor >= 0 &&
             terms.Payment.CraftSynthCount >= 0 &&
             terms.Payment.GilPerSynth >= 0,

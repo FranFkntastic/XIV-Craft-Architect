@@ -914,7 +914,7 @@ public partial class TradeOrders
                 terms.Payment.MaterialAdjustment,
                 terms.Payment.CraftLabor,
                 terms.Payment.Total,
-                MaterialAdjustmentPercent: 0m,
+                MaterialAdjustmentPercent: terms.Payment.MaterialAdjustmentPercent,
                 terms.Payment.CraftSynthCount,
                 terms.Payment.GilPerSynth,
                 terms.Payment.Schedule,

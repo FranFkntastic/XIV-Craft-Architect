@@ -595,7 +595,8 @@ public static class TradeCompanyCommissionMigrationService
                 payment?.Total ?? authoringPayment?.Total ?? 0,
                 CustomTerms: payment?.CustomTerms ?? order.CustomPaymentTerms,
                 CraftSynthCount: payment?.CraftSynthCount ?? authoringPayment?.CraftSynthCount ?? 0,
-                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0),
+                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0,
+                MaterialAdjustmentPercent: payment?.MaterialAdjustmentPercent ?? authoringPayment?.CommissionPercent),
             DeliveryInstructions = brief?.DeliveryInstructions ?? string.Empty,
             PricingEvidence = new CompanyCommissionPricingEvidence(
                 evidence?.CostBasis ?? order.SourceSnapshot.CostBasis?.ToString() ?? "Unspecified",
@@ -696,6 +697,8 @@ public static class TradeCompanyCommissionMigrationService
             string.Equals(payment.ContractLabel, terms.Payment.ContractLabel, StringComparison.Ordinal) &&
             payment.MaterialReimbursement == terms.Payment.MaterialReimbursement &&
             payment.MaterialBonus == terms.Payment.MaterialAdjustment &&
+            (terms.Payment.MaterialAdjustmentPercent == null ||
+             payment.MaterialAdjustmentPercent == terms.Payment.MaterialAdjustmentPercent) &&
             payment.CraftLabor == terms.Payment.CraftLabor &&
             payment.Total == terms.Payment.Total &&
             payment.CraftSynthCount == terms.Payment.CraftSynthCount &&
