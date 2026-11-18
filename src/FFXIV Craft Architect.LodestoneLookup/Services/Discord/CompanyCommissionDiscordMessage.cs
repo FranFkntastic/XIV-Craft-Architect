@@ -337,12 +337,12 @@ public static class CompanyCommissionDiscordMessage
             : payment.CraftLabor > 0
                 ? $"\nLabor: {FormatGil(payment.CraftLabor)}"
                 : string.Empty;
-        var materialBonus = payment.MaterialAdjustment > 0
-            ? $"\nMaterial value bonus: {FormatGil(payment.MaterialAdjustment)}"
+        var historical = payment.HistoricalAmount != 0
+            ? $"\nHistorical payment: {FormatGil(payment.HistoricalAmount)}"
             : string.Empty;
 
         return $"**{FormatGil(payment.Total)} total**\n{timing} | {CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(payment.ContractLabel)}" +
-            $"\nMaterials: {FormatGil(payment.MaterialReimbursement)}{materialBonus}{labor}";
+            $"\nMaterials: {FormatGil(payment.MaterialReimbursement)}{historical}{labor}";
     }
 
     private static string MaterialsSummary(

@@ -629,8 +629,7 @@ public sealed partial class ProfileHostedTradeCompanyService(
         bool updateCommissionPricingScope = false,
         IReadOnlyList<TradeMarginItem>? marginItems = null,
         bool updateMarginItems = false,
-        bool? freelancerOpenCommissions = null,
-        bool preserveMaterialValueBonus = false)
+        bool? freelancerOpenCommissions = null)
     {
         var snapshot = await LoadCompanyProfileSnapshotAsync(access, cancellationToken);
         if (snapshot == null)
@@ -653,11 +652,7 @@ public sealed partial class ProfileHostedTradeCompanyService(
         updated.Name = name.Trim();
         updated.Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
         updated.CommissionContact = string.IsNullOrWhiteSpace(commissionContact) ? null : commissionContact.Trim();
-        var storedPolicy = TradePaymentPolicyNormalizer.Normalize(updated.PaymentPolicy);
-        updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(
-            preserveMaterialValueBonus && paymentPolicy != null
-                ? paymentPolicy with { MaterialValueBonusPercent = storedPolicy.MaterialValueBonusPercent, LegacyCommissionPercent = null }
-                : paymentPolicy ?? storedPolicy);
+        updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(paymentPolicy ?? updated.PaymentPolicy);
         updated.MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
             materialPricingPolicy ?? updated.MaterialPricingPolicy);
         updated.SchemaVersion = TradeCompanyProfile.CurrentSchemaVersion;

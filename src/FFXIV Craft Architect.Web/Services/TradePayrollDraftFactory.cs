@@ -39,7 +39,7 @@ public sealed class TradePayrollDraftFactory
             source.MaterialLines,
             source.Warnings);
 
-        var payroll = _payrollService.Calculate(source.MaterialLines, CommissionPayoutPolicy.Default);
+        var payroll = _payrollService.Calculate(source.MaterialLines);
         return TradePayrollDraftCreateResult.Available(new TradePayrollDraft(snapshot, payroll));
     }
 }

@@ -654,6 +654,8 @@ public sealed partial class HostedCompanyCommissionService(
         var currentTerms = published.CurrentTerms;
         if (command is ClaimCompanyCommissionCommand { AccountEvidence: { } account } claim &&
             currentTerms.PricingEvidence.MaterialQuote?.IsExpired(now) == true &&
+            // Terms agreed with a retired bonus keep their stored payment; never re-price them.
+            currentTerms.Payment.HistoricalAmount == 0 &&
             !(published.ClaimPriceReview is { } review &&
               review.ProfileId == account.ProfileId && review.TermsVersion == claim.TermsVersion))
         {

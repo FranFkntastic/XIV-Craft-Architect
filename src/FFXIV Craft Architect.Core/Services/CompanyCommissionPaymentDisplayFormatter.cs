@@ -9,7 +9,8 @@ public static class CompanyCommissionPaymentDisplayFormatter
             return "Payment terms";
         }
 
-        return storedLabel.Contains("legacy", StringComparison.OrdinalIgnoreCase)
+        return storedLabel.Contains("legacy", StringComparison.OrdinalIgnoreCase) ||
+               storedLabel.Equals("Labor + material-value bonus", StringComparison.OrdinalIgnoreCase)
             ? "Agreed payment terms"
             : storedLabel.Trim();
     }

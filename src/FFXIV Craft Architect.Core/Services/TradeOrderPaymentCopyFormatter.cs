@@ -45,15 +45,7 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Active basis: {FormatPaymentContract(active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(active.MaterialReimbursementTotal)}");
-        if (active.Contract == TradePaymentContractMode.LaborStandard)
-        {
-            builder.AppendLine($"Material value bonus ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
-            builder.AppendLine($"Craft labor: {active.CraftSynthCount:N0} synths x {active.GilPerSynth:N2} gil = {FormatGil(active.CraftLaborTotal)}");
-        }
-        else
-        {
-            builder.AppendLine($"Legacy material commission ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
-        }
+        builder.AppendLine($"Craft labor: {active.CraftSynthCount:N0} synths x {active.GilPerSynth:N2} gil = {FormatGil(active.CraftLaborTotal)}");
 
         AppendActiveWarnings(builder, summary);
         return builder.ToString();
@@ -82,10 +74,9 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Active basis: {FormatPaymentContract(summary.Active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(summary.MaterialReimbursementTotal)}");
-        if (summary.LaborStandard.IsAvailable)
+        if (summary.Active.IsAvailable)
         {
-            builder.AppendLine($"Material value bonus ({summary.Active.CommissionPercent:N0}%): {FormatGil(summary.Active.CommissionAmount)}");
-            builder.AppendLine($"Craft labor: {summary.LaborStandard.CraftSynthCount:N0} synths x {summary.LaborStandard.GilPerSynth:N2} gil = {FormatGil(summary.LaborStandard.CraftLaborTotal)}");
+            builder.AppendLine($"Craft labor: {summary.Active.CraftSynthCount:N0} synths x {summary.Active.GilPerSynth:N2} gil = {FormatGil(summary.Active.CraftLaborTotal)}");
         }
 
         AppendAllWarnings(builder, summary);
@@ -108,14 +99,17 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine(isDraft ? "Payment status: Draft estimate" : "Payment status: Recorded terms");
         builder.AppendLine($"Payment amount: {FormatGilAllowZero(payment.Total)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(payment.MaterialReimbursement)}");
-        builder.AppendLine($"{(isDraft ? "Draft" : "Agreed")} material adjustment: {FormatGilAllowZero(payment.MaterialAdjustment)}");
+        if (payment.HistoricalAmount != 0)
+        {
+            builder.AppendLine($"Historical payment: {FormatGilAllowZero(payment.HistoricalAmount)}");
+        }
         builder.AppendLine($"Craft labor: {FormatGilAllowZero(payment.CraftLabor)}");
     }
 
     public static string FormatPaymentContract(TradePaymentContractMode mode)
     {
         return mode == TradePaymentContractMode.LaborStandard
-            ? "labor + material-value bonus"
+            ? "Craft labor and material reimbursement"
             : "agreed historical terms";
     }
 

@@ -1256,8 +1256,8 @@ function renderTerms() {
     target.replaceChildren();
     appendTextRow(target, "Payment", formatPaymentSchedule(terms.payment.schedule));
     appendTextRow(target, "Material reimbursement", formatGil(terms.payment.materialReimbursement));
-    if (terms.payment.materialAdjustment > 0) {
-        appendTextRow(target, "Adjustment", formatGil(terms.payment.materialAdjustment));
+    if (terms.payment.historicalAmount > 0) {
+        appendTextRow(target, "Historical payment", formatGil(terms.payment.historicalAmount));
     }
     if (terms.payment.craftLabor > 0) {
         appendTextRow(target, "Craft labor", formatGil(terms.payment.craftLabor));

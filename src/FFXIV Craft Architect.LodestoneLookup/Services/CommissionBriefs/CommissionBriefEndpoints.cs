@@ -47,6 +47,7 @@ public static class CommissionBriefEndpoints
                     });
                 }
 
+                request.Brief.Payment = request.Brief.Payment.ForNewWork();
                 var validationError = CommissionBriefValidator.Validate(request.Brief);
                 if (validationError != null)
                 {
@@ -413,6 +414,7 @@ public static class CommissionBriefEndpoints
 
                 if (!alreadyBound)
                 {
+                    request.Brief.Payment = request.Brief.Payment.ForNewWork();
                     try
                     {
                         TradeCompanyCommissionMigrationService

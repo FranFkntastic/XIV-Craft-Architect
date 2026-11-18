@@ -12,7 +12,6 @@ public sealed class TradePayrollWorkflowDraft
     public string SourcePlanName { get; set; } = "Active craft plan";
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
-    public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
     public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LaborStandard;
     public decimal LaborGilPerSynth { get; set; } = TradePaymentPolicy.DefaultLaborGilPerSynth;
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
@@ -46,12 +45,8 @@ public sealed record TradeCommissionPaymentSummary(
     decimal EstimatedProcurementTotal,
     decimal MaterialReimbursementTotal,
     decimal ProvidedMaterialTotal,
-    decimal CommissionPercent,
-    decimal CommissionAmount,
     decimal TotalPayment,
     IReadOnlyList<string> Warnings,
-    TradePaymentContractBreakdown Legacy,
-    TradePaymentContractBreakdown LaborStandard,
     TradePaymentContractBreakdown Active,
     decimal OnHandMaterialValueTotal = 0m)
 {
@@ -63,7 +58,15 @@ public sealed record TradeCommissionPaymentSummary(
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        var sourceSnapshot = order.SourceSnapshot ?? new TradeOrderSourceSnapshot();
+        return FromSnapshot(order.SourceSnapshot ?? new TradeOrderSourceSnapshot(), draft, effectivePolicy, requireMaterialRouteQuote);
+    }
+
+    public static TradeCommissionPaymentSummary FromSnapshot(
+        TradeOrderSourceSnapshot sourceSnapshot,
+        TradePayrollWorkflowDraft? draft,
+        TradePaymentPolicy? effectivePolicy,
+        bool requireMaterialRouteQuote = true)
+    {
         var responsibilities = (draft?.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>()).ToDictionary(
             line => (line.ItemId, line.RequiresHq),
             line => line.Responsibility) ?? [];
@@ -95,7 +98,6 @@ public sealed record TradeCommissionPaymentSummary(
             ? TradePaymentPolicyNormalizer.Normalize(effectivePolicy)
             : TradePaymentPolicyNormalizer.Normalize(new TradePaymentPolicy(
                 draft?.ActivePaymentContract ?? TradePaymentContractMode.LaborStandard,
-                draft?.CommissionPercent ?? TradePaymentPolicy.DefaultMaterialValueBonusPercent,
                 draft?.LaborGilPerSynth > 0
                     ? draft.LaborGilPerSynth
                     : TradePaymentPolicy.DefaultLaborGilPerSynth));
@@ -158,12 +160,8 @@ public sealed record TradeCommissionPaymentSummary(
             comparison.EstimatedProcurementTotal,
             comparison.MaterialReimbursementTotal,
             comparison.ProvidedMaterialTotal,
-            comparison.Active.CommissionPercent,
-            comparison.Active.CommissionAmount,
             comparison.TotalPayment,
             comparison.Warnings,
-            comparison.Legacy,
-            comparison.LaborStandard,
             comparison.Active,
             comparison.OnHandMaterialValueTotal);
     }

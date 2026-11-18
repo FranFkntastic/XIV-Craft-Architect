@@ -1269,12 +1269,12 @@ function adaptMaterialTerm(value) {
 function adaptPayment(value) {
     return {
         schedule: requiredEnum(value.schedule, enumMaps.paymentSchedule, "Payment schedule"),
-        contractLabel: requiredText(value.contractLabel, "Payment contract"),
+        contractLabel: /^labor \+ material-value bonus$/i.test(value.contractLabel) ? "Agreed payment terms" : requiredText(value.contractLabel, "Payment contract"),
         materialReimbursement: requiredNumber(
             value.materialReimbursement,
             "Material reimbursement",
             0),
-        materialAdjustment: requiredNumber(value.materialAdjustment, "Material adjustment", 0),
+        historicalAmount: requiredNumber(value.materialAdjustment ?? 0, "Historical payment", 0),
         craftLabor: requiredNumber(value.craftLabor, "Craft labor", 0),
         total: requiredNumber(value.total, "Total payment", 0),
         customTerms: optionalText(value.customTerms),

@@ -3,6 +3,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.Data.Sqlite;
@@ -11,6 +12,62 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 public sealed partial class SqliteProfileHostStore
 {
+    private static readonly JsonSerializerOptions PaymentJson = new(JsonSerializerDefaults.Web);
+
+    private static string NormalizeSyncedPaymentFields(string collection, string payload)
+    {
+        var options = new System.Text.Json.Nodes.JsonNodeOptions { PropertyNameCaseInsensitive = true };
+        if (System.Text.Json.Nodes.JsonNode.Parse(payload, options) is not System.Text.Json.Nodes.JsonObject obj)
+        {
+            return payload;
+        }
+        if (collection == ProfileSyncCollections.TradePayrollDrafts)
+        {
+            return obj.Remove("commissionPercent") ? obj.ToJsonString() : payload;
+        }
+        bool changed = false;
+        if (obj["paymentPolicyOverride"] is System.Text.Json.Nodes.JsonObject policy)
+        {
+            try
+            {
+                var normalized = JsonSerializer.SerializeToNode(
+                    TradePaymentPolicyNormalizer.Normalize(policy.Deserialize<TradePaymentPolicy>(PaymentJson)!), PaymentJson);
+                if (!System.Text.Json.Nodes.JsonNode.DeepEquals(policy, normalized))
+                {
+                    obj["paymentPolicyOverride"] = normalized;
+                    changed = true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Leave an unreadable override as the client sent it; readers already tolerate it.
+            }
+        }
+        if (obj["companyCommission"] is System.Text.Json.Nodes.JsonObject commission)
+        {
+            var state = commission["publicMetadata"]?["viewState"]?.ToString();
+            var isDraft = state == "0" || string.Equals(state, nameof(CompanyCommissionPublicViewState.Draft), StringComparison.OrdinalIgnoreCase);
+            var versions = commission["termsVersions"] as System.Text.Json.Nodes.JsonArray;
+            foreach (var version in (versions?.OfType<System.Text.Json.Nodes.JsonObject>() ?? [])
+                .Append(commission["currentTerms"] as System.Text.Json.Nodes.JsonObject))
+            {
+                if (version?["payment"] is System.Text.Json.Nodes.JsonObject payment)
+                {
+                    changed |= payment.Remove("materialAdjustmentPercent");
+                    if (isDraft && payment.ContainsKey("materialAdjustment"))
+                    {
+                        var terms = payment.Deserialize<CompanyCommissionPaymentTerms>(PaymentJson)!.ForNewWork();
+                        payment.Remove("materialAdjustment");
+                        payment["total"] = terms.Total;
+                        payment["contractLabel"] = terms.ContractLabel;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        return changed ? obj.ToJsonString() : payload;
+    }
+
     private const int MaximumImportedActiveAccessKeys = 64;
     private sealed record ImportedAccessKey(
         string Id,
@@ -1830,6 +1887,10 @@ public sealed partial class SqliteProfileHostStore
             };
         }
 
+        if (collection is ProfileSyncCollections.TradePayrollDrafts or ProfileSyncCollections.TradeOrders)
+        {
+            payloadJson = NormalizeSyncedPaymentFields(collection, payloadJson);
+        }
         var isCompany = string.Equals(
             collection,
             ProfileSyncCollections.TradeCompanyProfiles,
@@ -1888,22 +1949,15 @@ public sealed partial class SqliteProfileHostStore
                             profile[field] = stored.DeepClone();
                         }
                     }
-                    if (profile["paymentPolicy"] is System.Text.Json.Nodes.JsonObject policy &&
-                        !policy.ContainsKey("materialValueBonusPercent") &&
-                        previous?["paymentPolicy"]?["materialValueBonusPercent"] is { } bonus)
-                    {
-                        policy["materialValueBonusPercent"] = bonus.DeepClone();
-                    }
-                    if (profile["paymentPolicy"] is System.Text.Json.Nodes.JsonObject mergedPolicy &&
-                        mergedPolicy.ContainsKey("materialValueBonusPercent"))
-                    {
-                        // The explicit bonus, even zero, supersedes the retired percent.
-                        mergedPolicy.Remove("LegacyCommissionPercent");
-                    }
                     payloadJson = profile.ToJsonString();
                 }
                 var company = JsonSerializer.Deserialize<TradeCompanyProfile>(
                     payloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (incoming is System.Text.Json.Nodes.JsonObject companyObject && company?.PaymentPolicy is { } paymentPolicy)
+                {
+                    companyObject["paymentPolicy"] = JsonSerializer.SerializeToNode(TradePaymentPolicyNormalizer.Normalize(paymentPolicy), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                    payloadJson = companyObject.ToJsonString();
+                }
                 var marginItems = company?.MarginItems ?? [];
                 if (marginItems.Count > 500 ||
                     marginItems.Any(item => item == null || item.ItemId <= 0 || item.SalePrice < 0) ||

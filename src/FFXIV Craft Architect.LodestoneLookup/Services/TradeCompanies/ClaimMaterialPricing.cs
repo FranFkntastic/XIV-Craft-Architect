@@ -12,8 +12,6 @@ public sealed class ClaimMaterialPricing(
     {
         var terms = order.CompanyCommission!.CurrentTerms;
         var old = terms.PricingEvidence.MaterialQuote!;
-        var rate = terms.Payment.MaterialAdjustmentPercent
-            ?? throw new InvalidOperationException("The published material adjustment rate is unknown.");
         var snapshot = TradeOrderWorkflow.CopySourceSnapshot(order.SourceSnapshot);
         if (access.HostProfileId is not { } profile || order.CraftPlanId is not { } id ||
             old.SourcePlanId != id || old.PlanSessionVersion != snapshot.PlanSessionVersion ||
@@ -123,7 +121,6 @@ public sealed class ClaimMaterialPricing(
         snapshot.MaterialQuote = fullQuote;
         snapshot.MarketAnalysisVersion = quote.MarketAnalysisVersion;
         snapshot.ImportedAtUtc = now;
-        var bonus = TradePaymentCalculator.MaterialValueBonus(materials.Sum(m => m.UnitCost * m.Quantity), rate);
         var reimbursement = quote.MaterialReimbursement;
         var revised = terms with
         {
@@ -132,9 +129,8 @@ public sealed class ClaimMaterialPricing(
             PricingEvidence = terms.PricingEvidence with { MaterialQuote = quote, CapturedAtUtc = now },
             Payment = terms.Payment with
             {
-                MaterialAdjustment = bonus,
                 MaterialReimbursement = reimbursement,
-                Total = terms.Payment.CraftLabor + bonus + reimbursement
+                Total = terms.Payment.CraftLabor + reimbursement
             }
         };
         return new(context with { CommandId = Guid.NewGuid() }, revised, "Material prices were refreshed at claim time.",
