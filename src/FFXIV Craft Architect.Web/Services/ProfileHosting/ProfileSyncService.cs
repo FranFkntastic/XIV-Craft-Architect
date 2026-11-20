@@ -205,6 +205,7 @@ public sealed class ProfileSyncService
     // reachable through the deep archive search.
     public async Task<TradeOrderDeepArchiveSweepResponse> SweepArchivedOrdersToDeepArchiveAsync(
         int olderThanDays = 0,
+        Guid? companyProfileId = null,
         CancellationToken ct = default)
     {
         var connection = await _localState.LoadConnectionSettingsAsync();
@@ -218,7 +219,8 @@ public sealed class ProfileSyncService
             connection.HostUrl!,
             connection.AccessKey!,
             olderThanDays,
-            ct);
+            ct,
+            companyProfileId);
         if (result.Moved > 0)
         {
             await SyncNowAsync(ct);

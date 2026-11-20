@@ -703,6 +703,7 @@ public partial class TradeOrders
     private bool _isSweepingArchiveToDeepStorage;
 
     private bool CanSweepArchiveToDeepStorage =>
+        _companyProfile != null &&
         ProfileSync.CurrentStatus.IsConnected &&
         ProfileSync.CurrentStatus.HostReachable &&
         ArchivedOrders.Count > 0;
@@ -732,7 +733,9 @@ public partial class TradeOrders
         _isSweepingArchiveToDeepStorage = true;
         try
         {
-            var result = await ProfileSync.SweepArchivedOrdersToDeepArchiveAsync(olderThanDays: 0);
+            var result = await ProfileSync.SweepArchivedOrdersToDeepArchiveAsync(
+                olderThanDays: 0,
+                companyProfileId: _companyProfile?.Id);
             if (result.Moved > 0)
             {
                 await LoadAsync();

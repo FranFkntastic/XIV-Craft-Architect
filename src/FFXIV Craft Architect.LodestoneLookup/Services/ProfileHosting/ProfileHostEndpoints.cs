@@ -419,6 +419,7 @@ public static class ProfileHostEndpoints
                 HttpRequest request,
                 ProfileHostOptions options,
                 int? olderThanDays,
+                Guid? companyProfileId,
                 ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
@@ -452,7 +453,8 @@ public static class ProfileHostEndpoints
                 return Results.Ok(await store.SweepProfileOrdersToDeepArchiveAsync(
                     profile.ProfileId,
                     cutoff,
-                    cancellationToken));
+                    cancellationToken,
+                    companyProfileId));
             });
 
         group.MapGet(

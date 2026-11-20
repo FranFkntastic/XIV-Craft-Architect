@@ -442,13 +442,17 @@ public sealed class ProfileHostClient
         string hostUrl,
         string accessKey,
         int olderThanDays,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? companyProfileId = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(olderThanDays);
+        var path = companyProfileId.HasValue
+            ? $"/profile-host/archive/orders/deep-archive?olderThanDays={olderThanDays}&companyProfileId={companyProfileId.Value:D}"
+            : $"/profile-host/archive/orders/deep-archive?olderThanDays={olderThanDays}";
         using var request = CreateRequest(
             HttpMethod.Post,
             hostUrl,
-            $"/profile-host/archive/orders/deep-archive?olderThanDays={olderThanDays}",
+            path,
             accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.Unauthorized)

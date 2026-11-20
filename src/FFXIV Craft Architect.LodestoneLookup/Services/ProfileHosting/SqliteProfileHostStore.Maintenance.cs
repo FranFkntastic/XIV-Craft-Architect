@@ -20,7 +20,8 @@ public sealed partial class SqliteProfileHostStore
     public async Task<TradeOrderDeepArchiveSweepResponse> SweepProfileOrdersToDeepArchiveAsync(
         string profileId,
         DateTime modifiedBeforeUtc,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? companyProfileId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
         var result = new TradeOrderDeepArchiveSweepResponse();
@@ -29,11 +30,16 @@ public sealed partial class SqliteProfileHostStore
         {
             ct.ThrowIfCancellationRequested();
             result.Scanned++;
-            if (TradeOrderArchiveSummaryCodec.TryCreate(
-                    candidate.PayloadJson,
-                    candidate.ObjectId) == null)
+            var summary = TradeOrderArchiveSummaryCodec.TryCreate(
+                candidate.PayloadJson,
+                candidate.ObjectId);
+            if (summary == null)
             {
                 result.SkippedUnarchived++;
+                continue;
+            }
+            if (companyProfileId.HasValue && summary.CompanyProfileId != companyProfileId.Value)
+            {
                 continue;
             }
 

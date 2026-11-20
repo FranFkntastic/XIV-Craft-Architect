@@ -30,11 +30,13 @@ public partial class TradeOrders
     private TradeCompanyProfile? _companyProfile;
     private IReadOnlyList<CompanyHubRosterMember> _companyMembers = [];
     private string? _loadedCompanyQuery;
+    private (int ItemId, string? Name)? _pendingNewOrderSeed;
 
     protected override async Task OnParametersSetAsync()
     {
         // Capture before loading: LoadAsync normalizes the URL, which clears the query.
-        var newOrderSeed = TakeNewOrderSeed();
+        var newOrderSeed = _pendingNewOrderSeed ?? TakeNewOrderSeed();
+        _pendingNewOrderSeed = null;
         if (_loadedCompanyQuery != Company)
         {
             await LoadAsync();
@@ -352,6 +354,7 @@ public partial class TradeOrders
             : AppState.SelectedTradeOrderId is { } selectedOrderId
                 ? TradeOrderNotificationNavigationHint.ForOrder(selectedOrderId)
                 : null;
+        _pendingNewOrderSeed ??= TakeNewOrderSeed();
         await LoadAsync();
         try
         {
