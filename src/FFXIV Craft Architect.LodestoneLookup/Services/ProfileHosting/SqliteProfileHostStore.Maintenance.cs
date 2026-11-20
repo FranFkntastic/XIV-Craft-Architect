@@ -13,6 +13,43 @@ public sealed record HostedSyncObject(
 
 public sealed partial class SqliteProfileHostStore
 {
+    // Moves one profile's archived trade orders last modified before the cutoff into
+    // deep storage. Shared by the background retention sweep and the on-demand
+    // endpoint so both use the same revision-checked move; unarchived (open) orders
+    // are never touched.
+    public async Task<TradeOrderDeepArchiveSweepResponse> SweepProfileOrdersToDeepArchiveAsync(
+        string profileId,
+        DateTime modifiedBeforeUtc,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        var result = new TradeOrderDeepArchiveSweepResponse();
+        var candidates = await LoadRetentionCandidatesAsync(profileId, modifiedBeforeUtc, ct);
+        foreach (var candidate in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            result.Scanned++;
+            if (TradeOrderArchiveSummaryCodec.TryCreate(
+                    candidate.PayloadJson,
+                    candidate.ObjectId) == null)
+            {
+                result.SkippedUnarchived++;
+                continue;
+            }
+
+            if (await MoveOrderToDeepArchiveAsync(profileId, candidate, ct))
+            {
+                result.Moved++;
+            }
+            else
+            {
+                result.Conflicts++;
+            }
+        }
+
+        return result;
+    }
+
     // Rewrites a deep-archived order in place (maintenance only). The summary is
     // re-derived so archive search results stay consistent with the payload, and the
     // write only applies when the stored payload is still the one the caller read.

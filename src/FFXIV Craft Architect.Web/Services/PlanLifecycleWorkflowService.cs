@@ -16,7 +16,10 @@ public sealed record PlanDerivationRequest(
     bool SkipMarketRefresh = false,
     bool UseCurrentSettingsContext = false,
     MarketFetchScope? RequiredMarketScope = null,
-    TradeCompanyPricingScope? CompanyPricingScope = null);
+    TradeCompanyPricingScope? CompanyPricingScope = null,
+    // Re-reconcile already-published market evidence without forcing a refetch:
+    // pairs still fresh in the local cache resolve instantly, stale ones refresh.
+    bool ReconcileMarketEvidence = false);
 
 public sealed record PlanDerivationResult(
     bool MarketPublished,
@@ -313,6 +316,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 marketPublished = market?.HasAnalysis == true;
             }
             else if (request.ForceRefreshMarketData ||
+                     request.ReconcileMarketEvidence ||
                      market?.HasAnalysis != true ||
                      marketContextChanged)
             {

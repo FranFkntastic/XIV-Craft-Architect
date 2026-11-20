@@ -92,6 +92,7 @@ public static class WorkerSessionCommandKinds
     public const string RecipeProjection = "recipe-projection";
     public const string ProjectItemsMutation = "mutate-project-items";
     public const string PlanIdentityMutation = "mutate-plan-identity";
+    public const string StoredPlanRevisionMutation = "mutate-stored-plan-revision";
     public const string ActiveContextMutation = "mutate-active-context";
     public const string RecipeBuild = "mutate-recipe-build";
     public const string AcquisitionMutation = "mutate-acquisition";
@@ -210,7 +211,14 @@ public sealed record WorkerSessionDurablePatch(
     string? DataCenter = null,
     bool ReplaceSourceIdentity = false,
     string? SourcePlanId = null,
-    string? SourcePlanName = null);
+    string? SourcePlanName = null,
+    bool ReplaceStoredRevision = false,
+    string? StoredPlanId = null,
+    string? StoredPlanName = null,
+    DateTime? CreatedAt = null,
+    DateTime? ModifiedAt = null,
+    DateTime? SavedAt = null,
+    Guid? LinkedOrderId = null);
 
 public sealed record WorkerAcceptedMutationProjection(
     WorkerSessionShellProjection Shell,
@@ -225,6 +233,19 @@ public sealed record WorkerProjectItemsMutation(
     IReadOnlyList<ProjectItem>? Items = null);
 
 public sealed record WorkerPlanIdentityMutation(string PlanId, string PlanName);
+
+/// <summary>
+/// Stamps the identity of a stored snapshot that was just exported from the live
+/// session and sealed to plan storage, so the session (and its durable record)
+/// track that exact revision without re-importing the whole plan.
+/// </summary>
+public sealed record WorkerStoredPlanRevisionMutation(
+    string PlanId,
+    string PlanName,
+    DateTime CreatedAt,
+    DateTime ModifiedAt,
+    DateTime SavedAt,
+    Guid? LinkedOrderId);
 
 public sealed record WorkerActiveContextMutation(
     string SelectedDataCenter,

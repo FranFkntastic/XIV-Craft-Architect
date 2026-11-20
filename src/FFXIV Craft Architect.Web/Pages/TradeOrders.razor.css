@@ -356,7 +356,7 @@ button.trade-orders-rail-order.is-device-only:hover {
 
 .trade-orders-editor-grid {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(210px, 300px) minmax(220px, 1fr);
+  grid-template-columns: minmax(240px, 1fr) minmax(240px, 1.4fr);
   gap: 10px;
   align-items: end;
 }
@@ -370,7 +370,7 @@ button.trade-orders-rail-order.is-device-only:hover {
 
 .trade-orders-search-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) 96px auto;
   gap: 10px;
   align-items: end;
 }

@@ -410,6 +410,51 @@ public static class ProfileHostEndpoints
                     cancellationToken));
             });
 
+        // On-demand move of the caller's archived orders into deep storage. Unlike
+        // the background retention sweep there is no age floor by default: the
+        // owner asked for it now. Open orders are never moved.
+        group.MapPost(
+            "/archive/orders/deep-archive",
+            async (
+                HttpRequest request,
+                ProfileHostOptions options,
+                int? olderThanDays,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (olderThanDays is < 0 or > 3650)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_archive_age",
+                        message = "olderThanDays must be between 0 and 3650."
+                    });
+                }
+
+                var cutoff = DateTime.UtcNow - TimeSpan.FromDays(olderThanDays ?? 0);
+                return Results.Ok(await store.SweepProfileOrdersToDeepArchiveAsync(
+                    profile.ProfileId,
+                    cutoff,
+                    cancellationToken));
+            });
+
         group.MapGet(
             "/objects/{collection}/{objectId}",
             async (

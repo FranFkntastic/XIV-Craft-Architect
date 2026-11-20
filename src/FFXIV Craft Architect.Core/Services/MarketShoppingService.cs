@@ -189,7 +189,12 @@ public class MarketShoppingService
         var hasFixedVendorPurchases = fixedVendorGilCost > 0;
         var standaloneCandidatesByPlan = candidatePlanIndexes.ToDictionary(
             entry => entry.Index,
-            entry => GeneratePurchaseCandidates(entry.Plan, currentRoute: null, candidateWorkBudget)
+            entry => GeneratePurchaseCandidates(
+                    entry.Plan,
+                    currentRoute: null,
+                    candidateWorkBudget,
+                    config.MaxWorldsPerItem,
+                    includeSplitPurchases)
                 .Where(candidate => candidate.IsFullyFulfilled)
                 .Where(candidate => includeSplitPurchases || !candidate.IsSplitPurchase)
                 .ToList());
@@ -218,7 +223,12 @@ public class MarketShoppingService
                 ct.ThrowIfCancellationRequested();
                 var state = beam[stateIndex];
                 var routeCandidates = planEntry.Plan.HqQuantityNeeded > 0
-                    ? GeneratePurchaseCandidates(planEntry.Plan, state.Route, candidateWorkBudget)
+                    ? GeneratePurchaseCandidates(
+                        planEntry.Plan,
+                        state.Route,
+                        candidateWorkBudget,
+                        config.MaxWorldsPerItem,
+                        includeSplitPurchases)
                     : standaloneCandidatesByPlan.GetValueOrDefault(planEntry.Index) ?? [];
                 var candidates = routeCandidates
                     .Where(c => c.IsFullyFulfilled)
@@ -294,6 +304,13 @@ public class MarketShoppingService
             standaloneCandidatesByPlan,
             cheapestEligibleCandidateByPlan,
             fixedVendorGilCost);
+        var boundedSelections = BuildBoundedRouteSelections(
+            frontier,
+            config,
+            plans,
+            standaloneCandidatesByPlan,
+            cheapestEligibleCandidateByPlan,
+            fixedVendorGilCost);
         var decision = cheapestState == null ||
             !hasFixedVendorPurchases && bestState.Choices.All(choice => choice.Candidate == null)
             ? null
@@ -311,7 +328,8 @@ public class MarketShoppingService
                 FixedAcquisitionGilCost = fixedVendorGilCost,
                 RouteSearchWasTruncated = routeSearchWasTruncated,
                 IncludeSplitPurchases = config.EnableSplitWorld,
-                ToleranceSelections = toleranceSelections
+                ToleranceSelections = toleranceSelections,
+                BoundedRouteSelections = boundedSelections
             };
 
         var isComplete = bestState.Choices.All(choice => choice.Candidate != null);
@@ -360,6 +378,50 @@ public class MarketShoppingService
         }
 
         return selections;
+    }
+
+    /// <summary>
+    /// Exports every complete frontier route within the hard route world-stop limit so callers
+    /// enforcing a stop cap (company pricing policy) can choose among bounded routes the 12
+    /// slider ticks skipped. A bounded route can only be dominated by another bounded route,
+    /// so this frontier slice holds every bounded cost/stops trade-off the beam retained.
+    /// </summary>
+    private static IReadOnlyList<MarketRouteToleranceSelection> BuildBoundedRouteSelections(
+        IReadOnlyList<ProcurementRouteSearchState> frontier,
+        MarketAnalysisConfig config,
+        IReadOnlyList<DetailedShoppingPlan> sourcePlans,
+        IReadOnlyDictionary<int, List<MarketPurchaseCandidate>> standaloneCandidatesByPlan,
+        IReadOnlyDictionary<int, MarketPurchaseCandidate?> cheapestEligibleCandidateByPlan,
+        long fixedVendorGilCost)
+    {
+        if (config.MaxRouteWorldStops is not { } maximumStops)
+        {
+            return Array.Empty<MarketRouteToleranceSelection>();
+        }
+
+        return frontier
+            .Where(state => state.WorldStops <= maximumStops)
+            .Where(state => state.Choices.All(choice => choice.Candidate != null))
+            .OrderBy(state => state.WorldStops)
+            .ThenBy(state => state.TotalGilCost)
+            .ThenBy(state => state.TotalEvidencePenalty)
+            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
+            .Select(state =>
+            {
+                var selectedPlans = sourcePlans.Select(ClonePlanForRouteOptimization).ToList();
+                ApplyRouteState(selectedPlans, state, standaloneCandidatesByPlan);
+                return new MarketRouteToleranceSelection(
+                    -1,
+                    -1,
+                    state.TieBreakKey,
+                    state.TotalGilCost,
+                    state.TotalEvidencePenalty,
+                    state.WorldStops,
+                    fixedVendorGilCost,
+                    ProcurementRouteExecutionService.CompactResultShoppingPlans(selectedPlans),
+                    BuildItemDecisions(state, cheapestEligibleCandidateByPlan));
+            })
+            .ToList();
     }
 
     private static List<MarketRouteItemDecision> BuildItemDecisions(
@@ -1009,7 +1071,33 @@ public class MarketShoppingService
     private List<MarketPurchaseCandidate> GeneratePurchaseCandidates(
         DetailedShoppingPlan plan,
         MarketRouteState? currentRoute,
-        MarketRouteCandidateWorkBudget? budget)
+        MarketRouteCandidateWorkBudget? budget,
+        int? maxWorldsPerItem = null,
+        bool includeSplitPurchases = false)
+    {
+        var candidates = GeneratePurchaseCandidatesCore(
+            plan,
+            currentRoute,
+            budget,
+            maxWorldsPerItem,
+            includeSplitPurchases);
+        if (maxWorldsPerItem is not { } cap)
+        {
+            return candidates;
+        }
+
+        // A candidate needing more worlds than the per-item cap can never be part of a route
+        // that satisfies the cap; drop it so it cannot crowd bounded routes out of the beam.
+        candidates.RemoveAll(candidate => candidate.Worlds.Count > cap);
+        return candidates;
+    }
+
+    private List<MarketPurchaseCandidate> GeneratePurchaseCandidatesCore(
+        DetailedShoppingPlan plan,
+        MarketRouteState? currentRoute,
+        MarketRouteCandidateWorkBudget? budget,
+        int? maxWorldsPerItem,
+        bool includeSplitPurchases)
     {
         var candidates = new List<MarketPurchaseCandidate>();
         if (plan.QuantityNeeded <= 0 || plan.WorldOptions.Count == 0)
@@ -1019,7 +1107,7 @@ public class MarketShoppingService
 
         if (plan.HqQuantityNeeded > 0)
         {
-            return GenerateQualityAwarePurchaseCandidates(plan, currentRoute, budget);
+            return GenerateQualityAwarePurchaseCandidates(plan, currentRoute, budget, maxWorldsPerItem);
         }
 
         var coverageCandidates = MarketCoverageSelection.GetCandidates(plan.CoverageSet)
@@ -1029,11 +1117,34 @@ public class MarketShoppingService
             .ToList();
         if (coverageCandidates.Count > 0)
         {
-            return coverageCandidates
+            var coveragePurchases = coverageCandidates
                 .Select(coverage => CreateCoveragePurchaseCandidate(plan, coverage))
+                .ToList();
+            if (includeSplitPurchases && maxWorldsPerItem is > 1 and var cap)
+            {
+                // The coverage set's split tiers stop at 2 (compact) and 5 (wide) worlds or go
+                // unbounded (cheapest observed). When the caller allows a different stop count,
+                // add the cheapest split bounded by that limit plus the route-aware split
+                // alternatives so valid routes between those tiers are still considered.
+                if (MarketCoverageBuilder.BuildBoundedSplit(plan, cap) is { } bounded &&
+                    !coverageCandidates.Any(existing => string.Equals(
+                        existing.CandidateId,
+                        bounded.CandidateId,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    coveragePurchases.Add(CreateCoveragePurchaseCandidate(plan, bounded));
+                }
+
+                coveragePurchases.AddRange(GenerateSplitPurchaseCandidates(plan, currentRoute, budget)
+                    .Where(split => split.Worlds.Count <= cap));
+            }
+
+            return coveragePurchases
                 .OrderBy(candidate => candidate.GilCost)
                 .ThenBy(candidate => candidate.Worlds.Count)
-                .ThenBy(candidate => candidate.Coverage!.CandidateId, StringComparer.Ordinal)
+                .ThenBy(
+                    candidate => candidate.Coverage?.CandidateId ?? GetSplitRouteKey(candidate.Split ?? []),
+                    StringComparer.Ordinal)
                 .ToList();
         }
 
@@ -1060,6 +1171,16 @@ public class MarketShoppingService
             });
         }
 
+        candidates.AddRange(GenerateSplitPurchaseCandidates(plan, currentRoute, budget));
+        return candidates;
+    }
+
+    private List<MarketPurchaseCandidate> GenerateSplitPurchaseCandidates(
+        DetailedShoppingPlan plan,
+        MarketRouteState? currentRoute,
+        MarketRouteCandidateWorkBudget? budget)
+    {
+        var candidates = new List<MarketPurchaseCandidate>();
         var splitWorlds = plan.WorldOptions
             .Where(w => w.TotalQuantityPurchased > 0)
             .Select(w => new
@@ -1103,7 +1224,8 @@ public class MarketShoppingService
     private static List<MarketPurchaseCandidate> GenerateQualityAwarePurchaseCandidates(
         DetailedShoppingPlan plan,
         MarketRouteState? currentRoute,
-        MarketRouteCandidateWorkBudget? budget)
+        MarketRouteCandidateWorkBudget? budget,
+        int? maxWorldsPerItem = null)
     {
         var worlds = plan.WorldOptions
             .Where(world => !string.Equals(
@@ -1147,6 +1269,25 @@ public class MarketShoppingService
             }
         }
         AddWorldSet(worlds);
+
+        if (maxWorldsPerItem is > 1 and var cap && worlds.Count > cap)
+        {
+            // "Every world" exceeds the cap; seed a bounded set from the cheapest HQ listings so
+            // an HQ demand that needs 3+ worlds still has a candidate within the limit.
+            var hqDemand = new DetailedShoppingPlan
+            {
+                ItemId = plan.ItemId,
+                Name = plan.Name,
+                QuantityNeeded = plan.HqQuantityNeeded,
+                WorldOptions = worlds
+            };
+            if (MarketCoverageBuilder.BuildBoundedSplit(hqDemand, cap, MarketCoverageQualityPolicy.HqOnly) is { } hqBounded)
+            {
+                AddWorldSet(worlds.Where(world => hqBounded.Worlds.Any(selected =>
+                    string.Equals(selected.DataCenter, world.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(selected.WorldName, world.WorldName, StringComparison.OrdinalIgnoreCase))));
+            }
+        }
 
         if (currentRoute?.Worlds.Count > 0)
         {
@@ -1810,10 +1951,24 @@ public class MarketShoppingService
                     tolerance,
                     cheapestGilCost,
                     count: 4));
+        // With a hard route stop limit, partial states already over the limit can never become
+        // valid routes, so keep the cheapest within-limit states and fill with them first.
+        var maximumStops = config.MaxRouteWorldStops;
+        var boundedAnchors = maximumStops is { } stopLimit
+            ? distinctStates
+                .Where(state => state.WorldStops <= stopLimit)
+                .OrderBy(state => state.TotalGilCost)
+                .ThenBy(state => state.TotalEvidencePenalty)
+                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
+                .Take(16)
+            : [];
 
         return cheapest
+            .Concat(boundedAnchors)
             .Concat(toleranceAnchors)
-            .Concat(distinctStates.OrderBy(state => state.TieBreakKey, StringComparer.Ordinal))
+            .Concat(distinctStates
+                .OrderBy(state => maximumStops is { } limit && state.WorldStops > limit)
+                .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal))
             .DistinctBy(state => state.RouteShapeKey, StringComparer.Ordinal)
             .Take(MaxProcurementRouteBeamWidth)
             .ToList();

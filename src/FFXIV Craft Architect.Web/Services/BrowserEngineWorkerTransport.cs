@@ -6,9 +6,9 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
 {
-    private const string ModulePath = "./engine-worker-bootstrap.js?v=2";
+    private const string ModulePath = "./engine-worker-bootstrap.js?v=3";
     private const string DefaultWorkspaceId = "active";
-    private const string DefaultWorkerUrl = "engine-worker.js?v=2";
+    private const string DefaultWorkerUrl = "engine-worker.js?v=3";
     private const int MaximumWorkerMessageCharacters = 16 * 1024 * 1024;
     private readonly IJSRuntime _jsRuntime;
     private readonly string _workerUrl;

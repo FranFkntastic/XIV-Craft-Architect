@@ -199,6 +199,33 @@ public sealed class ProfileSyncService
     public Task SyncNowAsync(CancellationToken ct = default) =>
         SyncAndAwaitBackgroundAsync(null, null, ct);
 
+    // Moves this profile's archived orders into host deep storage, then pulls the
+    // resulting tombstones so the local archive summary list drops the moved rows
+    // (via the normal remote-deletion path) before this returns. Moved orders stay
+    // reachable through the deep archive search.
+    public async Task<TradeOrderDeepArchiveSweepResponse> SweepArchivedOrdersToDeepArchiveAsync(
+        int olderThanDays = 0,
+        CancellationToken ct = default)
+    {
+        var connection = await _localState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "Connect a hosted profile before moving orders to deep storage.");
+        }
+
+        var result = await _client.SweepArchivedOrdersToDeepArchiveAsync(
+            connection.HostUrl!,
+            connection.AccessKey!,
+            olderThanDays,
+            ct);
+        if (result.Moved > 0)
+        {
+            await SyncNowAsync(ct);
+        }
+        return result;
+    }
+
     internal void NotifyProfileMetadataMayHaveChanged() =>
         ProfileMetadataMayHaveChanged?.Invoke();
 

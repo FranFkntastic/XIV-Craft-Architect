@@ -438,6 +438,38 @@ public sealed class ProfileHostClient
                 "The profile host returned an invalid deep archive response.");
     }
 
+    public async Task<TradeOrderDeepArchiveSweepResponse> SweepArchivedOrdersToDeepArchiveAsync(
+        string hostUrl,
+        string accessKey,
+        int olderThanDays,
+        CancellationToken ct)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(olderThanDays);
+        using var request = CreateRequest(
+            HttpMethod.Post,
+            hostUrl,
+            $"/profile-host/archive/orders/deep-archive?olderThanDays={olderThanDays}",
+            accessKey);
+        using var response = await _httpClient.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.AccessKeyRejected,
+                "The profile access key was rejected or revoked.");
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.HostUnavailable,
+                $"The profile host returned HTTP {(int)response.StatusCode} while moving archived orders to deep storage.");
+        }
+        return (await response.Content.ReadFromJsonAsync<TradeOrderDeepArchiveSweepResponse>(
+                cancellationToken: ct))
+            ?? throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.IncompatibleHost,
+                "The profile host returned an invalid deep archive sweep response.");
+    }
+
     public async Task<ProfileSyncPutResponse> PutObjectAsync(
         string hostUrl,
         string accessKey,

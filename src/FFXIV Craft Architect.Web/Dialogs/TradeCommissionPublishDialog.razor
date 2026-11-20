@@ -15,16 +15,6 @@
         <MudRadioGroup T="TradeCommissionDestination"
                        @bind-Value="_destination"
                        Class="commission-delivery-choices">
-            <div class="commission-delivery-choice">
-                <MudRadio T="TradeCommissionDestination"
-                          Value="TradeCommissionDestination.PublicLink"
-                          Dense="true">
-                    Portable crafter link
-                </MudRadio>
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Create the read-only brief and copy its link for any chat or message.
-                </MudText>
-            </div>
             <div class="@($"commission-delivery-choice{(DiscordAvailable ? string.Empty : " is-disabled")}")">
                 <MudRadio T="TradeCommissionDestination"
                           Value="TradeCommissionDestination.DiscordChannel"
@@ -36,6 +26,16 @@
                     @(DiscordAvailable
                         ? "Publish through the active company's configured Discord channel."
                         : DiscordUnavailableReason)
+                </MudText>
+            </div>
+            <div class="commission-delivery-choice">
+                <MudRadio T="TradeCommissionDestination"
+                          Value="TradeCommissionDestination.PublicLink"
+                          Dense="true">
+                    Portable crafter link
+                </MudRadio>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Create the read-only brief and copy its link for any chat or message.
                 </MudText>
             </div>
         </MudRadioGroup>
@@ -68,6 +68,13 @@
 
     private TradeCommissionDestination _destination = TradeCommissionDestination.PublicLink;
     private bool _isTestFixture;
+
+    // A company with a configured trade channel publishes there almost every time;
+    // the portable link stays one click away.
+    protected override void OnInitialized() =>
+        _destination = DiscordAvailable
+            ? TradeCommissionDestination.DiscordChannel
+            : TradeCommissionDestination.PublicLink;
     private void Cancel() => MudDialog.Cancel();
     private void Publish() => MudDialog.Close(DialogResult.Ok(
         new TradeCommissionPublishDialogResult(_destination, _isTestFixture)));

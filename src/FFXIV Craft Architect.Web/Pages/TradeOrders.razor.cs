@@ -33,9 +33,16 @@ public partial class TradeOrders
 
     protected override async Task OnParametersSetAsync()
     {
+        // Capture before loading: LoadAsync normalizes the URL, which clears the query.
+        var newOrderSeed = TakeNewOrderSeed();
         if (_loadedCompanyQuery != Company)
         {
             await LoadAsync();
+        }
+
+        if (newOrderSeed is { } seed)
+        {
+            await ApplyNewOrderSeedAsync(seed.ItemId, seed.Name);
         }
     }
     private List<TradeCrafterProfile> _crafters = [];
@@ -147,24 +154,6 @@ public partial class TradeOrders
         new(nameof(CompanyCommissionPaymentSchedule.Custom), "Custom timing")
     ];
 
-    private string NewOrderCrafterValue
-    {
-        get => _newOrderCrafterId?.ToString() ?? string.Empty;
-        set => _newOrderCrafterId = ParseNullableGuid(value);
-    }
-
-    private string NewRequestedOrderCrafterValue
-    {
-        get => _newRequestedOrderCrafterId?.ToString() ?? string.Empty;
-        set => _newRequestedOrderCrafterId = ParseNullableGuid(value);
-    }
-
-    private string DetailCrafterValue
-    {
-        get => _detailCrafterId?.ToString() ?? string.Empty;
-        set => _detailCrafterId = ParseNullableGuid(value);
-    }
-
     private string DetailStatusValue
     {
         get => _detailStatus.ToString();
@@ -176,12 +165,6 @@ public partial class TradeOrders
             }
         }
     }
-
-    private IReadOnlyList<CompactSelectOption> GetCrafterOptions() =>
-    [
-        new(string.Empty, "Unassigned"),
-        .. _crafters.Select(crafter => new CompactSelectOption(crafter.Id.ToString(), crafter.DisplayName))
-    ];
 
     private IReadOnlyList<CompactSelectOption> GetActiveStatusOptions() =>
         TradeOrderStatusWorkflow.ActiveStatuses
@@ -232,6 +215,48 @@ public partial class TradeOrders
         HasSelectedOrderOutputChanges &&
         _selectedOrderOutputEditors.Count > 0 &&
         !_isSavingSelectedOrderOutputs;
+
+    /// <summary>
+    /// The single editable-order Save button: saves title/notes and, when the
+    /// requested outputs changed, saves and reprices them in the same flow.
+    /// </summary>
+    private bool CanSaveSelectedOrder => SelectedOrderSaveBlockedReason == null;
+
+    private string? SelectedOrderSaveBlockedReason
+    {
+        get
+        {
+            if (_selectedOrder == null || IsSelectedOrderArchived)
+            {
+                return "Archived orders cannot be edited.";
+            }
+
+            if (HasSelectedLocalHostedCollision)
+            {
+                return "Rebase or discard local edits before saving.";
+            }
+
+            if (_isSavingSelectedOrderOutputs)
+            {
+                return "Saving...";
+            }
+
+            var outputsChanged = CanEditSelectedOrderOutputs && HasSelectedOrderOutputChanges;
+            if (outputsChanged && _selectedOrderOutputEditors.Count == 0)
+            {
+                return "Add at least one output item before saving.";
+            }
+
+            if (string.IsNullOrWhiteSpace(_detailTitle))
+            {
+                return "Order title is required.";
+            }
+
+            return outputsChanged || HasSelectedOrderDetailChanges()
+                ? null
+                : "No unsaved changes.";
+        }
+    }
 
     private string TradeOrdersBoardStyle =>
         $"--trade-orders-ops-width: {_opsPaneWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)}px";
@@ -728,8 +753,12 @@ public partial class TradeOrders
         _usingSuggestedRequestedOrderTitle = false;
         _newRequestedOrderCrafterId = null;
         _newRequestedOrderNotes = null;
+        ++_requestedOrderSearchGeneration;
         _requestedOrderSearchQuery = string.Empty;
         _requestedOrderSearchResults = [];
+        _requestedOrderSearchResultsQuery = null;
+        _isSearchingRequestedOrderItems = false;
+        _requestedOrderAddQuantity = 1;
         _requestedOrderOutputs = [];
     }
 

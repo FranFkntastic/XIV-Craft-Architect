@@ -700,9 +700,75 @@ public partial class TradeOrders
         }
     }
 
+    private bool _isSweepingArchiveToDeepStorage;
+
+    private bool CanSweepArchiveToDeepStorage =>
+        ProfileSync.CurrentStatus.IsConnected &&
+        ProfileSync.CurrentStatus.HostReachable &&
+        ArchivedOrders.Count > 0;
+
     private void ToggleArchiveGroup()
     {
         _isArchiveCollapsed = !_isArchiveCollapsed;
+    }
+
+    private async Task MoveArchivedOrdersToDeepStorageAsync()
+    {
+        if (_isSweepingArchiveToDeepStorage || !CanSweepArchiveToDeepStorage)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBox(
+            "Move archive to deep storage",
+            $"Move {ArchivedOrders.Count:N0} archived order(s) out of the Archive list into deep storage? They will remain searchable from the Orders search box.",
+            yesText: "Move to deep storage",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        _isSweepingArchiveToDeepStorage = true;
+        try
+        {
+            var result = await ProfileSync.SweepArchivedOrdersToDeepArchiveAsync(olderThanDays: 0);
+            if (result.Moved > 0)
+            {
+                await LoadAsync();
+            }
+
+            if (result.Moved > 0 && result.Conflicts == 0)
+            {
+                Snackbar.Add(
+                    $"Moved {result.Moved:N0} archived order(s) to deep storage.",
+                    Severity.Success);
+            }
+            else if (result.Moved > 0)
+            {
+                Snackbar.Add(
+                    $"Moved {result.Moved:N0} archived order(s) to deep storage; {result.Conflicts:N0} changed during the sweep and stayed in Archive.",
+                    Severity.Warning);
+            }
+            else if (result.Conflicts > 0)
+            {
+                Snackbar.Add(
+                    $"No archived orders moved ({result.Conflicts:N0} changed during the sweep). Try again.",
+                    Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add("No hosted archived orders needed moving to deep storage.", Severity.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Could not move archived orders to deep storage: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSweepingArchiveToDeepStorage = false;
+        }
     }
 
     private void ToggleDeviceOnlyGroup()
