@@ -311,12 +311,12 @@ public sealed class TradeMaterialQuoteService
                 required = Math.Max(plan.QuantityNeeded, plan.HqQuantityNeeded);
             }
 
-            if (!TryReadSelectedPurchase(plan, out var cash, out var worlds, out var oldestEvidence))
+            if (!TryReadSelectedPurchase(plan, out var cash, out var worlds, out var oldestEvidence, out var hasMissingTimestamp))
             {
                 return Failure($"The selected route for {plan.Name} is incomplete.");
             }
 
-            var lineWarnings = BuildEvidenceAgeWarnings(plan, oldestEvidence, quotedAtUtc, policy);
+            var lineWarnings = BuildEvidenceAgeWarnings(plan, oldestEvidence, hasMissingTimestamp, quotedAtUtc, policy);
             var unitCost = required > 0 ? cash / required : 0m;
             lines.Add(new TradeMaterialQuoteLine(
                 plan.ItemId,
@@ -374,11 +374,13 @@ public sealed class TradeMaterialQuoteService
         DetailedShoppingPlan plan,
         out decimal cash,
         out IReadOnlyList<string> worlds,
-        out DateTime? oldestEvidence)
+        out DateTime? oldestEvidence,
+        out bool hasMissingTimestamp)
     {
         cash = 0;
         worlds = [];
         oldestEvidence = null;
+        hasMissingTimestamp = false;
         if (plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName)
         {
             cash = plan.RecommendedWorld.TotalCost;
@@ -438,12 +440,14 @@ public sealed class TradeMaterialQuoteService
             .Select(timestamp => timestamp!.Value)
             .ToArray();
         oldestEvidence = timestamps.Length > 0 ? timestamps.Min() : null;
+        hasMissingTimestamp = timestamps.Length != selectedWorlds.Count;
         return cash >= 0;
     }
 
     private static IReadOnlyList<string> BuildEvidenceAgeWarnings(
         DetailedShoppingPlan plan,
         DateTime? oldestEvidence,
+        bool hasMissingTimestamp,
         DateTime quotedAtUtc,
         TradeMaterialPricingPolicy policy)
     {
@@ -455,22 +459,24 @@ public sealed class TradeMaterialQuoteService
             return [];
         }
 
-        if (oldestEvidence is not { } uploadedAtUtc)
+        var warnings = new List<string>();
+        if (hasMissingTimestamp || oldestEvidence is null)
         {
-            return [$"{plan.Name}: market listing upload time is unavailable; verify prices before purchasing."];
+            warnings.Add($"{plan.Name}: market listing upload time is unavailable for one or more selected worlds; verify prices before purchasing.");
         }
 
-        var age = quotedAtUtc - uploadedAtUtc;
-        if (age <= TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes))
+        if (oldestEvidence is { } uploadedAtUtc)
         {
-            return [];
+            var age = quotedAtUtc - uploadedAtUtc;
+            if (age > TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes))
+            {
+                warnings.Add(
+                    $"{plan.Name}: selected market listings are {FormatEvidenceAge(age)} old " +
+                    $"(older than the {policy.MaximumEvidenceAgeMinutes:N0}-minute warning threshold).");
+            }
         }
 
-        return
-        [
-            $"{plan.Name}: selected market listings are {FormatEvidenceAge(age)} old " +
-            $"(older than the {policy.MaximumEvidenceAgeMinutes:N0}-minute warning threshold)."
-        ];
+        return warnings;
     }
 
     private static string FormatEvidenceAge(TimeSpan age)
