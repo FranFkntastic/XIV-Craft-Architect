@@ -441,7 +441,7 @@
                     <MudNumericField T="decimal" @bind-Value="_materialMinimumAllowanceGil" Label="Minimum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="decimal" @bind-Value="_materialMaximumAllowanceGil" Label="Maximum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="int" @bind-Value="_materialQuoteLifetimeMinutes" Label="Open quote lifetime" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
-                    <MudNumericField T="int" @bind-Value="_materialMaximumEvidenceAgeMinutes" Label="Maximum selected-route evidence age" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialMaximumEvidenceAgeMinutes" Label="Stale listing warning threshold" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
 
                     @if (!_companyProfileIsHosted)
                     {

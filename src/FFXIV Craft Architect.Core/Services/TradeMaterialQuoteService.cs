@@ -76,8 +76,7 @@ public sealed class TradeMaterialQuoteService
         var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
         return $"No complete executable route fits company policy and current listing evidence " +
                $"({policy.MaximumWorldStops} worlds, " +
-               $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium, " +
-               $"listings at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old).";
+               $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium).";
     }
 
     public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
@@ -87,9 +86,9 @@ public sealed class TradeMaterialQuoteService
     {
         ArgumentNullException.ThrowIfNull(plans);
 
-        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        _ = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
         return plans
-            .Select(plan => FilterToFreshEvidence(plan, policy, quotedAtUtc))
+            .Select(PreparePlanForOptimization)
             .ToArray();
     }
 
@@ -104,7 +103,7 @@ public sealed class TradeMaterialQuoteService
         ArgumentNullException.ThrowIfNull(demand);
         ArgumentNullException.ThrowIfNull(selectedSources);
 
-        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        _ = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
         return demand.Select(item =>
             {
                 var key = (item.ItemId, item.RequiresHq);
@@ -114,10 +113,7 @@ public sealed class TradeMaterialQuoteService
                 {
                     AcquisitionSource.VendorBuy => BuildVendorPlan(item),
                     AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq when plan != null =>
-                        FilterToFreshEvidence(
-                            CloneForDemand(plan, item),
-                            policy,
-                            quotedAtUtc),
+                        PreparePlanForOptimization(CloneForDemand(plan, item)),
                     _ => BuildUnsupportedPlan(item, source)
                 };
             })
@@ -191,7 +187,7 @@ public sealed class TradeMaterialQuoteService
         }
 
         return Failure(
-            "No complete route within company policy uses sufficiently fresh listing evidence." +
+            "No complete route within company policy could be reconciled to listing-level purchases." +
             (string.IsNullOrWhiteSpace(firstRejection) ? string.Empty : $" {firstRejection}"));
     }
 
@@ -203,9 +199,9 @@ public sealed class TradeMaterialQuoteService
                 StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Names the materials that block every executable route, using the fresh-evidence plans the
-    /// optimizer saw: unsupported sources, fresh stock shortfalls, and items whose fresh stock is
-    /// spread across more worlds than the stop limit allows.
+    /// Names the materials that block every executable route, using the plans the optimizer saw:
+    /// unsupported sources, stock shortfalls, and items whose stock is spread across more worlds
+    /// than the stop limit allows.
     /// </summary>
     private static string DescribeNoExecutableRoute(
         TradeMaterialPricingPolicy policy,
@@ -256,8 +252,7 @@ public sealed class TradeMaterialQuoteService
             if (available < required)
             {
                 blockers.Add(
-                    $"{plan.Name}: only {available:N0} of {required:N0} {quality}available in listings " +
-                    $"at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old");
+                    $"{plan.Name}: only {available:N0} of {required:N0} {quality}available in current listings");
                 continue;
             }
 
@@ -276,13 +271,13 @@ public sealed class TradeMaterialQuoteService
             if (worldsNeeded > policy.MaximumWorldStops)
             {
                 blockers.Add(
-                    $"{plan.Name}: fresh {quality}stock for {required:N0} is spread across at least " +
+                    $"{plan.Name}: {quality}stock for {required:N0} is spread across at least " +
                     $"{worldsNeeded:N0} worlds");
             }
             else if (worldsNeeded > 1 && !policy.AllowSplitPurchases)
             {
                 blockers.Add(
-                    $"{plan.Name}: no single world has {required:N0} {quality}in fresh listings " +
+                    $"{plan.Name}: no single world has {required:N0} {quality}in current listings " +
                     "and split purchases are disabled");
             }
         }
@@ -316,11 +311,12 @@ public sealed class TradeMaterialQuoteService
                 required = Math.Max(plan.QuantityNeeded, plan.HqQuantityNeeded);
             }
 
-            if (!TryReadSelectedPurchase(plan, quotedAtUtc, policy, out var cash, out var worlds, out var oldestEvidence))
+            if (!TryReadSelectedPurchase(plan, out var cash, out var worlds, out var oldestEvidence))
             {
-                return Failure($"The selected route for {plan.Name} is incomplete or uses stale market evidence.");
+                return Failure($"The selected route for {plan.Name} is incomplete.");
             }
 
+            var lineWarnings = BuildEvidenceAgeWarnings(plan, oldestEvidence, quotedAtUtc, policy);
             var unitCost = required > 0 ? cash / required : 0m;
             lines.Add(new TradeMaterialQuoteLine(
                 plan.ItemId,
@@ -340,7 +336,7 @@ public sealed class TradeMaterialQuoteService
                 "Procurement route",
                 $"Whole-listing cash for the company-policy route across {string.Join(", ", worlds)}.",
                 oldestEvidence,
-                []));
+                lineWarnings));
         }
 
         if (lines.Count != demandByItem.Count)
@@ -376,8 +372,6 @@ public sealed class TradeMaterialQuoteService
 
     private static bool TryReadSelectedPurchase(
         DetailedShoppingPlan plan,
-        DateTime quotedAtUtc,
-        TradeMaterialPricingPolicy policy,
         out decimal cash,
         out IReadOnlyList<string> worlds,
         out DateTime? oldestEvidence)
@@ -443,18 +437,66 @@ public sealed class TradeMaterialQuoteService
             .Where(timestamp => timestamp.HasValue)
             .Select(timestamp => timestamp!.Value)
             .ToArray();
-        if (timestamps.Length != selectedWorlds.Count)
-        {
-            return false;
-        }
-        oldestEvidence = timestamps.Min();
-        return cash >= 0 && IsFresh(oldestEvidence.Value, quotedAtUtc, policy);
+        oldestEvidence = timestamps.Length > 0 ? timestamps.Min() : null;
+        return cash >= 0;
     }
 
-    private static DetailedShoppingPlan FilterToFreshEvidence(
+    private static IReadOnlyList<string> BuildEvidenceAgeWarnings(
         DetailedShoppingPlan plan,
-        TradeMaterialPricingPolicy policy,
-        DateTime quotedAtUtc)
+        DateTime? oldestEvidence,
+        DateTime quotedAtUtc,
+        TradeMaterialPricingPolicy policy)
+    {
+        if (string.Equals(
+                plan.RecommendedWorld?.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        if (oldestEvidence is not { } uploadedAtUtc)
+        {
+            return [$"{plan.Name}: market listing upload time is unavailable; verify prices before purchasing."];
+        }
+
+        var age = quotedAtUtc - uploadedAtUtc;
+        if (age <= TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes))
+        {
+            return [];
+        }
+
+        return
+        [
+            $"{plan.Name}: selected market listings are {FormatEvidenceAge(age)} old " +
+            $"(older than the {policy.MaximumEvidenceAgeMinutes:N0}-minute warning threshold)."
+        ];
+    }
+
+    private static string FormatEvidenceAge(TimeSpan age)
+    {
+        if (age < TimeSpan.FromHours(1))
+        {
+            return $"{Math.Max(1, (int)Math.Round(age.TotalMinutes)):N0}m";
+        }
+
+        if (age < TimeSpan.FromDays(1))
+        {
+            var hours = (int)age.TotalHours;
+            var minutes = age.Minutes;
+            return minutes > 0 ? $"{hours}h {minutes}m" : $"{hours}h";
+        }
+
+        var days = (int)age.TotalDays;
+        var remHours = age.Hours;
+        return remHours > 0 ? $"{days}d {remHours}h" : $"{days}d";
+    }
+
+    /// <summary>
+    /// Preserves all world options (including older Universalis uploads) and rebuilds coverage
+    /// when listing-level data is present so cloned demand quantities have accurate tiers.
+    /// </summary>
+    private static DetailedShoppingPlan PreparePlanForOptimization(DetailedShoppingPlan plan)
     {
         if (string.Equals(
                 plan.RecommendedWorld?.WorldName,
@@ -464,23 +506,7 @@ public sealed class TradeMaterialQuoteService
             return plan;
         }
 
-        var worldOptions = plan.WorldOptions
-            .Where(world => world.MarketUploadedAtUtc is { } uploadedAt &&
-                            IsFresh(uploadedAt, quotedAtUtc, policy))
-            .ToList();
-        var freshWorlds = worldOptions
-            .Select(world => (DataCenter: world.DataCenter, WorldName: world.WorldName))
-            .ToHashSet(WorldKeyComparer.Instance);
-        var recommendedWorld = plan.RecommendedWorld is { } recommended &&
-                               freshWorlds.Contains((recommended.DataCenter, recommended.WorldName))
-            ? recommended
-            : null;
-        var recommendedSplit = plan.RecommendedSplit is { Count: > 0 } split &&
-                               split.All(part => freshWorlds.Contains((part.DataCenter, part.WorldName)))
-            ? split.ToList()
-            : null;
-
-        var filtered = new DetailedShoppingPlan
+        var prepared = new DetailedShoppingPlan
         {
             ItemId = plan.ItemId,
             Name = plan.Name,
@@ -488,39 +514,24 @@ public sealed class TradeMaterialQuoteService
             QuantityNeeded = plan.QuantityNeeded,
             HqQuantityNeeded = plan.HqQuantityNeeded,
             DCAveragePrice = plan.DCAveragePrice,
-            WorldOptions = worldOptions,
-            RecommendedWorld = recommendedWorld,
-            RecommendedSplit = recommendedSplit,
+            WorldOptions = plan.WorldOptions.ToList(),
+            RecommendedWorld = plan.RecommendedWorld,
+            RecommendedSplit = plan.RecommendedSplit?.ToList(),
+            CoverageSet = plan.CoverageSet,
             Error = plan.Error,
             MarketDataWarning = plan.MarketDataWarning,
             HQAveragePrice = plan.HQAveragePrice,
             Vendors = plan.Vendors.ToList()
         };
-        filtered.CoverageSet = RebuildFreshCoverageSet(filtered, plan.CoverageSet, freshWorlds);
-        return filtered;
-    }
-
-    /// <summary>
-    /// Rebuilds coverage from the fresh worlds only. Filtering the precomputed tiers would drop
-    /// a whole compact/wide/cheapest split whenever one of its worlds went stale, even when the
-    /// remaining fresh worlds can still cover the order; rebuilding re-runs the tier search on
-    /// the fresh listings (and at this plan's quantity, which may differ from the source plan's).
-    /// </summary>
-    private static MarketCoverageSet? RebuildFreshCoverageSet(
-        DetailedShoppingPlan freshPlan,
-        MarketCoverageSet? source,
-        IReadOnlySet<(string DataCenter, string WorldName)> freshWorlds)
-    {
-        var hasFreshListings = freshPlan.WorldOptions.Any(world =>
+        var hasListings = prepared.WorldOptions.Any(world =>
             !string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase) &&
             world.Listings.Any(listing => listing.Quantity > 0 && listing.PricePerUnit > 0));
-        if (freshPlan.QuantityNeeded <= 0 || !hasFreshListings)
+        if (prepared.QuantityNeeded > 0 && hasListings)
         {
-            // Nothing to rebuild from (e.g. listing-free compact evidence): keep only fully fresh tiers.
-            return FilterCoverageSet(source, freshWorlds);
+            prepared.CoverageSet = MarketCoverageBuilder.Build(prepared);
         }
 
-        return MarketCoverageBuilder.Build(freshPlan);
+        return prepared;
     }
 
     private static DetailedShoppingPlan BuildVendorPlan(
@@ -599,63 +610,6 @@ public sealed class TradeMaterialQuoteService
             HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
             Error = $"Selected acquisition source {source} cannot be quoted as purchase cash."
         };
-
-    private static MarketCoverageSet? FilterCoverageSet(
-        MarketCoverageSet? source,
-        IReadOnlySet<(string DataCenter, string WorldName)> freshWorlds)
-    {
-        if (source is null)
-        {
-            return null;
-        }
-
-        var candidates = source.AllCandidates
-            .Where(candidate =>
-                candidate.Worlds.Count > 0 &&
-                candidate.Worlds.All(world => freshWorlds.Contains((world.DataCenter, world.WorldName))) &&
-                candidate.Listings.All(listing => freshWorlds.Contains((listing.DataCenter, listing.WorldName))))
-            .ToArray();
-        MarketCoverageOption? Keep(MarketCoverageOption? candidate) =>
-            candidate is not null &&
-            candidates.Any(allowed => string.Equals(
-                allowed.CandidateId,
-                candidate.CandidateId,
-                StringComparison.Ordinal))
-                ? candidate
-                : null;
-
-        return new MarketCoverageSet(
-            source.ItemId,
-            source.ItemName,
-            source.QuantityNeeded,
-            Keep(source.SingleWorld),
-            Keep(source.CompactSplit),
-            Keep(source.WideSplit),
-            Keep(source.CheapestObserved),
-            candidates);
-    }
-
-    private static bool IsFresh(
-        DateTime uploadedAtUtc,
-        DateTime quotedAtUtc,
-        TradeMaterialPricingPolicy policy) =>
-        quotedAtUtc - uploadedAtUtc <= TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes);
-
-    private sealed class WorldKeyComparer : IEqualityComparer<(string DataCenter, string WorldName)>
-    {
-        public static WorldKeyComparer Instance { get; } = new();
-
-        public bool Equals(
-            (string DataCenter, string WorldName) left,
-            (string DataCenter, string WorldName) right) =>
-            string.Equals(left.DataCenter, right.DataCenter, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(left.WorldName, right.WorldName, StringComparison.OrdinalIgnoreCase);
-
-        public int GetHashCode((string DataCenter, string WorldName) value) =>
-            HashCode.Combine(
-                StringComparer.OrdinalIgnoreCase.GetHashCode(value.DataCenter),
-                StringComparer.OrdinalIgnoreCase.GetHashCode(value.WorldName));
-    }
 
     private static TradeMaterialQuoteResult Failure(string reason) =>
         new(null, [], reason);
