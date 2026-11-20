@@ -19,6 +19,40 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
+    /// <summary>
+    /// Single Save Order entry point for an editable order. Changed outputs are
+    /// saved and repriced together with the current title/notes in one flow;
+    /// otherwise only the fast detail save runs.
+    /// </summary>
+    private Task SaveSelectedOrderChangesAsync()
+    {
+        if (!CanSaveSelectedOrder)
+        {
+            return Task.CompletedTask;
+        }
+
+        return CanEditSelectedOrderOutputs && HasSelectedOrderOutputChanges
+            ? SaveSelectedOrderOutputsAsync()
+            : SaveSelectedOrderAsync();
+    }
+
+    private void ApplySelectedOrderDetailEdits(TradeOrder order)
+    {
+        // Canonical commissions own their title/notes through the projection.
+        if (HasCanonicalCommission)
+        {
+            return;
+        }
+
+        var title = _detailTitle.Trim();
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            order.Title = title;
+        }
+
+        order.Notes = _detailNotes;
+    }
+
     private async Task SaveSelectedOrderOutputsAsync()
     {
         if (_selectedOrder == null || _companyProfile == null || _isSavingSelectedOrderOutputs)
@@ -66,6 +100,7 @@ public partial class TradeOrders
                 _selectedOrder,
                 outputs,
                 DateTime.UtcNow);
+            ApplySelectedOrderDetailEdits(orderToSave);
             if (rollbackPlan != null &&
                 _selectedOrder.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated)
             {
@@ -103,6 +138,7 @@ public partial class TradeOrders
             }
 
             orderToSave = pricingResult.UpdatedOrder;
+            ApplySelectedOrderDetailEdits(orderToSave);
             var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(orderToSave)
                 : await UpdateCanonicalDraftAsync(

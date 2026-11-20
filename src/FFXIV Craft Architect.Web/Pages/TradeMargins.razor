@@ -85,7 +85,7 @@
     private WebTableSortState<Column> _sort = WebTableSortState<Column>.Unsorted;
     private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
-    private enum Column { Item, Sale, Materials, Labor, Total, Margin, Percent, Age, Remove }
+    private enum Column { Item, Sale, Materials, Labor, Total, Margin, Percent, Age, Commission, Remove }
     private sealed class MarginRow(int itemId, long? sale)
     {
         public int ItemId { get; } = itemId;
@@ -124,6 +124,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         new() { Id = Column.Margin, Header = "Margin", Size = new(110), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@Number(MarginGil(row))</span> },
         new() { Id = Column.Percent, Header = "Margin %", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@(Percent(row) is { } percent ? $"{percent:N1}%" : "—")</span> },
         new() { Id = Column.Age, Header = "Prices", Size = new(74, 50), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span class="age @(row.Cost?.UnknownPriceAge == true || row.Cost?.OldestPriceUtc <= DateTime.UtcNow.AddDays(-1) ? "is-stale" : null)" title="@AgeTitle(row)">@Age(row)</span> },
+        new() { Id = Column.Commission, Header = "", Size = new(44, 44), Sortable = false, CellTemplate = row => @<button type="button" class="commission-btn" title="@("Create commission for " + row.Name)" aria-label="@("Create commission for " + row.Name)" @onclick="() => CreateCommission(row)"><MudIcon Icon="@Icons.Material.Filled.PostAdd" Size="Size.Small" /></button> },
         new() { Id = Column.Remove, Header = "", Size = new(44, 44), Sortable = false, CellTemplate = row => @<button type="button" class="remove-btn" aria-label="@("Remove " + row.Name)" @onclick="() => RemoveAsync(row)">×</button> }
     ];
     private static string Age(MarginRow row)
@@ -410,6 +411,18 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         }
         finally { _gate.Release(); }
     }
+    // Opens Trade Orders with a New Order draft already holding this item.
+    private void CreateCommission(MarginRow row)
+    {
+        var query = new Dictionary<string, object?>
+        {
+            ["newOrderItem"] = row.ItemId,
+            ["newOrderName"] = row.Name is { Length: > 0 } name && name != "Item" ? name : null,
+            ["company"] = _profile?.Id.ToString()
+        };
+        Navigation.NavigateTo(Navigation.GetUriWithQueryParameters("trade/orders", query));
+    }
+
     private async Task RemoveAsync(MarginRow row)
     {
         await _gate.WaitAsync();

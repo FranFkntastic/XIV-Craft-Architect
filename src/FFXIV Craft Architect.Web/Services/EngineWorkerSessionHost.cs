@@ -168,6 +168,8 @@ public static partial class ManagedHost
                     MutateProjectItems(command),
                 WorkerSessionCommandKinds.PlanIdentityMutation =>
                     MutatePlanIdentity(command),
+                WorkerSessionCommandKinds.StoredPlanRevisionMutation =>
+                    MutateStoredPlanRevision(command),
                 WorkerSessionCommandKinds.ActiveContextMutation =>
                     MutateActiveContext(command),
                 WorkerSessionCommandKinds.AcquisitionMutation =>
@@ -443,7 +445,8 @@ public static partial class ManagedHost
             WorkerSessionCommandKinds.MarketItemRefresh or
             WorkerSessionCommandKinds.MarketLensMutation or
             WorkerSessionCommandKinds.ProcurementRun or
-            WorkerSessionCommandKinds.ProcurementToleranceMutation;
+            WorkerSessionCommandKinds.ProcurementToleranceMutation or
+            WorkerSessionCommandKinds.StoredPlanRevisionMutation;
 
     private static bool SupersedesDerivedOperation(string commandKind) =>
         commandKind is
@@ -596,6 +599,34 @@ public static partial class ManagedHost
             command.CommandKind,
             CaptureShellProjection,
             _canonicalSession.CreateDurablePatch(replaceSourceIdentity: true));
+    }
+
+    private static WorkerSessionResultEnvelope MutateStoredPlanRevision(
+        WorkerSessionCommandEnvelope command)
+    {
+        var mutation = command.Payload.Deserialize<WorkerStoredPlanRevisionMutation>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Stored-plan revision payload is empty.");
+        if (string.IsNullOrWhiteSpace(mutation.PlanId) ||
+            string.IsNullOrWhiteSpace(mutation.PlanName))
+        {
+            throw new InvalidOperationException("A stored-plan revision requires an id and name.");
+        }
+        if (_canonicalSession.Session.BorrowActivePlan() is null)
+        {
+            throw new InvalidOperationException(
+                "There is no active plan to stamp with a stored revision.");
+        }
+
+        var durablePatch = _canonicalSession.AdoptStoredPlanRevision(
+            mutation with
+            {
+                PlanId = mutation.PlanId.Trim(),
+                PlanName = mutation.PlanName.Trim()
+            });
+        return CompleteMutation(
+            command.CommandKind,
+            CaptureShellProjection,
+            durablePatch);
     }
 
     private static WorkerSessionResultEnvelope MutateActiveContext(

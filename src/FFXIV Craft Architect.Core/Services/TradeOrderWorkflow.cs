@@ -117,9 +117,12 @@ public static class TradeOrderWorkflow
         {
             CompanyCommissionPublicViewState.Draft => TradeOrderLifecycleAction.DiscardDraft,
             CompanyCommissionPublicViewState.Published => TradeOrderLifecycleAction.CancelCommission,
+            // A revoked publication still leaves an open order behind. Cancel it
+            // (rather than discarding it) so claim and activity history survive
+            // into the archive, where the order can then be deleted normally.
+            CompanyCommissionPublicViewState.Revoked => TradeOrderLifecycleAction.CancelCommission,
             _ when order.CompanyCommission != null => TradeOrderLifecycleAction.None,
-            _ when order.CommissionPublication?.RevokedAtUtc == null &&
-                order.CommissionPublication != null => TradeOrderLifecycleAction.CancelCommission,
+            _ when order.CommissionPublication != null => TradeOrderLifecycleAction.CancelCommission,
             _ when order.CommissionPublication == null &&
                 order.Status is TradeOrderStatus.Draft or TradeOrderStatus.ReadyToAssign =>
                 TradeOrderLifecycleAction.DiscardDraft,

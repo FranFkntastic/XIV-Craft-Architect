@@ -57,6 +57,45 @@ public static class MarketCoverageBuilder
             candidates);
     }
 
+    /// <summary>
+    /// Builds the cheapest-listings-first split that covers the plan's quantity using at most
+    /// <paramref name="maxWorlds"/> worlds. Used when a caller's world-stop limit exceeds the
+    /// fixed <see cref="WideWorldCap"/> so bounded routes between the wide cap and the caller's
+    /// limit are not missed. Never default-eligible; returns null when no multi-world split fits.
+    /// </summary>
+    public static MarketCoverageOption? BuildBoundedSplit(
+        DetailedShoppingPlan plan,
+        int maxWorlds,
+        MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (maxWorlds < 2 || plan.QuantityNeeded <= 0)
+        {
+            return null;
+        }
+
+        var listings = EnumerateMarketListings(plan, qualityPolicy);
+        if (!TryCoverAcrossWorlds(plan, qualityPolicy, maxWorlds, listings, out var selected))
+        {
+            return null;
+        }
+
+        var worldCount = selected
+            .Select(listing => (listing.DataCenter, listing.WorldName))
+            .Distinct()
+            .Count();
+        if (worldCount < 2)
+        {
+            return null;
+        }
+
+        // Tier labels mirror Build(): identical selections collapse onto the existing candidate id.
+        var tier = worldCount <= WideWorldCap
+            ? MarketCoverageTier.WideSplit
+            : MarketCoverageTier.CheapestObserved;
+        return CreateOption(plan, tier, qualityPolicy, isDefaultEligible: false, selected);
+    }
+
     private static IEnumerable<MarketCoverageOption> BuildSingleWorldCandidates(
         DetailedShoppingPlan plan,
         MarketCoverageQualityPolicy qualityPolicy)

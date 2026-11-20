@@ -54,13 +54,15 @@ public sealed class TradeMaterialQuoteService
         }
 
         var input = PrepareOptimizationInput(plans, purchases, sources, policy, now);
+        var routePolicy = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
         var optimization = await shopping.OptimizeProcurementRouteWithDecisionAsync(
             input, new MarketAnalysisConfig
             {
-                MaxWorldsPerItem = policy.MaximumWorldStops,
-                EnableSplitWorld = policy.AllowSplitPurchases,
+                MaxWorldsPerItem = routePolicy.MaximumWorldStops,
+                MaxRouteWorldStops = routePolicy.MaximumWorldStops,
+                EnableSplitWorld = routePolicy.AllowSplitPurchases,
                 TravelTolerance = 11
-            }, includeSplitPurchases: policy.AllowSplitPurchases,
+            }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
             executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
         var result = Build(optimization, purchases, policy, now);
         return result.Quote is { } quote && stock.Length > 0
@@ -133,30 +135,47 @@ public sealed class TradeMaterialQuoteService
 
         var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
         var decision = optimization.Decision;
-        if (!optimization.IsComplete || decision == null)
+        if (decision == null)
         {
-            return Failure(DescribeNoExecutableRoute(policy));
+            return Failure(DescribeNoExecutableRoute(policy, optimization.ShoppingPlans, demand));
         }
 
-        var maximumCost = decision.CheapestGilCost *
-            (1m + policy.MaximumConsolidationPremiumPercent / 100m);
-        var selections = decision.ToleranceSelections
-            .Where(candidate => candidate.GilCost <= maximumCost)
+        // Every complete route the optimizer exported that fits the stop limit: the slider ticks
+        // plus the bounded frontier routes those 12 ticks can skip.
+        var bounded = decision.ToleranceSelections
+            .Concat(decision.BoundedRouteSelections)
             .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
+            .Where(IsCompleteSelection)
+            .DistinctBy(candidate => candidate.SelectionKey, StringComparer.Ordinal)
+            .ToArray();
+        if (bounded.Length == 0)
+        {
+            return Failure(DescribeNoExecutableRoute(policy, optimization.ShoppingPlans, demand));
+        }
+
+        // Premium is measured against the cheapest route overall. When that route needs more
+        // stops than policy allows and no bounded route lands inside its premium window, anchor
+        // the window to the cheapest bounded route instead of rejecting every bounded route.
+        var premiumFactor = 1m + policy.MaximumConsolidationPremiumPercent / 100m;
+        var maximumCost = decision.CheapestGilCost * premiumFactor;
+        if (!bounded.Any(candidate => candidate.GilCost <= maximumCost))
+        {
+            maximumCost = bounded.Min(candidate => candidate.GilCost) * premiumFactor;
+        }
+
+        var selections = bounded
+            .Where(candidate => candidate.GilCost <= maximumCost)
             .OrderBy(candidate => candidate.WorldStops)
             .ThenBy(candidate => candidate.EvidencePenalty)
             .ThenBy(candidate => candidate.GilCost)
             .ThenBy(candidate => candidate.SelectionKey, StringComparer.Ordinal)
             .ToArray();
-        if (selections.Length == 0)
-        {
-            return Failure(DescribeNoExecutableRoute(policy));
-        }
 
         var demandByItem = demand
             .Where(row => row.TotalQuantity > 0)
             .GroupBy(row => (row.ItemId, row.RequiresHq))
             .ToDictionary(group => group.Key, group => group.Sum(row => row.TotalQuantity));
+        string? firstRejection = null;
         foreach (var selection in selections)
         {
             var result = TryBuildSelection(
@@ -168,10 +187,116 @@ public sealed class TradeMaterialQuoteService
             {
                 return result;
             }
+            firstRejection ??= result.FailureReason;
         }
 
         return Failure(
-            "No complete route within company policy uses sufficiently fresh listing evidence.");
+            "No complete route within company policy uses sufficiently fresh listing evidence." +
+            (string.IsNullOrWhiteSpace(firstRejection) ? string.Empty : $" {firstRejection}"));
+    }
+
+    private static bool IsCompleteSelection(MarketRouteToleranceSelection selection) =>
+        selection.ItemDecisions.Count == selection.ShoppingPlans.Count(plan =>
+            !string.Equals(
+                plan.RecommendedWorld?.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Names the materials that block every executable route, using the fresh-evidence plans the
+    /// optimizer saw: unsupported sources, fresh stock shortfalls, and items whose fresh stock is
+    /// spread across more worlds than the stop limit allows.
+    /// </summary>
+    private static string DescribeNoExecutableRoute(
+        TradeMaterialPricingPolicy policy,
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        IReadOnlyList<MaterialAggregate> demand)
+    {
+        var summary = DescribeNoExecutableRoute(policy);
+        var blockers = new List<string>();
+        foreach (var plan in plans)
+        {
+            if (string.Equals(
+                    plan.RecommendedWorld?.WorldName,
+                    MarketShoppingConstants.VendorWorldName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var requiresHq = plan.HqQuantityNeeded > 0;
+            var required = demand
+                .Where(row => row.ItemId == plan.ItemId && row.RequiresHq == requiresHq)
+                .Sum(row => row.TotalQuantity);
+            if (required <= 0)
+            {
+                required = Math.Max(plan.QuantityNeeded, plan.HqQuantityNeeded);
+            }
+
+            if (!string.IsNullOrWhiteSpace(plan.Error))
+            {
+                blockers.Add($"{plan.Name}: {plan.Error.TrimEnd('.')}");
+                continue;
+            }
+
+            var quality = requiresHq ? "HQ " : string.Empty;
+            var stockByWorld = plan.WorldOptions
+                .Where(world => !string.Equals(
+                    world.WorldName,
+                    MarketShoppingConstants.VendorWorldName,
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(world => world.Listings
+                    .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
+                    .Where(listing => !requiresHq || listing.IsHq)
+                    .Sum(listing => (long)listing.Quantity))
+                .Where(quantity => quantity > 0)
+                .OrderByDescending(quantity => quantity)
+                .ToArray();
+            var available = stockByWorld.Sum();
+            if (available < required)
+            {
+                blockers.Add(
+                    $"{plan.Name}: only {available:N0} of {required:N0} {quality}available in listings " +
+                    $"at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old");
+                continue;
+            }
+
+            var worldsNeeded = 0;
+            var covered = 0L;
+            foreach (var quantity in stockByWorld)
+            {
+                worldsNeeded++;
+                covered += quantity;
+                if (covered >= required)
+                {
+                    break;
+                }
+            }
+
+            if (worldsNeeded > policy.MaximumWorldStops)
+            {
+                blockers.Add(
+                    $"{plan.Name}: fresh {quality}stock for {required:N0} is spread across at least " +
+                    $"{worldsNeeded:N0} worlds");
+            }
+            else if (worldsNeeded > 1 && !policy.AllowSplitPurchases)
+            {
+                blockers.Add(
+                    $"{plan.Name}: no single world has {required:N0} {quality}in fresh listings " +
+                    "and split purchases are disabled");
+            }
+        }
+
+        if (blockers.Count == 0)
+        {
+            return $"{summary} Each material is individually available, but no combined route fits " +
+                   $"within {policy.MaximumWorldStops} worlds.";
+        }
+
+        const int maximumListed = 3;
+        var listed = string.Join("; ", blockers.Take(maximumListed));
+        var more = blockers.Count > maximumListed ? $"; +{blockers.Count - maximumListed} more" : string.Empty;
+        return $"{summary} Blocked by {listed}{more}.";
     }
 
     private static TradeMaterialQuoteResult TryBuildSelection(
@@ -355,7 +480,7 @@ public sealed class TradeMaterialQuoteService
             ? split.ToList()
             : null;
 
-        return new DetailedShoppingPlan
+        var filtered = new DetailedShoppingPlan
         {
             ItemId = plan.ItemId,
             Name = plan.Name,
@@ -366,12 +491,36 @@ public sealed class TradeMaterialQuoteService
             WorldOptions = worldOptions,
             RecommendedWorld = recommendedWorld,
             RecommendedSplit = recommendedSplit,
-            CoverageSet = FilterCoverageSet(plan.CoverageSet, freshWorlds),
             Error = plan.Error,
             MarketDataWarning = plan.MarketDataWarning,
             HQAveragePrice = plan.HQAveragePrice,
             Vendors = plan.Vendors.ToList()
         };
+        filtered.CoverageSet = RebuildFreshCoverageSet(filtered, plan.CoverageSet, freshWorlds);
+        return filtered;
+    }
+
+    /// <summary>
+    /// Rebuilds coverage from the fresh worlds only. Filtering the precomputed tiers would drop
+    /// a whole compact/wide/cheapest split whenever one of its worlds went stale, even when the
+    /// remaining fresh worlds can still cover the order; rebuilding re-runs the tier search on
+    /// the fresh listings (and at this plan's quantity, which may differ from the source plan's).
+    /// </summary>
+    private static MarketCoverageSet? RebuildFreshCoverageSet(
+        DetailedShoppingPlan freshPlan,
+        MarketCoverageSet? source,
+        IReadOnlySet<(string DataCenter, string WorldName)> freshWorlds)
+    {
+        var hasFreshListings = freshPlan.WorldOptions.Any(world =>
+            !string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase) &&
+            world.Listings.Any(listing => listing.Quantity > 0 && listing.PricePerUnit > 0));
+        if (freshPlan.QuantityNeeded <= 0 || !hasFreshListings)
+        {
+            // Nothing to rebuild from (e.g. listing-free compact evidence): keep only fully fresh tiers.
+            return FilterCoverageSet(source, freshWorlds);
+        }
+
+        return MarketCoverageBuilder.Build(freshPlan);
     }
 
     private static DetailedShoppingPlan BuildVendorPlan(

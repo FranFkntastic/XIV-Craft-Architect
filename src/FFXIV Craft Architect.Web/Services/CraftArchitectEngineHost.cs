@@ -204,6 +204,19 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             cancellationToken,
             operationId);
 
+    public Task<WorkerSessionResultEnvelope> MutateStoredPlanRevisionAsync(
+        long expectedRevision,
+        WorkerStoredPlanRevisionMutation mutation,
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.StoredPlanRevisionMutation,
+            expectedRevision,
+            mutation,
+            EngineCommandPriority.Persistence,
+            cancellationToken,
+            operationId);
+
     public Task<WorkerSessionResultEnvelope> MutateActiveContextAsync(
         long expectedRevision,
         WorkerActiveContextMutation mutation,

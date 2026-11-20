@@ -17,6 +17,14 @@ public class MarketAnalysisConfig
     public int? MaxWorldsPerItem { get; set; }
 
     /// <summary>
+    /// Hard route-wide world-stop limit (e.g. company pricing policy). When set, the route
+    /// optimizer keeps the cheapest bounded routes alive through beam pruning and exports every
+    /// complete Pareto-frontier route within the limit as
+    /// <see cref="MarketRouteDecision.BoundedRouteSelections"/>. Null leaves routing unbounded.
+    /// </summary>
+    public int? MaxRouteWorldStops { get; set; }
+
+    /// <summary>
     /// Route-wide tolerance for world visits.
     /// 0 minimizes travel; 11 requires the cheapest trustworthy route.
     /// </summary>
