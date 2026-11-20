@@ -8,7 +8,7 @@ const relayAcknowledgementTimeoutMilliseconds = 2000;
 const completedRequestRetentionMilliseconds = 30000;
 const maximumRememberedRequests = 128;
 
-export function createEngineWorker(workerUrl = "engine-worker.js?v=2", workspaceId = defaultWorkspaceId) {
+export function createEngineWorker(workerUrl = "engine-worker.js?v=3", workspaceId = defaultWorkspaceId) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     const resolvedWorkerUrl = new URL(workerUrl, document.baseURI);
     resolvedWorkerUrl.searchParams.set("workspace", normalizedWorkspaceId);
@@ -50,7 +50,7 @@ export function createEngineWorker(workerUrl = "engine-worker.js?v=2", workspace
 
 export function createEngineWorkerController(
     callback,
-    workerUrl = "engine-worker.js?v=2",
+    workerUrl = "engine-worker.js?v=3",
     workspaceId = defaultWorkspaceId,
     requestFreshAuthority = false)
 {

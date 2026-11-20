@@ -132,6 +132,15 @@
                                 </button>
                                 @if (!_isArchiveCollapsed)
                                 {
+                                    @if (CanSweepArchiveToDeepStorage)
+                                    {
+                                        <button type="button"
+                                                class="trade-orders-archive-more"
+                                                disabled="@_isSweepingArchiveToDeepStorage"
+                                                @onclick="MoveArchivedOrdersToDeepStorageAsync">
+                                            @(_isSweepingArchiveToDeepStorage ? "Moving to deep storage..." : "Move archive to deep storage")
+                                        </button>
+                                    }
                                     <div class="trade-orders-rail-list">
                                         @foreach (var order in FilteredArchivedOrders)
                                         {
@@ -240,10 +249,6 @@
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
                                               Immediate="true" />
-                                <CompactSelectField Id="imported-order-crafter"
-                                                    Label="Assigned crafter"
-                                                    @bind-Value="NewOrderCrafterValue"
-                                                    Options="GetCrafterOptions()" />
                             </div>
                             <section class="trade-orders-work-section">
                                 <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
@@ -309,10 +314,6 @@
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
                                               Immediate="true" />
-                                <CompactSelectField Id="new-order-crafter"
-                                                    Label="Assigned crafter"
-                                                    @bind-Value="NewRequestedOrderCrafterValue"
-                                                    Options="GetCrafterOptions()" />
                                 <MudTextField @bind-Value="_newRequestedOrderNotes"
                                               id="new-order-notes"
                                               Label="Notes"
@@ -323,13 +324,27 @@
                             </div>
                             <section class="trade-orders-work-section">
                                 <div class="trade-orders-search-row">
-                                    <MudTextField @bind-Value="_requestedOrderSearchQuery"
+                                    <MudTextField T="string"
+                                                  Value="@_requestedOrderSearchQuery"
+                                                  ValueChanged="OnRequestedOrderSearchChangedAsync"
                                                   id="new-order-output-search"
                                                   Label="Add output item"
+                                                  Placeholder="Ancient Lumber x3996"
                                                   Variant="Variant.Outlined"
                                                   Margin="Margin.Dense"
                                                   Immediate="true"
-                                                  OnKeyUp="OnRequestedOrderSearchKeyUp" />
+                                                  OnKeyDown="OnRequestedOrderSearchKeyDownAsync" />
+                                    <MudNumericField T="int"
+                                                     id="new-order-add-quantity"
+                                                     Value="@_requestedOrderAddQuantity"
+                                                     ValueChanged="UpdateRequestedOrderAddQuantity"
+                                                     Label="Qty"
+                                                     Immediate="true"
+                                                     Min="1"
+                                                     Max="9999"
+                                                     HideSpinButtons="true"
+                                                     Variant="Variant.Outlined"
+                                                     Margin="Margin.Dense" />
                                     <MudButton Variant="Variant.Outlined"
                                                Color="Color.Secondary"
                                                OnClick="SearchRequestedOrderItemsAsync"
@@ -1132,12 +1147,15 @@
                                                  Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision)">
                                           Edit draft terms
                                       </MudButton>
-                                      <MudButton Variant="Variant.Filled"
-                                                 Color="Color.Primary"
-                                                 OnClick="SaveSelectedOrderAsync"
-                                                 Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision || string.IsNullOrWhiteSpace(_detailTitle))">
-                                          Save Order
-                                      </MudButton>
+                                      <span title="@SelectedOrderSaveBlockedReason">
+                                          <MudButton Variant="Variant.Filled"
+                                                     Color="Color.Primary"
+                                                     id="selected-order-save"
+                                                     OnClick="SaveSelectedOrderChangesAsync"
+                                                     Disabled="@(!CanSaveSelectedOrder)">
+                                              @(_isSavingSelectedOrderOutputs ? "Saving..." : "Save Order")
+                                          </MudButton>
+                                      </span>
                                       @if (HasSelectedLifecycleAction)
                                       {
                                           <MudButton Variant="Variant.Outlined"
@@ -1239,11 +1257,6 @@
                                                    Margin="Margin.Dense"
                                                    Immediate="true"
                                                    Disabled="@IsSelectedOrderArchived" />
-                                     <CompactSelectField Id="selected-order-crafter"
-                                                         Label="Assigned crafter"
-                                                         @bind-Value="DetailCrafterValue"
-                                                         Options="GetCrafterOptions()"
-                                                         Disabled="@IsSelectedOrderArchived" />
                                     <MudTextField @bind-Value="_detailNotes"
                                                   id="selected-order-notes"
                                                   Label="Notes"
@@ -1268,27 +1281,33 @@
                                                        Disabled="@(!HasSelectedOrderOutputChanges || _isSavingSelectedOrderOutputs)">
                                                 Reset
                                             </MudButton>
-                                            <MudButton Variant="Variant.Filled"
-                                                       Color="Color.Primary"
-                                                       Size="Size.Small"
-                                                       StartIcon="@Icons.Material.Filled.Save"
-                                                       OnClick="SaveSelectedOrderOutputsAsync"
-                                                       Disabled="@(!CanSaveSelectedOrderOutputs)">
-                                                @(_isSavingSelectedOrderOutputs ? "Saving..." : "Save Outputs")
-                                            </MudButton>
                                         </div>
                                     }
                                 </div>
                                 @if (CanEditSelectedOrderOutputs)
                                 {
                                     <div class="trade-orders-search-row">
-                                        <MudTextField @bind-Value="_selectedOrderOutputSearchQuery"
+                                        <MudTextField T="string"
+                                                      Value="@_selectedOrderOutputSearchQuery"
+                                                      ValueChanged="OnSelectedOrderOutputSearchChangedAsync"
                                                       id="selected-order-output-search"
                                                       Label="Add output item"
+                                                      Placeholder="Ancient Lumber x3996"
                                                       Variant="Variant.Outlined"
                                                       Margin="Margin.Dense"
                                                       Immediate="true"
-                                                      OnKeyUp="OnSelectedOrderOutputSearchKeyUp" />
+                                                      OnKeyDown="OnSelectedOrderOutputSearchKeyDownAsync" />
+                                        <MudNumericField T="int"
+                                                         id="selected-order-add-quantity"
+                                                         Value="@_selectedOrderOutputAddQuantity"
+                                                         ValueChanged="UpdateSelectedOrderOutputAddQuantity"
+                                                         Label="Qty"
+                                                         Immediate="true"
+                                                         Min="1"
+                                                         Max="9999"
+                                                         HideSpinButtons="true"
+                                                         Variant="Variant.Outlined"
+                                                         Margin="Margin.Dense" />
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
                                                    OnClick="SearchSelectedOrderOutputItemsAsync"
@@ -1317,14 +1336,20 @@
                                             <span>HQ</span>
                                             <span></span>
                                         </div>
-                                        @foreach (var output in _selectedOrderOutputEditors)
+                                        @if (_selectedOrderOutputEditors.Count == 0)
                                         {
-                                            <div class="trade-orders-output-row">
+                                            <div class="trade-orders-output-empty">No output items. Search above to add an item, or discard this draft.</div>
+                                        }
+                                        @for (var outputIndex = 0; outputIndex < _selectedOrderOutputEditors.Count; outputIndex++)
+                                        {
+                                            var output = _selectedOrderOutputEditors[outputIndex];
+                                            var rowIndex = outputIndex;
+                                            <div class="trade-orders-output-row" @key="rowIndex">
                                                 <span>@output.Name</span>
                                                 <MudNumericField T="int"
                                                                  id="@($"selected-order-output-quantity-{output.ItemId}-{output.MustBeHq}")"
                                                                  Value="@output.Quantity"
-                                                                 ValueChanged="quantity => UpdateSelectedOrderOutputQuantity(output, quantity)"
+                                                                 ValueChanged="quantity => UpdateSelectedOrderOutputQuantityAt(rowIndex, quantity)"
                                                                  Immediate="true"
                                                                  Min="1"
                                                                  Max="9999"
@@ -1333,12 +1358,12 @@
                                                                  Margin="Margin.Dense" />
                                                 <MudCheckBox T="bool"
                                                              Value="@output.MustBeHq"
-                                                             ValueChanged="mustBeHq => UpdateSelectedOrderOutputHq(output, mustBeHq)"
+                                                             ValueChanged="mustBeHq => UpdateSelectedOrderOutputHqAt(rowIndex, mustBeHq)"
                                                              Color="Color.Primary" />
                                                 <MudIconButton Icon="@Icons.Material.Filled.Delete"
                                                                Color="Color.Error"
                                                                Size="Size.Small"
-                                                               OnClick="() => RemoveSelectedOrderOutput(output)" />
+                                                               OnClick="() => RemoveSelectedOrderOutputAt(rowIndex)" />
                                             </div>
                                         }
                                     </div>

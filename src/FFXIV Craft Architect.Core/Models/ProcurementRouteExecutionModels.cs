@@ -88,6 +88,14 @@ public sealed record MarketRouteDecision(
 
     public IReadOnlyList<MarketRouteToleranceSelection> ToleranceSelections { get; init; } =
         Array.Empty<MarketRouteToleranceSelection>();
+
+    /// <summary>
+    /// Complete Pareto-frontier routes within <see cref="MarketAnalysisConfig.MaxRouteWorldStops"/>.
+    /// Populated only when that limit is set. These are not slider ticks: their tolerance range is
+    /// -1..-1 so <see cref="MarketRouteToleranceSelection.Contains"/> never matches a slider value.
+    /// </summary>
+    public IReadOnlyList<MarketRouteToleranceSelection> BoundedRouteSelections { get; init; } =
+        Array.Empty<MarketRouteToleranceSelection>();
 }
 
 public sealed record MarketRouteFrontierOption(

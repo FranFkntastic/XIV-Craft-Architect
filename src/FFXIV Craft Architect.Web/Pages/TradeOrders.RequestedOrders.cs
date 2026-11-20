@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 using FFXIV_Craft_Architect.Core.Helpers;
 using FFXIV_Craft_Architect.Core.Models;
@@ -18,49 +19,189 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
-    private async Task SearchRequestedOrderItemsAsync()
+    // Margins "Create commission" handoff: /trade/orders?newOrderItem={id}&newOrderName={name}.
+    [SupplyParameterFromQuery(Name = "newOrderItem")]
+    public int? NewOrderItem { get; set; }
+
+    [SupplyParameterFromQuery(Name = "newOrderName")]
+    public string? NewOrderName { get; set; }
+
+    private int? _consumedNewOrderItem;
+
+    private (int ItemId, string? Name)? TakeNewOrderSeed()
     {
-        if (string.IsNullOrWhiteSpace(_requestedOrderSearchQuery) || _isSearchingRequestedOrderItems)
+        if (NewOrderItem is not { } itemId || itemId <= 0 || itemId == _consumedNewOrderItem)
+        {
+            return null;
+        }
+
+        _consumedNewOrderItem = itemId;
+        return (itemId, NewOrderName);
+    }
+
+    private async Task ApplyNewOrderSeedAsync(int itemId, string? name)
+    {
+        if (NavigationManager.Uri.Contains("newOrderItem=", StringComparison.OrdinalIgnoreCase))
+        {
+            NavigationManager.NavigateTo("trade/orders", replace: true);
+        }
+        if (_companyProfile == null || !string.IsNullOrWhiteSpace(_loadError))
         {
             return;
         }
 
-        _isSearchingRequestedOrderItems = true;
-        _requestedOrderSearchResults = [];
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            try
+            {
+                name = (await GarlandService.GetItemAsync(itemId))?.Name;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                name = null;
+            }
+        }
 
+        StartNewOrderWorkspace();
+        if (!_requestedOrderOutputs.Any(output => output.ItemId == itemId))
+        {
+            _requestedOrderOutputs.Add(new RequestedOrderOutputEditor
+            {
+                ItemId = itemId,
+                Name = string.IsNullOrWhiteSpace(name) ? $"Item {itemId}" : name.Trim(),
+                Quantity = 1
+            });
+        }
+        RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle ||
+            string.IsNullOrWhiteSpace(_newRequestedOrderTitle));
+    }
+
+    private const int RequestedOrderSearchDebounceMilliseconds = 250;
+    private const int RequestedOrderSearchMinimumLength = 2;
+
+    // "Ancient Lumber x3996", "Ancient Lumber * 3996", "Ancient Lumber ×3996".
+    private static readonly Regex RequestedOrderQuantitySuffix = new(
+        @"^(?<name>.+?)\s*(?:\s[xX]|[×*])\s*(?<quantity>\d{1,4})\s*$",
+        RegexOptions.CultureInvariant);
+
+    private int _requestedOrderSearchGeneration;
+    private int _requestedOrderAddQuantity = 1;
+    private string? _requestedOrderSearchResultsQuery;
+
+    private static (string Query, int? Quantity) ParseRequestedOrderSearch(string? text)
+    {
+        var trimmed = text?.Trim() ?? string.Empty;
+        var match = RequestedOrderQuantitySuffix.Match(trimmed);
+        return match.Success &&
+               int.TryParse(match.Groups["quantity"].Value, out var quantity) &&
+               quantity > 0
+            ? (match.Groups["name"].Value.Trim(), Math.Min(9999, quantity))
+            : (trimmed, null);
+    }
+
+    private async Task OnRequestedOrderSearchChangedAsync(string? value)
+    {
+        _requestedOrderSearchQuery = value ?? string.Empty;
+        var generation = ++_requestedOrderSearchGeneration;
+        var (query, quantity) = ParseRequestedOrderSearch(_requestedOrderSearchQuery);
+        if (quantity is { } typedQuantity)
+        {
+            _requestedOrderAddQuantity = typedQuantity;
+        }
+        if (query.Length < RequestedOrderSearchMinimumLength)
+        {
+            _requestedOrderSearchResults = [];
+            _isSearchingRequestedOrderItems = false;
+            return;
+        }
+
+        await Task.Delay(RequestedOrderSearchDebounceMilliseconds);
+        if (generation != _requestedOrderSearchGeneration || _isDisposed)
+        {
+            return;
+        }
+
+        await RunRequestedOrderSearchAsync(query, generation);
+    }
+
+    private Task SearchRequestedOrderItemsAsync()
+    {
+        var (query, _) = ParseRequestedOrderSearch(_requestedOrderSearchQuery);
+        return string.IsNullOrWhiteSpace(query)
+            ? Task.CompletedTask
+            : RunRequestedOrderSearchAsync(query, ++_requestedOrderSearchGeneration);
+    }
+
+    private async Task RunRequestedOrderSearchAsync(string query, int generation)
+    {
+        _isSearchingRequestedOrderItems = true;
         try
         {
-            _requestedOrderSearchResults = (await GarlandService.SearchAsync(_requestedOrderSearchQuery))
+            var results = (await GarlandService.SearchAsync(query))
                 .Where(result => result.Id > 0 && !string.IsNullOrWhiteSpace(result.Object.Name))
                 .Take(8)
                 .ToList();
+            if (generation == _requestedOrderSearchGeneration)
+            {
+                _requestedOrderSearchResults = results;
+                _requestedOrderSearchResultsQuery = query;
+            }
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+            if (generation == _requestedOrderSearchGeneration)
+            {
+                Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+            }
         }
         finally
         {
-            _isSearchingRequestedOrderItems = false;
+            if (generation == _requestedOrderSearchGeneration)
+            {
+                _isSearchingRequestedOrderItems = false;
+            }
         }
     }
 
-    private Task OnRequestedOrderSearchKeyUp(KeyboardEventArgs e)
+    private Task OnRequestedOrderSearchKeyDownAsync(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
+        if (e.Key == "Escape")
         {
-            return SearchRequestedOrderItemsAsync();
+            ++_requestedOrderSearchGeneration;
+            _requestedOrderSearchResults = [];
+            _isSearchingRequestedOrderItems = false;
+            return Task.CompletedTask;
         }
 
-        return Task.CompletedTask;
+        if (e.Key != "Enter")
+        {
+            return Task.CompletedTask;
+        }
+
+        // Enter on a settled result list adds the top match; otherwise it searches now.
+        var (query, _) = ParseRequestedOrderSearch(_requestedOrderSearchQuery);
+        if (!_isSearchingRequestedOrderItems &&
+            _requestedOrderSearchResults.Count > 0 &&
+            string.Equals(_requestedOrderSearchResultsQuery, query, StringComparison.OrdinalIgnoreCase))
+        {
+            AddRequestedOrderOutput(_requestedOrderSearchResults[0]);
+            return Task.CompletedTask;
+        }
+
+        return SearchRequestedOrderItemsAsync();
     }
+
+    private void UpdateRequestedOrderAddQuantity(int quantity) =>
+        _requestedOrderAddQuantity = Math.Clamp(quantity, 1, 9999);
 
     private void AddRequestedOrderOutput(GarlandSearchResult result)
     {
+        var (_, typedQuantity) = ParseRequestedOrderSearch(_requestedOrderSearchQuery);
+        var quantity = Math.Clamp(typedQuantity ?? _requestedOrderAddQuantity, 1, 9999);
         var existing = _requestedOrderOutputs.FirstOrDefault(output => output.ItemId == result.Id);
         if (existing != null)
         {
-            existing.Quantity = Math.Min(9999, existing.Quantity + 1);
+            existing.Quantity = Math.Min(9999, existing.Quantity + quantity);
         }
         else
         {
@@ -68,12 +209,15 @@ public partial class TradeOrders
             {
                 ItemId = result.Id,
                 Name = result.Object.Name,
-                Quantity = 1
+                Quantity = quantity
             });
         }
 
+        ++_requestedOrderSearchGeneration;
         _requestedOrderSearchQuery = string.Empty;
         _requestedOrderSearchResults = [];
+        _isSearchingRequestedOrderItems = false;
+        _requestedOrderAddQuantity = 1;
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
     }
 
@@ -101,80 +245,207 @@ public partial class TradeOrders
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
     }
 
-    private async Task SearchSelectedOrderOutputItemsAsync()
+    private int _selectedOrderOutputSearchGeneration;
+    private int _selectedOrderOutputAddQuantity = 1;
+    private string? _selectedOrderOutputSearchResultsQuery;
+
+    private async Task OnSelectedOrderOutputSearchChangedAsync(string? value)
     {
-        if (string.IsNullOrWhiteSpace(_selectedOrderOutputSearchQuery) || _isSearchingSelectedOrderOutputs)
+        _selectedOrderOutputSearchQuery = value ?? string.Empty;
+        var generation = ++_selectedOrderOutputSearchGeneration;
+        var (query, quantity) = ParseRequestedOrderSearch(_selectedOrderOutputSearchQuery);
+        if (quantity is { } typedQuantity)
+        {
+            _selectedOrderOutputAddQuantity = typedQuantity;
+        }
+        if (query.Length < RequestedOrderSearchMinimumLength)
+        {
+            _selectedOrderOutputSearchResults = [];
+            _isSearchingSelectedOrderOutputs = false;
+            return;
+        }
+
+        await Task.Delay(RequestedOrderSearchDebounceMilliseconds);
+        if (generation != _selectedOrderOutputSearchGeneration || _isDisposed)
         {
             return;
         }
 
-        _isSearchingSelectedOrderOutputs = true;
-        _selectedOrderOutputSearchResults = [];
+        await RunSelectedOrderOutputSearchAsync(query, generation);
+    }
 
+    private Task SearchSelectedOrderOutputItemsAsync()
+    {
+        var (query, _) = ParseRequestedOrderSearch(_selectedOrderOutputSearchQuery);
+        return string.IsNullOrWhiteSpace(query)
+            ? Task.CompletedTask
+            : RunSelectedOrderOutputSearchAsync(query, ++_selectedOrderOutputSearchGeneration);
+    }
+
+    private async Task RunSelectedOrderOutputSearchAsync(string query, int generation)
+    {
+        _isSearchingSelectedOrderOutputs = true;
         try
         {
-            _selectedOrderOutputSearchResults = (await GarlandService.SearchAsync(_selectedOrderOutputSearchQuery))
+            var results = (await GarlandService.SearchAsync(query))
                 .Where(result => result.Id > 0 && !string.IsNullOrWhiteSpace(result.Object.Name))
                 .Take(8)
                 .ToList();
+            if (generation == _selectedOrderOutputSearchGeneration)
+            {
+                _selectedOrderOutputSearchResults = results;
+                _selectedOrderOutputSearchResultsQuery = query;
+            }
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+            if (generation == _selectedOrderOutputSearchGeneration)
+            {
+                Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+            }
         }
         finally
         {
-            _isSearchingSelectedOrderOutputs = false;
+            if (generation == _selectedOrderOutputSearchGeneration)
+            {
+                _isSearchingSelectedOrderOutputs = false;
+            }
         }
     }
 
-    private Task OnSelectedOrderOutputSearchKeyUp(KeyboardEventArgs e)
+    private Task OnSelectedOrderOutputSearchKeyDownAsync(KeyboardEventArgs e)
     {
-        return e.Key == "Enter"
-            ? SearchSelectedOrderOutputItemsAsync()
-            : Task.CompletedTask;
+        if (e.Key == "Escape")
+        {
+            ++_selectedOrderOutputSearchGeneration;
+            _selectedOrderOutputSearchResults = [];
+            _isSearchingSelectedOrderOutputs = false;
+            return Task.CompletedTask;
+        }
+
+        if (e.Key != "Enter")
+        {
+            return Task.CompletedTask;
+        }
+
+        // Enter on a settled result list adds the top match; otherwise it searches now.
+        var (query, _) = ParseRequestedOrderSearch(_selectedOrderOutputSearchQuery);
+        if (!_isSearchingSelectedOrderOutputs &&
+            _selectedOrderOutputSearchResults.Count > 0 &&
+            string.Equals(_selectedOrderOutputSearchResultsQuery, query, StringComparison.OrdinalIgnoreCase))
+        {
+            AddSelectedOrderOutput(_selectedOrderOutputSearchResults[0]);
+            return Task.CompletedTask;
+        }
+
+        return SearchSelectedOrderOutputItemsAsync();
     }
+
+    private void UpdateSelectedOrderOutputAddQuantity(int quantity) =>
+        _selectedOrderOutputAddQuantity = TradeRequestedOrderEditorMapper.ClampQuantity(quantity);
 
     private void AddSelectedOrderOutput(GarlandSearchResult result)
     {
-        var existing = _selectedOrderOutputEditors.FirstOrDefault(output => output.ItemId == result.Id && !output.MustBeHq);
-        if (existing != null)
+        var (_, typedQuantity) = ParseRequestedOrderSearch(_selectedOrderOutputSearchQuery);
+        var quantity = TradeRequestedOrderEditorMapper.ClampQuantity(typedQuantity ?? _selectedOrderOutputAddQuantity);
+        var previousOutputs = TradeRequestedOrderEditorMapper.ToOutputs(_selectedOrderOutputEditors);
+        var existingIndex = _selectedOrderOutputEditors.FindIndex(output => output.ItemId == result.Id && !output.MustBeHq);
+        if (existingIndex >= 0)
         {
-            ReplaceSelectedOrderOutput(existing, existing with
+            var existing = _selectedOrderOutputEditors[existingIndex];
+            _selectedOrderOutputEditors[existingIndex] = existing with
             {
-                Quantity = TradeRequestedOrderEditorMapper.ClampQuantity(existing.Quantity + 1)
-            });
+                Quantity = TradeRequestedOrderEditorMapper.ClampQuantity(existing.Quantity + quantity)
+            };
         }
         else
         {
             _selectedOrderOutputEditors.Add(new TradeRequestedOrderOutputEditorRow(
                 result.Id,
                 result.Object.Name,
-                1,
+                quantity,
                 MustBeHq: false,
                 EstimatedSaleValue: 0m));
         }
 
+        ++_selectedOrderOutputSearchGeneration;
         _selectedOrderOutputSearchQuery = string.Empty;
         _selectedOrderOutputSearchResults = [];
+        _isSearchingSelectedOrderOutputs = false;
+        _selectedOrderOutputAddQuantity = 1;
+        RefreshSelectedOrderSuggestedTitle(previousOutputs);
     }
 
-    private void UpdateSelectedOrderOutputQuantity(TradeRequestedOrderOutputEditorRow output, int quantity)
+    private void UpdateSelectedOrderOutputQuantityAt(int index, int quantity)
     {
-        ReplaceSelectedOrderOutput(output, output with
+        if (index < 0 || index >= _selectedOrderOutputEditors.Count)
+        {
+            return;
+        }
+
+        var previousOutputs = TradeRequestedOrderEditorMapper.ToOutputs(_selectedOrderOutputEditors);
+        _selectedOrderOutputEditors[index] = _selectedOrderOutputEditors[index] with
         {
             Quantity = TradeRequestedOrderEditorMapper.ClampQuantity(quantity)
-        });
+        };
+        RefreshSelectedOrderSuggestedTitle(previousOutputs);
     }
 
-    private void UpdateSelectedOrderOutputHq(TradeRequestedOrderOutputEditorRow output, bool mustBeHq)
+    private void UpdateSelectedOrderOutputHqAt(int index, bool mustBeHq)
     {
-        ReplaceSelectedOrderOutput(output, output with { MustBeHq = mustBeHq });
+        if (index < 0 || index >= _selectedOrderOutputEditors.Count)
+        {
+            return;
+        }
+
+        _selectedOrderOutputEditors[index] = _selectedOrderOutputEditors[index] with { MustBeHq = mustBeHq };
     }
 
-    private void RemoveSelectedOrderOutput(TradeRequestedOrderOutputEditorRow output)
+    // Removes by row position, not record value: rows are value-equal records,
+    // so List.Remove(row) can hit a different identical row.
+    private void RemoveSelectedOrderOutputAt(int index)
     {
-        _selectedOrderOutputEditors.Remove(output);
+        if (index < 0 || index >= _selectedOrderOutputEditors.Count)
+        {
+            return;
+        }
+
+        var previousOutputs = TradeRequestedOrderEditorMapper.ToOutputs(_selectedOrderOutputEditors);
+        _selectedOrderOutputEditors.RemoveAt(index);
+        RefreshSelectedOrderSuggestedTitle(previousOutputs);
+    }
+
+    /// <summary>
+    /// Keeps the selected order title in step with its outputs while the title
+    /// still equals the suggestion for the previous outputs (or for the saved
+    /// order's outputs, which covers remove-last-then-add). An empty output
+    /// list leaves the title alone.
+    /// </summary>
+    private void RefreshSelectedOrderSuggestedTitle(IReadOnlyList<TradeRequestedOrderOutput> previousOutputs)
+    {
+        if (_selectedOrder == null || HasCanonicalCommission || _selectedOrderOutputEditors.Count == 0)
+        {
+            return;
+        }
+
+        var currentTitle = _detailTitle.Trim();
+        var savedOutputs = TradeRequestedOrderEditorMapper.ToOutputs(
+            TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder));
+        var titleWasSuggested =
+            string.IsNullOrWhiteSpace(currentTitle) ||
+            string.Equals(currentTitle, TradeRequestedOrderWorkflow.CreateSuggestedTitle(previousOutputs), StringComparison.Ordinal) ||
+            string.Equals(currentTitle, TradeRequestedOrderWorkflow.CreateSuggestedTitle(savedOutputs), StringComparison.Ordinal);
+        if (!titleWasSuggested)
+        {
+            return;
+        }
+
+        var suggested = TradeRequestedOrderWorkflow.CreateSuggestedTitle(
+            TradeRequestedOrderEditorMapper.ToOutputs(_selectedOrderOutputEditors));
+        if (!string.IsNullOrWhiteSpace(suggested))
+        {
+            _detailTitle = suggested;
+        }
     }
 
     private void ResetSelectedOrderOutputEdits()
@@ -184,20 +455,14 @@ public partial class TradeOrders
             return;
         }
 
+        var previousOutputs = TradeRequestedOrderEditorMapper.ToOutputs(_selectedOrderOutputEditors);
         _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
+        ++_selectedOrderOutputSearchGeneration;
         _selectedOrderOutputSearchQuery = string.Empty;
         _selectedOrderOutputSearchResults = [];
-    }
-
-    private void ReplaceSelectedOrderOutput(
-        TradeRequestedOrderOutputEditorRow existing,
-        TradeRequestedOrderOutputEditorRow replacement)
-    {
-        var index = _selectedOrderOutputEditors.IndexOf(existing);
-        if (index >= 0)
-        {
-            _selectedOrderOutputEditors[index] = replacement;
-        }
+        _isSearchingSelectedOrderOutputs = false;
+        _selectedOrderOutputAddQuantity = 1;
+        RefreshSelectedOrderSuggestedTitle(previousOutputs);
     }
 
     private void RefreshRequestedOrderSuggestedTitle(bool force = false)
@@ -285,9 +550,7 @@ public partial class TradeOrders
 
             ResetNewOrderDraft();
             _showNewOrderPanel = false;
-            await LoadAsync();
-            if (!string.IsNullOrWhiteSpace(_loadError) ||
-                !SelectOrderAfterReload(pricingResult.UpdatedOrder.Id, "Trade order was saved, but it could not be loaded."))
+            if (!await SelectCreatedOrderAsync(pricingResult.UpdatedOrder.Id))
             {
                 return;
             }
@@ -333,7 +596,8 @@ public partial class TradeOrders
             orderToSave,
             new TradeOrderPricingWorkflowOptions(
                 ForceRefreshMarketData: false,
-                MaterialPricingPolicy: companyProfile.MaterialPricingPolicy));
+                MaterialPricingPolicy: companyProfile.MaterialPricingPolicy,
+                ReuseMatchingActivePlan: true));
         if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
         {
             if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
@@ -362,14 +626,42 @@ public partial class TradeOrders
         _pendingImport = null;
         _newOrderTitle = string.Empty;
         _newOrderCrafterId = null;
-        await LoadAsync();
-        if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectOrderAfterReload(pricingResult.UpdatedOrder.Id, "Trade order was saved, but it could not be loaded."))
+        if (!await SelectCreatedOrderAsync(pricingResult.UpdatedOrder.Id))
         {
             return;
         }
 
         Snackbar.Add("Trade order created and priced", Severity.Success);
+    }
+
+    /// <summary>
+    /// Adds a just-saved order to the board in place and selects it, matching the
+    /// in-place pattern of <see cref="SaveSelectedOrderAsync"/>. A full page reload
+    /// would repeat the hosted company/roster round trips and every local store read
+    /// only to pick up this one new record.
+    /// </summary>
+    private async Task<bool> SelectCreatedOrderAsync(Guid orderId)
+    {
+        const string missingMessage = "Trade order was saved, but it could not be loaded.";
+        var saved = await TradeOperationsPersistence.LoadOrderAsync(orderId);
+        if (saved == null)
+        {
+            await LoadAsync();
+            return string.IsNullOrWhiteSpace(_loadError) &&
+                SelectOrderAfterReload(orderId, missingMessage);
+        }
+
+        var localIndex = _orders.FindIndex(order => order.Id == orderId);
+        if (localIndex >= 0)
+        {
+            _orders[localIndex] = saved;
+        }
+        else
+        {
+            _orders.Add(saved);
+        }
+
+        return SelectOrderAfterReload(orderId, missingMessage);
     }
 
 }

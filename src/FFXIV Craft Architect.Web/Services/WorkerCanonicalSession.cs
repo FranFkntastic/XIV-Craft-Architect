@@ -146,6 +146,40 @@ internal sealed class WorkerCanonicalSession
         };
     }
 
+    /// <summary>
+    /// Adopts the identity of a snapshot exported from this exact session and sealed
+    /// to storage. Equivalent to restoring that snapshot with tracked identity, minus
+    /// the re-import: the live state already is the snapshot's content.
+    /// </summary>
+    public WorkerSessionDurablePatch AdoptStoredPlanRevision(
+        WorkerStoredPlanRevisionMutation revision)
+    {
+        _linkedPlanRevision = revision.LinkedOrderId is { } linkedOrderId
+            ? new LinkedPlanRevisionIdentity(
+                revision.PlanId,
+                revision.CreatedAt,
+                revision.ModifiedAt,
+                revision.SavedAt,
+                linkedOrderId)
+            : null;
+        _session.TrackSourceIdentity(revision.PlanId, revision.PlanName);
+        _session.MarkCurrentPersisted(
+            CraftSessionDirtyBucket.PlanCore,
+            CraftSessionDirtyBucket.MarketAnalysis,
+            CraftSessionDirtyBucket.Procurement,
+            CraftSessionDirtyBucket.SettingsContext);
+        return CreateDurablePatch(replaceSourceIdentity: true) with
+        {
+            ReplaceStoredRevision = true,
+            StoredPlanId = revision.PlanId,
+            StoredPlanName = revision.PlanName,
+            CreatedAt = revision.CreatedAt,
+            ModifiedAt = revision.ModifiedAt,
+            SavedAt = revision.SavedAt,
+            LinkedOrderId = revision.LinkedOrderId
+        };
+    }
+
     public void InvalidateLegacyProcurementRoute()
     {
         _legacyProcurementRouteJson = null;

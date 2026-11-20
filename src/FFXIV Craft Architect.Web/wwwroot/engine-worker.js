@@ -420,7 +420,9 @@ async function mutateDurableSession(host, requestMessage) {
         targetRevision,
         durableState,
         carrier.durablePatch ?? null,
-        current.trackStoredPlanIdentity);
+        carrier.durablePatch?.replaceStoredRevision === true
+            ? true
+            : current.trackStoredPlanIdentity);
     const committedAt = performance.now();
     console.info(
         `[EngineSession] ${command.commandKind} load=${Math.round(loadedAt - startedAt)}ms ` +
@@ -447,6 +449,7 @@ async function prepareDurableCommand(host, requestMessage) {
             // Only a caller observing the committed base or unpublished candidate may continue.
             // Older edits must not be replayed over a genuinely newer revision.
             const selfContained = ["replace", "mutate-project-items", "mutate-plan-identity",
+                "mutate-stored-plan-revision",
                 "mutate-active-context", "mutate-recipe-build", "mutate-acquisition"];
             if (![managedRevision, current.revision].includes(command.expectedRevision) ||
                 !selfContained.includes(command.commandKind)) {
@@ -509,6 +512,7 @@ function applyDurablePatch(storedPlan, patch) {
         patch?.replaceProcurementRoute === true ||
         patch?.replaceContext === true ||
         patch?.replaceSourceIdentity === true ||
+        patch?.replaceStoredRevision === true ||
         Number.isSafeInteger(patch?.procurementTravelTolerance);
     if (!patch || !hasReplacement) {
         throw new Error("Worker session durable patch is incomplete.");
@@ -557,6 +561,17 @@ function applyDurablePatch(storedPlan, patch) {
     if (patch.replaceSourceIdentity === true) {
         successor.sourcePlanId = patch.sourcePlanId ?? null;
         successor.sourcePlanName = patch.sourcePlanName ?? null;
+    }
+    if (patch.replaceStoredRevision === true) {
+        // The live session was exported and sealed as this stored revision; the
+        // durable record adopts that identity exactly as a replace would have.
+        successor.id = patch.storedPlanId ?? successor.id;
+        successor.name = patch.storedPlanName ?? successor.name;
+        successor.createdAt = patch.createdAt ?? successor.createdAt;
+        successor.modifiedAt = patch.modifiedAt ?? successor.modifiedAt;
+        successor.savedAt = patch.savedAt ?? successor.savedAt;
+        successor.linkedOrderId = patch.linkedOrderId ?? null;
+        successor.sourceOrderId = null;
     }
     return successor;
 }

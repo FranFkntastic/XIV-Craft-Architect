@@ -5,7 +5,12 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed record TradeOrderPricingWorkflowOptions(
     bool ForceRefreshMarketData,
-    TradeMaterialPricingPolicy? MaterialPricingPolicy = null);
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null,
+    // When the active Worker plan already has exactly the order's requested outputs,
+    // price it in place (keeping its recipe tree and acquisition choices) instead of
+    // rebuilding the tree from scratch. Market evidence is still reconciled so the
+    // order never prices from evidence older than the reusable-cache window.
+    bool ReuseMatchingActivePlan = false);
 
 public sealed record TradeOrderPricingWorkflowResult(
     TradeOrderPricingWorkflowStatus Status,
@@ -123,18 +128,28 @@ public sealed class TradeOrderPricingWorkflowService
                     "The order has no requested outputs to build.");
             }
 
-            var build = await _planLifecycle.BuildRecipeAsync(
-                new WorkerRecipeBuildRequest(
-                    projectItems,
-                    pricingScope.EffectiveDataCenter,
-                    pricingScope.Region,
-                    pricingScope.MarketFetchScope),
-                PlanDerivationDispatch.Deferred,
-                operation.Token,
-                workerOperation.OperationId);
-            if (!operation.IsCurrent || !build.Built)
+            var reusedActivePlan = options.ReuseMatchingActivePlan &&
+                await ActivePlanMatchesRootsAsync(roots, operation.Token);
+            if (reusedActivePlan)
             {
-                return CanceledResult(CaptureActivePlanFence(order.CraftPlanId));
+                _planLifecycle.Cancel();
+                operation.ReportStatus("Pricing the active craft plan...");
+            }
+            else
+            {
+                var build = await _planLifecycle.BuildRecipeAsync(
+                    new WorkerRecipeBuildRequest(
+                        projectItems,
+                        pricingScope.EffectiveDataCenter,
+                        pricingScope.Region,
+                        pricingScope.MarketFetchScope),
+                    PlanDerivationDispatch.Deferred,
+                    operation.Token,
+                    workerOperation.OperationId);
+                if (!operation.IsCurrent || !build.Built)
+                {
+                    return CanceledResult(CaptureActivePlanFence(order.CraftPlanId));
+                }
             }
 
             var orderToSave = TradeOrderWorkflow.CopyOrder(order);
@@ -162,7 +177,10 @@ public sealed class TradeOrderPricingWorkflowService
                 savedAt);
             return await PriceAndPersistAsync(
                 orderToSave,
-                new MarketRefreshRequest(options.ForceRefreshMarketData),
+                pricingScope,
+                reusedActivePlan && !options.ForceRefreshMarketData
+                    ? MarketRefreshRequest.ReconcilePublished
+                    : new MarketRefreshRequest(options.ForceRefreshMarketData),
                 operation,
                 workerOperation,
                 savedAt,
@@ -242,7 +260,8 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder? stagedOrder = null;
         try
         {
-            if (await LoadPricingScopeAsync(order, operation.Token) is not { IsValid: true })
+            var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+            if (pricingScope is not { IsValid: true })
             {
                 return PricingScopeRequired();
             }
@@ -265,6 +284,7 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation.OperationId);
             return await PriceAndPersistAsync(
                 orderToSave,
+                pricingScope,
                 new MarketRefreshRequest(options.ForceRefreshMarketData),
                 operation,
                 workerOperation,
@@ -331,7 +351,8 @@ public sealed class TradeOrderPricingWorkflowService
         WorkerSessionOperationLease? workerOperation = null;
         try
         {
-            if (await LoadPricingScopeAsync(order, operation.Token) is not { IsValid: true })
+            var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+            if (pricingScope is not { IsValid: true })
             {
                 return PricingScopeRequired();
             }
@@ -359,6 +380,7 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation.OperationId);
             return await PriceAndPersistAsync(
                 order,
+                pricingScope,
                 marketItemIdsToRefresh is null
                     ? MarketRefreshRequest.Skip
                     : new MarketRefreshRequest(marketItemIdsToRefresh),
@@ -422,6 +444,7 @@ public sealed class TradeOrderPricingWorkflowService
 
     private async Task<TradeOrderPricingWorkflowResult> PriceAndPersistAsync(
         TradeOrder order,
+        TradeCompanyPricingScope pricingScope,
         MarketRefreshRequest refresh,
         CancellableOperationLease operation,
         WorkerSessionOperationLease workerOperation,
@@ -430,11 +453,8 @@ public sealed class TradeOrderPricingWorkflowService
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
         IReadOnlyList<string>? initialWarnings = null)
     {
-        var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
-        if (pricingScope is not { IsValid: true })
-        {
-            return PricingScopeRequired();
-        }
+        // The caller resolved and validated the company pricing scope before taking
+        // the Worker operation; resolving it again would repeat a hosted round trip.
         var source = await _worker.GetTradeProjectionAsync(
             cancellationToken: operation.Token);
         if (source is not { HasPlan: true })
@@ -451,7 +471,8 @@ public sealed class TradeOrderPricingWorkflowService
                 refresh.ItemIds,
                 refresh.SkipRefresh,
                 UseCurrentSettingsContext: false,
-                CompanyPricingScope: pricingScope),
+                CompanyPricingScope: pricingScope,
+                ReconcileMarketEvidence: refresh.Reconcile),
             operation.Token,
             (message, progress) => operation.ReportStatus(
                 message,
@@ -522,6 +543,7 @@ public sealed class TradeOrderPricingWorkflowService
 
         if (!string.IsNullOrWhiteSpace(order.CraftPlanId))
         {
+            var preExportRevision = _projections.Shell.Revision;
             var snapshot = await _worker.ExportStoredPlanAsync(
                 order.CraftPlanId,
                 order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order),
@@ -545,12 +567,17 @@ public sealed class TradeOrderPricingWorkflowService
                     CaptureActivePlanFence(order.CraftPlanId));
             }
             order.CraftPlanSavedAtUtc = snapshot.SavedAt;
-            await _planLifecycle.ReplaceStoredPlanAsync(
+            // The snapshot was exported from this exact live session, so re-importing
+            // it (and re-fetching every projection) would only reproduce the same
+            // state. Stamp the sealed revision identity instead: the session and its
+            // durable record now track this SavedAt/LinkedOrderId, keeping
+            // CraftPlanSavedAtUtc and the active-plan fence aligned.
+            _planLifecycle.Cancel();
+            await _worker.AdoptStoredPlanRevisionAsync(
                 snapshot,
-                trackStoredPlanIdentity: true,
-                derivation: PlanDerivationDispatch.Deferred,
-                cancellationToken: operation.Token,
-                operationId: workerOperation.OperationId);
+                operation.Token,
+                workerOperation.OperationId,
+                preExportRevision);
         }
 
         var complete = source.MaterialQuote != null &&
@@ -586,6 +613,32 @@ public sealed class TradeOrderPricingWorkflowService
                 string.Equals(shell.PlanId, expectedPlanId, StringComparison.Ordinal))
             ? new WorkerPlanOwnershipFence(shell.PlanId, shell.Revision)
             : null;
+    }
+
+    private async Task<bool> ActivePlanMatchesRootsAsync(
+        IReadOnlyList<TradeOrderRootItemSnapshot> roots,
+        CancellationToken cancellationToken)
+    {
+        var active = await _worker.GetTradeProjectionAsync(
+            cancellationToken: cancellationToken);
+        if (active is not { HasPlan: true } || active.RootItems.Count == 0)
+        {
+            return false;
+        }
+
+        static string Key(int itemId, int quantity, bool mustBeHq) =>
+            $"{itemId}:{quantity}:{mustBeHq}";
+        var expected = roots
+            .Where(item => item.Quantity > 0)
+            .Select(item => Key(item.ItemId, item.Quantity, item.MustBeHq))
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+        var actual = active.RootItems
+            .Where(item => item.Quantity > 0)
+            .Select(item => Key(item.ItemId, item.Quantity, item.MustBeHq))
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToArray();
+        return expected.Length > 0 && expected.SequenceEqual(actual, StringComparer.Ordinal);
     }
 
     private async Task<TradeCompanyPricingScope?> LoadPricingScopeAsync(
@@ -639,11 +692,15 @@ public sealed class TradeOrderPricingWorkflowService
     {
         public static MarketRefreshRequest Skip { get; } = new();
 
+        public static MarketRefreshRequest ReconcilePublished { get; } =
+            new(forceRefresh: false) { Reconcile = true };
+
         private MarketRefreshRequest()
         {
             SkipRefresh = true;
             ItemIds = [];
         }
+
 
         public MarketRefreshRequest(bool forceRefresh)
         {
@@ -660,5 +717,6 @@ public sealed class TradeOrderPricingWorkflowService
         public bool ForceRefresh { get; }
         public IReadOnlyCollection<int> ItemIds { get; }
         public bool SkipRefresh { get; }
+        public bool Reconcile { get; private init; }
     }
 }

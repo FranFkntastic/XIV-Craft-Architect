@@ -570,6 +570,41 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         return shell;
     }
 
+    /// <summary>
+    /// Points the live session at a snapshot just exported from it and sealed to
+    /// storage (identity, saved-at, linked order) without re-importing the plan or
+    /// re-fetching projections; only the shell changes.
+    /// </summary>
+    public async Task<WorkerSessionShellProjection> AdoptStoredPlanRevisionAsync(
+        StoredPlan snapshot,
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null,
+        long? expectedRevision = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var result = await _engineHost.MutateStoredPlanRevisionAsync(
+            expectedRevision ?? _projections.Shell.Revision,
+            new WorkerStoredPlanRevisionMutation(
+                snapshot.Id,
+                snapshot.Name,
+                snapshot.CreatedAt,
+                snapshot.ModifiedAt,
+                snapshot.SavedAt,
+                snapshot.LinkedOrderId),
+            cancellationToken,
+            operationId);
+        if (!_projections.TryPublishMutation<WorkerSessionShellProjection>(
+                result,
+                out var shell) ||
+            shell is null)
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
+        }
+
+        return shell;
+    }
+
     public async Task<WorkerSessionShellProjection> MutateActiveContextAsync(
         WorkerActiveContextMutation mutation,
         CancellationToken cancellationToken = default,
@@ -715,32 +750,41 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 progress: cacheProgress,
                 ct: cancellationToken);
 
-        // Raw listings are intentionally read and released one item at a time.
-        // A regional Crasher plan spans hundreds of item/data-center pairs; loading
-        // all of those payloads into WASM at once can exhaust the browser heap.
+        // Raw listings are read and released in small item batches. A regional
+        // Crasher plan spans hundreds of item/data-center pairs; loading all of
+        // those payloads into WASM at once can exhaust the browser heap, while one
+        // item per pass pays a full IndexedDB round trip per material.
+        const int reconciliationBatchSize = 8;
         var analyses = new List<MarketItemAnalysis>(market.CandidateItems.Count);
         var shoppingPlans = new List<DetailedShoppingPlan>(market.CandidateItems.Count);
         var unavailableItemIds = new HashSet<int>();
-        for (var itemIndex = 0; itemIndex < market.CandidateItems.Count; itemIndex++)
+        for (var offset = 0; offset < market.CandidateItems.Count; offset += reconciliationBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var item = market.CandidateItems[itemIndex];
+            var batch = market.CandidateItems
+                .Skip(offset)
+                .Take(reconciliationBatchSize)
+                .ToArray();
+            var batchItemIds = batch
+                .Select(item => item.ItemId)
+                .ToHashSet();
+            var completed = Math.Min(offset + batch.Length, market.CandidateItems.Count);
             reportStatus?.Invoke(
-                $"Comparing prices and availability ({itemIndex + 1:N0} of {market.CandidateItems.Count:N0} materials)...",
-                50 + (30d * (itemIndex + 1) / market.CandidateItems.Count));
+                $"Comparing prices and availability ({completed:N0} of {market.CandidateItems.Count:N0} materials)...",
+                50 + (30d * completed / market.CandidateItems.Count));
             var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
                 new MarketEvidenceReconciliationRequest
                 {
-                    Items = [item],
+                    Items = batch,
                     PublishedAnalyses = request.ForceRefreshData
                         ? []
                         : market.ItemAnalyses
-                            .Where(candidate => candidate.ItemId == item.ItemId)
+                            .Where(candidate => batchItemIds.Contains(candidate.ItemId))
                             .ToArray(),
                     PublishedShoppingPlans = request.ForceRefreshData
                         ? []
                         : market.ShoppingPlans
-                            .Where(candidate => candidate.ItemId == item.ItemId)
+                            .Where(candidate => batchItemIds.Contains(candidate.ItemId))
                             .ToArray(),
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
@@ -775,7 +819,9 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             .Concat(shoppingPlans.Select(plan => plan.ItemId))
             .Distinct()
             .ToArray();
-        const int publicationBatchSize = 4;
+        // Compacted evidence is small; larger staging batches cut Worker round trips
+        // (each one re-validates the staged publication) without large messages.
+        const int publicationBatchSize = 24;
         for (var offset = 0; offset < publicationItemIds.Length; offset += publicationBatchSize)
         {
             var itemIds = publicationItemIds

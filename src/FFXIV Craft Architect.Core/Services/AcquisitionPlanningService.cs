@@ -783,10 +783,52 @@ public static class AcquisitionPlanningService
                 return estimate.Cost;
             }
 
-            return 0;
+            return GetSupportedWideSplitCost(shoppingPlan, node.Quantity, hqOnly);
         }
 
         return (hqOnly ? node.HqMarketPrice : node.MarketPrice) * node.Quantity;
+    }
+
+    /// <summary>
+    /// Bulk quantities often exceed what one or two worlds list, so no default-eligible
+    /// (single-world / compact) coverage exists and Craft won by default even when buying across
+    /// a few worlds is far cheaper. Let the supported, bounded wide split (at most the builder's
+    /// wide-world cap, real listings only) stand in for the market price in that case. Explicit
+    /// user selections are untouched: this only feeds the automatic Craft-vs-Buy comparison.
+    /// </summary>
+    private static decimal GetSupportedWideSplitCost(
+        DetailedShoppingPlan shoppingPlan,
+        int quantity,
+        bool hqOnly)
+    {
+        if (quantity <= 0 ||
+            shoppingPlan.QuantityNeeded <= 0 ||
+            !string.IsNullOrWhiteSpace(shoppingPlan.Error))
+        {
+            return 0;
+        }
+
+        var qualityPolicy = hqOnly
+            ? MarketCoverageQualityPolicy.HqOnly
+            : MarketCoverageQualityPolicy.NqOrHq;
+        var wideSplit = MarketCoverageSelection.GetCandidates(shoppingPlan.CoverageSet)
+            .Where(candidate => candidate.Kind == MarketCoverageKind.SupportedListings)
+            .Where(candidate => candidate.Tier == MarketCoverageTier.WideSplit)
+            .Where(candidate => candidate.QualityPolicy == qualityPolicy)
+            .Where(candidate => candidate.QuantityCovered >= shoppingPlan.QuantityNeeded)
+            .Where(candidate => candidate.ExactNeededCost > 0)
+            .OrderBy(candidate => candidate.ExactNeededCost)
+            .ThenBy(candidate => candidate.Friction.WorldCount)
+            .ThenBy(candidate => candidate.CashOutCost)
+            .FirstOrDefault();
+        if (wideSplit == null)
+        {
+            return 0;
+        }
+
+        return quantity == shoppingPlan.QuantityNeeded
+            ? wideSplit.ExactNeededCost
+            : wideSplit.ExactNeededCost * quantity / shoppingPlan.QuantityNeeded;
     }
 
     private static int GetSourceTieBreak(AcquisitionSource source)

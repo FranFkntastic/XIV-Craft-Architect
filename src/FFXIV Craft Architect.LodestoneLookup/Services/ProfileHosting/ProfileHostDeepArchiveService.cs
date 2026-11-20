@@ -68,28 +68,11 @@ public sealed class ProfileHostDeepArchiveService : BackgroundService
         var conflicts = 0;
         foreach (var profileId in await _store.LoadActiveProfileIdsAsync(ct))
         {
-            var candidates = await _store.LoadRetentionCandidatesAsync(profileId, cutoff, ct);
-            foreach (var candidate in candidates)
-            {
-                ct.ThrowIfCancellationRequested();
-                scanned++;
-                if (TradeOrderArchiveSummaryCodec.TryCreate(
-                        candidate.PayloadJson,
-                        candidate.ObjectId) == null)
-                {
-                    skippedUnarchived++;
-                    continue;
-                }
-
-                if (await _store.MoveOrderToDeepArchiveAsync(profileId, candidate, ct))
-                {
-                    deepArchived++;
-                }
-                else
-                {
-                    conflicts++;
-                }
-            }
+            var swept = await _store.SweepProfileOrdersToDeepArchiveAsync(profileId, cutoff, ct);
+            scanned += swept.Scanned;
+            deepArchived += swept.Moved;
+            skippedUnarchived += swept.SkippedUnarchived;
+            conflicts += swept.Conflicts;
         }
 
         return new ProfileHostDeepArchiveSweepResult(

@@ -223,6 +223,17 @@ public sealed class TradeOrderDeepArchivePage
         Array.Empty<TradeOrderDeepArchiveRecord>();
 }
 
+// Result of moving a profile's archived (completed/canceled) trade orders out of
+// live sync and into deep storage. Conflicts are orders that changed between the
+// scan and the move; they stay live and a later sweep can pick them up.
+public sealed class TradeOrderDeepArchiveSweepResponse
+{
+    public int Scanned { get; set; }
+    public int Moved { get; set; }
+    public int SkippedUnarchived { get; set; }
+    public int Conflicts { get; set; }
+}
+
 public sealed class ProfileHostProfileResponse
 {
     public string ProfileId { get; set; } = string.Empty;
