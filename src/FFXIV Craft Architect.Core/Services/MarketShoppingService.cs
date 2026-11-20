@@ -1136,7 +1136,12 @@ public class MarketShoppingService
                 }
 
                 coveragePurchases.AddRange(GenerateSplitPurchaseCandidates(plan, currentRoute, budget)
-                    .Where(split => split.Worlds.Count <= cap));
+                    .Where(split =>
+                        split.Worlds.Count <= cap &&
+                        split.Split is { Count: > 0 } parts &&
+                        parts.All(part =>
+                            part.Listings.Count > 0 &&
+                            part.Listings.Sum(listing => listing.Quantity) >= part.QuantityToBuy)));
             }
 
             return coveragePurchases
