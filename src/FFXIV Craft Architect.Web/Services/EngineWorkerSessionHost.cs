@@ -592,13 +592,53 @@ public static partial class ManagedHost
             throw new InvalidOperationException("Plan identity requires an id and name.");
         }
 
-        _canonicalSession.Session.TrackSourceIdentity(
+        var session = _canonicalSession.Session;
+        session.TrackSourceIdentity(
             mutation.PlanId.Trim(),
             mutation.PlanName.Trim());
+        var laborRateChanged = mutation.AcquisitionLaborGilPerSynth is { } laborRate &&
+            ApplyAcquisitionLaborRate(session, laborRate);
         return CompleteMutation(
             command.CommandKind,
             CaptureShellProjection,
-            _canonicalSession.CreateDurablePatch(replaceSourceIdentity: true));
+            _canonicalSession.CreateDurablePatch(
+                replacePlanJson: laborRateChanged,
+                replacePlanStateJson: laborRateChanged,
+                replaceProcurementRoute: laborRateChanged,
+                replaceSourceIdentity: true));
+    }
+
+    /// <summary>
+    /// Stamps the commission labor rate on the active plan and re-evaluates automatic
+    /// acquisition defaults with it. Operator-selected routes are never changed.
+    /// </summary>
+    private static bool ApplyAcquisitionLaborRate(CraftSessionState session, decimal requestedRate)
+    {
+        var rate = Math.Max(0m, requestedRate);
+        var planSessionVersion = session.PlanSessionVersion;
+        var stamp = session.CaptureVersionStamp();
+        var plan = session.ActivePlan;
+        if (plan is null || plan.AcquisitionLaborGilPerSynth == rate)
+        {
+            return false;
+        }
+
+        plan.AcquisitionLaborGilPerSynth = rate;
+        AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            plan,
+            session.BorrowMarketEvidence().ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>());
+        if (!session.TryReplaceActivePlanDecisions(
+                stamp,
+                plan,
+                planSessionVersion,
+                "commission labor rate changed"))
+        {
+            throw new InvalidOperationException(
+                "The plan changed before its commission labor rate could be applied.");
+        }
+
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        return true;
     }
 
     private static WorkerSessionResultEnvelope MutateStoredPlanRevision(
@@ -1749,6 +1789,13 @@ public static partial class ManagedHost
             }
         }
 
+        var outputPurchaseQuotes = request.IncludeOutputPurchaseQuotes
+            ? await CaptureOutputPurchaseQuotesAsync(
+                plan,
+                evidence.ShoppingPlans ?? [],
+                TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy))
+            : null;
+
         var rootItems = plan.RootItems
             .Select(node =>
             {
@@ -1802,7 +1849,78 @@ public static partial class ManagedHost
                 occurrence.Quantity,
                 occurrence.Source,
                 activeProcurementIds.Contains(occurrence.NodeId),
-                occurrence.SuppressedByNodeId != null)).ToArray());
+                occurrence.SuppressedByNodeId != null)).ToArray(),
+            outputPurchaseQuotes);
+    }
+
+    /// <summary>
+    /// Prices buying each commissioned output whole through the same executable whole-listing
+    /// quote the material route uses. Outputs are market-analysis candidates already, so this
+    /// reads existing evidence and never fetches.
+    /// </summary>
+    private static async Task<IReadOnlyList<WorkerOutputPurchaseQuote>> CaptureOutputPurchaseQuotesAsync(
+        CraftingPlan plan,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        TradeMaterialPricingPolicy policy)
+    {
+        var quotes = new List<WorkerOutputPurchaseQuote>();
+        var outputs = plan.RootItems
+            .Where(node => node.Quantity > 0)
+            .GroupBy(node => (node.ItemId, node.MustBeHq));
+        foreach (var output in outputs)
+        {
+            var node = output.First();
+            var quantity = output.Sum(item => item.Quantity);
+            var shoppingPlan = shoppingPlans.FirstOrDefault(candidate => candidate.ItemId == node.ItemId);
+            var listings = MarketPurchaseCostProjectionService.DescribeListings(
+                shoppingPlan,
+                quantity,
+                node.MustBeHq);
+            decimal? total = null;
+            var observedAtUtc = listings.ObservedAtUtc;
+            if (shoppingPlan is not null && listings.ListedQuantity >= quantity)
+            {
+                var demand = new MaterialAggregate
+                {
+                    ItemId = node.ItemId,
+                    Name = node.Name,
+                    IconId = node.IconId,
+                    TotalQuantity = quantity,
+                    RequiresHq = node.MustBeHq
+                };
+                var source = node.MustBeHq ? AcquisitionSource.MarketBuyHq : AcquisitionSource.MarketBuyNq;
+                var result = await new TradeMaterialQuoteService().PriceAsync(
+                    new MarketShoppingService(SessionMarketCache),
+                    [shoppingPlan],
+                    [demand],
+                    new Dictionary<(int ItemId, bool RequiresHq), AcquisitionSource>
+                    {
+                        [(node.ItemId, node.MustBeHq)] = source
+                    },
+                    policy,
+                    DateTime.UtcNow,
+                    []);
+                var line = result.Quote?.Lines.FirstOrDefault(candidate =>
+                    candidate.ItemId == node.ItemId && candidate.RequiresHq == node.MustBeHq);
+                if (result.IsComplete && line is { CashRequired: > 0 } && line.RequiredQuantity >= quantity)
+                {
+                    total = line.CashRequired;
+                    observedAtUtc = line.OldestEvidenceAtUtc ?? observedAtUtc;
+                }
+            }
+
+            quotes.Add(new WorkerOutputPurchaseQuote(
+                node.ItemId,
+                node.Name,
+                quantity,
+                node.MustBeHq,
+                total,
+                listings.ListedQuantity,
+                listings.ListingCount,
+                observedAtUtc));
+        }
+
+        return quotes;
     }
 
     private static IReadOnlyList<string> ResolveTradeRequestedDataCenters(
@@ -1873,7 +1991,7 @@ public static partial class ManagedHost
             filter,
             demand);
         var rows = snapshot.VisibleRows
-            .Select(row => ProjectAcquisitionRow(row, snapshot.CostContext, evidence))
+            .Select(row => ProjectAcquisitionRow(plan, row, snapshot.CostContext, evidence))
             .ToArray();
         var unavailableItems = evidence.UnavailableMarketItemIds
             .Select(itemId =>
@@ -1900,10 +2018,12 @@ public static partial class ManagedHost
     }
 
     private static WorkerAcquisitionRowProjection ProjectAcquisitionRow(
+        CraftingPlan plan,
         CoreDecisionRow row,
         AcquisitionCostContext costContext,
         CraftSessionMarketEvidence evidence)
     {
+        var occurrences = GetActiveOccurrences(plan, row.ItemId, row.MustBeHq);
         var availableSources = AcquisitionPlanningService.GetAvailableSources(row.Node);
         if (!availableSources.Contains(row.Source))
         {
@@ -1944,12 +2064,69 @@ public static partial class ManagedHost
             row.UnitPrice,
             hasCalculatedCost ? calculatedTotalCost : 0m,
             availableSources,
-            BuildAcquisitionOptions(row, costContext));
+            BuildAcquisitionOptions(row, costContext, occurrences),
+            GetDefaultSource(plan, row, costContext),
+            occurrences
+                .Where(node => node.Source == AcquisitionSource.Craft && node.Children.Count > 0)
+                .Sum(RecipeResolutionService.GetPlannedSynthCount),
+            costContext.LaborGilPerSynth);
+    }
+
+    /// <summary>
+    /// The route automatic defaults would pick for this item. Commissioned outputs stay
+    /// crafted under a labor rate, matching how reconciliation treats them.
+    /// </summary>
+    private static AcquisitionSource? GetDefaultSource(
+        CraftingPlan plan,
+        CoreDecisionRow row,
+        AcquisitionCostContext costContext)
+    {
+        if (costContext.IsCommission &&
+            row.HasChildren &&
+            row.CanCraft &&
+            plan.RootItems.Any(root => root.ItemId == row.ItemId && root.MustBeHq == row.MustBeHq))
+        {
+            return AcquisitionSource.Craft;
+        }
+
+        return AcquisitionPlanningService.DetermineCheapestAcquisitionSource(row.Node, costContext);
+    }
+
+    /// <summary>
+    /// Plan occurrences of an item that the active route reaches: every ancestor is crafted.
+    /// These are the nodes whose synths a commission pays for.
+    /// </summary>
+    private static IReadOnlyList<PlanNode> GetActiveOccurrences(CraftingPlan plan, int itemId, bool mustBeHq)
+    {
+        var matches = new List<PlanNode>();
+        var pending = new Stack<PlanNode>(plan.RootItems);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (node.ItemId == itemId && node.MustBeHq == mustBeHq)
+            {
+                matches.Add(node);
+                continue;
+            }
+
+            if (node.Source != AcquisitionSource.Craft)
+            {
+                continue;
+            }
+
+            foreach (var child in node.Children)
+            {
+                pending.Push(child);
+            }
+        }
+
+        return matches;
     }
 
     private static IReadOnlyList<WorkerAcquisitionOptionProjection> BuildAcquisitionOptions(
         CoreDecisionRow row,
-        AcquisitionCostContext costContext)
+        AcquisitionCostContext costContext,
+        IReadOnlyList<PlanNode> occurrences)
     {
         var options = new List<WorkerAcquisitionOptionProjection>();
         if (row.HasChildren && row.CanCraft)
@@ -1959,6 +2136,32 @@ public static partial class ManagedHost
                 AcquisitionSource.Craft,
                 costContext,
                 out var cost);
+            // Labor is counted per occurrence the same way payment counts synths; materials
+            // are the evaluated craft cost with its labor term removed.
+            var synthCount = 0;
+            decimal? materialCost = null;
+            decimal? laborCost = null;
+            if (hasCost && costContext.IsCommission)
+            {
+                var primarySynths = AcquisitionPlanningService.GetCraftSubtreeSynthCount(row.Node);
+                var primaryCraftCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+                    row.Node,
+                    AcquisitionSource.Craft,
+                    costContext,
+                    out var primaryCost)
+                    ? primaryCost
+                    : 0m;
+                var primaryMaterials = Math.Max(0m, primaryCraftCost - costContext.LaborGilPerSynth * primarySynths);
+                materialCost = row.Node.Quantity > 0
+                    ? Math.Ceiling(primaryMaterials * row.TotalQuantity / row.Node.Quantity)
+                    : primaryMaterials;
+                synthCount = occurrences.Count > 0
+                    ? occurrences.Sum(AcquisitionPlanningService.GetCraftSubtreeSynthCount)
+                    : primarySynths;
+                laborCost = costContext.LaborGilPerSynth * synthCount;
+                cost = materialCost.Value + laborCost.Value;
+            }
+
             options.Add(new WorkerAcquisitionOptionProjection(
                 AcquisitionSource.Craft,
                 "Craft",
@@ -1966,7 +2169,10 @@ public static partial class ManagedHost
                 hasCost ? $"{cost:N0}g" : "-",
                 IsAvailable: true,
                 IsProjectedUnsupported: false,
-                TotalCost: hasCost ? cost : null));
+                TotalCost: hasCost ? cost : null,
+                MaterialCost: materialCost,
+                LaborCost: laborCost,
+                SynthCount: synthCount));
         }
 
         if (row.CanBuyFromMarket && !row.MustBeHq)
@@ -2049,6 +2255,12 @@ public static partial class ManagedHost
             source,
             costContext,
             out var cost);
+        var listings = MarketPurchaseCostProjectionService.DescribeListings(
+            marketPlan,
+            row.TotalQuantity,
+            hqOnly);
+        // A commission only buys from real listings in its pricing scope.
+        var lacksScopeListings = costContext.IsCommission && marketPlan is null;
         var detail = estimate.IsUnsupportedProjection
             ? "Projected cost; current search scope cannot fill this purchase."
             : estimate.World is not null
@@ -2063,9 +2275,13 @@ public static partial class ManagedHost
             name,
             detail,
             hasCost ? $"{cost:N0}g" : "-",
-            hasCost && !estimate.IsUnsupportedProjection,
+            hasCost && !estimate.IsUnsupportedProjection && !lacksScopeListings,
             estimate.IsUnsupportedProjection,
-            TotalCost: hasCost ? cost : null);
+            TotalCost: hasCost ? cost : null,
+            RequiredQuantity: marketPlan is null ? 0 : row.TotalQuantity,
+            ListedQuantity: listings.ListedQuantity,
+            ListingCount: listings.ListingCount,
+            ObservedAtUtc: listings.ObservedAtUtc);
     }
 
     private static IReadOnlyList<CommissionPayrollInputLine> ApplyOnHandReferenceValues(

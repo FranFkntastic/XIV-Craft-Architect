@@ -489,7 +489,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public async Task<WorkerTradeProjection?> GetTradeProjectionAsync(
         bool includeCraftLabor = false,
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool includeOutputPurchaseQuotes = false)
     {
         if (!IsEnabled)
         {
@@ -500,7 +501,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             _projections.Shell.Revision,
             includeCraftLabor,
             materialPricingPolicy,
-            cancellationToken);
+            cancellationToken,
+            includeOutputPurchaseQuotes);
         if (string.Equals(
                 result.RejectionCode,
                 "stale-revision",
@@ -511,7 +513,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 _projections.Shell.Revision,
                 includeCraftLabor,
                 materialPricingPolicy,
-                cancellationToken);
+                cancellationToken,
+                includeOutputPurchaseQuotes);
         }
 
         if (!result.Accepted)
@@ -550,11 +553,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         string planId,
         string planName,
         CancellationToken cancellationToken = default,
-        Guid? operationId = null)
+        Guid? operationId = null,
+        decimal? acquisitionLaborGilPerSynth = null)
     {
         var result = await _engineHost.MutatePlanIdentityAsync(
             _projections.Shell.Revision,
-            new WorkerPlanIdentityMutation(planId, planName),
+            new WorkerPlanIdentityMutation(planId, planName, acquisitionLaborGilPerSynth),
             cancellationToken,
             operationId);
         if (!_projections.TryPublishMutation<WorkerSessionShellProjection>(

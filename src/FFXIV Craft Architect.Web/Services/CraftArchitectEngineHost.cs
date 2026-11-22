@@ -360,11 +360,12 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         long expectedRevision,
         bool includeCraftLabor,
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        bool includeOutputPurchaseQuotes = false) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.TradeProjection,
             expectedRevision,
-            new WorkerTradeProjectionRequest(includeCraftLabor, materialPricingPolicy),
+            new WorkerTradeProjectionRequest(includeCraftLabor, materialPricingPolicy, includeOutputPurchaseQuotes),
             includeCraftLabor
                 ? EngineCommandPriority.UserRequestedDerivation
                 : EngineCommandPriority.Interactive,
