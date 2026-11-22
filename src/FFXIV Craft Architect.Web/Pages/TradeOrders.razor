@@ -1059,31 +1059,7 @@
                                     </div>
                                     @if (!IsCommissionPublished && GetOutputPurchaseQuotes() is { Count: > 0 } outputPurchaseQuotes)
                                     {
-                                        <section class="trade-orders-payment-table trade-orders-buy-instead" aria-label="Cost to buy instead">
-                                            <div class="trade-orders-payment-table-title">
-                                                <span>Cost to buy instead</span>
-                                                <span>@FormatOutputPurchaseContext(outputPurchaseQuotes)</span>
-                                            </div>
-                                            @foreach (var quote in outputPurchaseQuotes)
-                                            {
-                                                <div class="trade-orders-buy-instead-row" @key="@($"buy:{quote.ItemId}:{quote.MustBeHq}")">
-                                                    <span>@quote.ItemName ×@TradeDisplayFormatter.FormatQuantity(quote.Quantity)</span>
-                                                    @if (quote.IsShort)
-                                                    {
-                                                        <span class="is-short">⚠ Only @TradeDisplayFormatter.FormatQuantity(quote.ListedQuantity) of @TradeDisplayFormatter.FormatQuantity(quote.Quantity) listed</span>
-                                                    }
-                                                    else
-                                                    {
-                                                        <span>@(quote.ListingCount > 0 ? $"{quote.ListingCount:N0} listings" : string.Empty)</span>
-                                                    }
-                                                    <strong>@(quote.TotalCost is { } buyTotal ? FormatGilShort(buyTotal) : "—")</strong>
-                                                    <button type="button"
-                                                            @onclick="@(() => OpenMarketAnalysisForItemAsync(quote.ItemId))">
-                                                        Market
-                                                    </button>
-                                                </div>
-                                            }
-                                        </section>
+                                        @RenderBuyInsteadBox(outputPurchaseQuotes)
                                     }
                                     <div class="trade-orders-payment-heading">
                                         <div>
@@ -1644,6 +1620,13 @@
                                         </MudButton>
                                     }
                                 </section>
+                                @* Private drafts have no center payment breakdown; their payment lives here. *@
+                                @if (!IsCommissionPublished &&
+                                     BuildSelectedOrderCenterOverview() is null &&
+                                     GetOutputPurchaseQuotes() is { Count: > 0 } planOutputPurchaseQuotes)
+                                {
+                                    @RenderBuyInsteadBox(planOutputPurchaseQuotes)
+                                }
                                 <MudText Typo="Typo.caption">Quote region: @(string.IsNullOrWhiteSpace(_selectedOrder.SourceSnapshot.Region) ? "Not recorded" : _selectedOrder.SourceSnapshot.Region)</MudText>
                                 @if (_companyProfile?.CommissionPricingScope is not { IsValid: true })
                                 {
@@ -2380,6 +2363,32 @@
 </div>
 
 @code {
+    private RenderFragment<IReadOnlyList<WorkerOutputPurchaseQuote>> RenderBuyInsteadBox => outputPurchaseQuotes => @<section class="trade-orders-payment-table trade-orders-buy-instead" aria-label="Cost to buy instead">
+        <div class="trade-orders-payment-table-title">
+            <span>Cost to buy instead</span>
+            <span>@FormatOutputPurchaseContext(outputPurchaseQuotes)</span>
+        </div>
+        @foreach (var quote in outputPurchaseQuotes)
+        {
+            <div class="trade-orders-buy-instead-row" @key="@($"buy:{quote.ItemId}:{quote.MustBeHq}")">
+                <span>@quote.ItemName ×@TradeDisplayFormatter.FormatQuantity(quote.Quantity)</span>
+                @if (quote.IsShort)
+                {
+                    <span class="is-short">⚠ Only @TradeDisplayFormatter.FormatQuantity(quote.ListedQuantity) of @TradeDisplayFormatter.FormatQuantity(quote.Quantity) listed</span>
+                }
+                else
+                {
+                    <span>@(quote.ListingCount > 0 ? $"{quote.ListingCount:N0} listings" : string.Empty)</span>
+                }
+                <strong>@(quote.TotalCost is { } buyTotal ? FormatGilShort(buyTotal) : "—")</strong>
+                <button type="button"
+                        @onclick="@(() => OpenMarketAnalysisForItemAsync(quote.ItemId))">
+                    Market
+                </button>
+            </div>
+        }
+    </section>;
+
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
         @{
             var routeOverride = GetProcurementRouteOverrideDelta(row);
