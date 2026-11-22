@@ -490,7 +490,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         bool includeCraftLabor = false,
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken cancellationToken = default,
-        bool includeOutputPurchaseQuotes = false)
+        bool includeOutputPurchaseQuotes = false,
+        WorkerRoutePaymentBasis? routePaymentBasis = null)
     {
         if (!IsEnabled)
         {
@@ -502,7 +503,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             includeCraftLabor,
             materialPricingPolicy,
             cancellationToken,
-            includeOutputPurchaseQuotes);
+            includeOutputPurchaseQuotes,
+            routePaymentBasis);
         if (string.Equals(
                 result.RejectionCode,
                 "stale-revision",
@@ -514,7 +516,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 includeCraftLabor,
                 materialPricingPolicy,
                 cancellationToken,
-                includeOutputPurchaseQuotes);
+                includeOutputPurchaseQuotes,
+                routePaymentBasis);
         }
 
         if (!result.Accepted)

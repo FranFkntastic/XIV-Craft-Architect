@@ -622,12 +622,14 @@ public partial class TradeOrders
         _isRefreshingLiveProcurement = true;
         try
         {
-            // Draft orders also show what buying each output whole would cost; the Worker
-            // prices that from evidence the plan already loaded.
+            // Draft orders also show what buying each output whole would cost, and price each
+            // precraft route as its effect on the order payment; the Worker prices both from
+            // evidence the plan already loaded.
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
                 materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
                 cancellationToken: cancellationToken,
-                includeOutputPurchaseQuotes: !IsCommissionPublished);
+                includeOutputPurchaseQuotes: !IsCommissionPublished,
+                routePaymentBasis: CreateRoutePaymentBasis());
             if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;
@@ -687,7 +689,41 @@ public partial class TradeOrders
             WorkerProjections.Shell.PlanId ?? string.Empty,
             WorkerProjections.Shell.Revision,
             TradeMaterialPricingPolicyNormalizer.Fingerprint(
-                _companyProfile?.MaterialPricingPolicy));
+                _companyProfile?.MaterialPricingPolicy),
+            FingerprintRoutePaymentBasis(CreateRoutePaymentBasis()));
+    }
+
+    /// <summary>
+    /// Payment terms precraft route options are priced against. Published commissions keep
+    /// their existing picker figures, so they get none.
+    /// </summary>
+    private WorkerRoutePaymentBasis? CreateRoutePaymentBasis()
+    {
+        if (_selectedOrder == null || IsCommissionPublished)
+        {
+            return null;
+        }
+
+        var workPackage = GetSelectedOrderPricingWorkPackage();
+        return new WorkerRoutePaymentBasis(
+            TradeOrderWorkflow.ResolvePaymentPolicy(workPackage, _companyProfile?.PaymentPolicy),
+            GetSelectedOrderResponsibilityProjection()?.Responsibilities ?? []);
+    }
+
+    private static string FingerprintRoutePaymentBasis(WorkerRoutePaymentBasis? basis)
+    {
+        if (basis == null)
+        {
+            return string.Empty;
+        }
+
+        var responsibilities = (basis.Responsibilities ?? [])
+            .Where(line => line.Responsibility != CommissionMaterialResponsibility.Crafter)
+            .Select(line => $"{line.ItemId}:{line.RequiresHq}:{line.Responsibility}")
+            .Order(StringComparer.Ordinal);
+        return string.Join(
+            "|",
+            responsibilities.Prepend($"{basis.PaymentPolicy.ActiveContract}:{basis.PaymentPolicy.LaborGilPerSynth}"));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)

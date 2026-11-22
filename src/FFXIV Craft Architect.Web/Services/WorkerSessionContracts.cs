@@ -151,7 +151,17 @@ public sealed record WorkerSessionOperationProjection(
 public sealed record WorkerTradeProjectionRequest(
     bool IncludeCraftLabor = false,
     TradeMaterialPricingPolicy? MaterialPricingPolicy = null,
-    bool IncludeOutputPurchaseQuotes = false);
+    bool IncludeOutputPurchaseQuotes = false,
+    WorkerRoutePaymentBasis? RoutePaymentBasis = null);
+
+/// <summary>
+/// The order's payment terms for pricing precraft route choices. When present on a plan with a
+/// labor rate, each precraft option total becomes its marginal effect on the order payment,
+/// priced by the same quote, labor and payment path the order uses.
+/// </summary>
+public sealed record WorkerRoutePaymentBasis(
+    TradePaymentPolicy PaymentPolicy,
+    IReadOnlyList<TradePayrollResponsibilityLine>? Responsibilities);
 
 public sealed record WorkerTradeProjection(
     long Revision,
