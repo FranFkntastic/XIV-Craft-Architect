@@ -1,0 +1,268 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<button type="button"
+        @ref="_trigger"
+        class="@TriggerClassName"
+        aria-haspopup="listbox"
+        aria-expanded="@(_open ? "true" : "false")"
+        aria-controls="@(_open ? _menuId : null)"
+        aria-label="@AriaLabel"
+        disabled="@Disabled"
+        @onclick="ToggleAsync"
+        @onkeydown="OnTriggerKeyDownAsync">
+    <span class="listbox-picker-value">@SelectedLabel</span>
+    <i aria-hidden="true">▾</i>
+</button>
+@if (_open)
+{
+    <div @ref="_menu"
+         id="@_menuId"
+         class="listbox-picker-menu"
+         role="listbox"
+         tabindex="-1"
+         aria-label="@AriaLabel"
+         aria-activedescendant="@(_activeIndex >= 0 ? OptionId(_activeIndex) : null)"
+         @onkeydown="OnMenuKeyDownAsync">
+        @for (var index = 0; index < Items.Count; index++)
+        {
+            var item = Items[index];
+            var itemIndex = index;
+            var isSelected = string.Equals(item.Value, Value, StringComparison.Ordinal);
+            <div id="@OptionId(itemIndex)"
+                 class="@OptionClassName(itemIndex, item)"
+                 role="option"
+                 aria-selected="@(isSelected ? "true" : "false")"
+                 aria-disabled="@(item.Disabled ? "true" : null)"
+                 @onmousemove="() => _activeIndex = itemIndex"
+                 @onclick="() => SelectAsync(itemIndex)">
+                <i aria-hidden="true">@(isSelected ? "✓" : string.Empty)</i>
+                <span>
+                    <b>@item.Label</b>
+                    @if (!string.IsNullOrWhiteSpace(item.Detail))
+                    {
+                        <small class="@(item.IsWarning ? "is-warning" : null)">@item.Detail</small>
+                    }
+                </span>
+                <em>@item.Amount</em>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private readonly string _menuId = $"listbox-picker-{Guid.NewGuid():N}";
+    private ElementReference _trigger;
+    private ElementReference _menu;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<ListboxPicker>? _selfReference;
+    private bool _open;
+    private bool _attachPending;
+    private bool _restoreFocusPending;
+    private int _activeIndex = -1;
+
+    [Parameter, EditorRequired] public IReadOnlyList<ListboxPickerItem> Items { get; set; } = [];
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter, EditorRequired] public string AriaLabel { get; set; } = string.Empty;
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? TriggerClass { get; set; }
+
+    private string SelectedLabel =>
+        Items.FirstOrDefault(item => string.Equals(item.Value, Value, StringComparison.Ordinal))?.Label
+        ?? Value
+        ?? string.Empty;
+
+    private string TriggerClassName => string.IsNullOrWhiteSpace(TriggerClass)
+        ? "listbox-picker-trigger"
+        : $"listbox-picker-trigger {TriggerClass}";
+
+    private string OptionId(int index) => $"{_menuId}-option-{index}";
+
+    private string OptionClassName(int index, ListboxPickerItem item) =>
+        (index == _activeIndex, item.Disabled) switch
+        {
+            (true, true) => "listbox-picker-option is-active is-disabled",
+            (true, false) => "listbox-picker-option is-active",
+            (false, true) => "listbox-picker-option is-disabled",
+            _ => "listbox-picker-option"
+        };
+
+    private Task ToggleAsync() => _open ? CloseAsync(restoreFocus: true) : OpenAsync();
+
+    private Task OpenAsync()
+    {
+        if (Disabled || Items.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var selected = IndexOfValue(Value);
+        _activeIndex = selected >= 0 ? selected : 0;
+        _open = true;
+        _attachPending = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task CloseAsync(bool restoreFocus)
+    {
+        if (!_open)
+        {
+            return;
+        }
+
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("close", _menu);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _open = false;
+        _activeIndex = -1;
+        _restoreFocusPending = restoreFocus;
+        StateHasChanged();
+    }
+
+    /// <summary>Closes the menu after a scroll, resize or press outside it.</summary>
+    [JSInvokable]
+    public Task Dismiss() => InvokeAsync(() => CloseAsync(restoreFocus: false));
+
+    private async Task SelectAsync(int index)
+    {
+        if (index < 0 || index >= Items.Count || Items[index].Disabled)
+        {
+            return;
+        }
+
+        var value = Items[index].Value;
+        await CloseAsync(restoreFocus: true);
+        if (!string.Equals(value, Value, StringComparison.Ordinal))
+        {
+            await ValueChanged.InvokeAsync(value);
+        }
+    }
+
+    private async Task OnTriggerKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (!_open && args.Key is "ArrowDown" or "ArrowUp")
+        {
+            await OpenAsync();
+        }
+    }
+
+    private async Task OnMenuKeyDownAsync(KeyboardEventArgs args)
+    {
+        switch (args.Key)
+        {
+            case "ArrowDown":
+                MoveActive(1);
+                break;
+            case "ArrowUp":
+                MoveActive(-1);
+                break;
+            case "Home":
+                _activeIndex = 0;
+                break;
+            case "End":
+                _activeIndex = Items.Count - 1;
+                break;
+            case "Enter":
+            case " ":
+                await SelectAsync(_activeIndex);
+                return;
+            case "Escape":
+                await CloseAsync(restoreFocus: true);
+                return;
+            case "Tab":
+                await CloseAsync(restoreFocus: false);
+                return;
+            default:
+                return;
+        }
+
+        await ScrollActiveIntoViewAsync();
+    }
+
+    private void MoveActive(int step)
+    {
+        if (Items.Count == 0)
+        {
+            return;
+        }
+
+        _activeIndex = _activeIndex < 0
+            ? 0
+            : Math.Clamp(_activeIndex + step, 0, Items.Count - 1);
+    }
+
+    private int IndexOfValue(string? value)
+    {
+        for (var index = 0; index < Items.Count; index++)
+        {
+            if (string.Equals(Items[index].Value, value, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private async Task ScrollActiveIntoViewAsync()
+    {
+        if (_module is null || _activeIndex < 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await _module.InvokeVoidAsync("reveal", OptionId(_activeIndex));
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_attachPending && _open)
+        {
+            _attachPending = false;
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/listbox-picker.js");
+            _selfReference ??= DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("open", _trigger, _menu, _selfReference);
+        }
+        else if (_restoreFocusPending && !_open)
+        {
+            _restoreFocusPending = false;
+            await _trigger.FocusAsync(preventScroll: true);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try
+            {
+                if (_open)
+                {
+                    await _module.InvokeVoidAsync("close", _menu);
+                }
+
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _selfReference?.Dispose();
+    }
+}
