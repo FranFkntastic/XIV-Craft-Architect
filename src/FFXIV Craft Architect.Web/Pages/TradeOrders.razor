@@ -1057,7 +1057,7 @@
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
                                     </div>
-                                    @if (!HasCanonicalCommission && GetOutputPurchaseQuotes() is { Count: > 0 } outputPurchaseQuotes)
+                                    @if (!IsCommissionPublished && GetOutputPurchaseQuotes() is { Count: > 0 } outputPurchaseQuotes)
                                     {
                                         <section class="trade-orders-payment-table trade-orders-buy-instead" aria-label="Cost to buy instead">
                                             <div class="trade-orders-payment-table-title">

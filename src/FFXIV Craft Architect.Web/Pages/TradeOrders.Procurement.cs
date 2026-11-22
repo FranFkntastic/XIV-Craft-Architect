@@ -627,7 +627,7 @@ public partial class TradeOrders
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
                 materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
                 cancellationToken: cancellationToken,
-                includeOutputPurchaseQuotes: !HasCanonicalCommission);
+                includeOutputPurchaseQuotes: !IsCommissionPublished);
             if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;

@@ -670,7 +670,9 @@ public sealed class TradeOrderPricingWorkflowService
     /// </summary>
     private static decimal? GetPlanLaborRateStamp(TradeOrder order, decimal laborGilPerSynth, bool planRebuilt)
     {
-        return order.CompanyCommission is null || planRebuilt ? laborGilPerSynth : null;
+        var published = order.CompanyCommission is { } commission &&
+            commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft;
+        return !published || planRebuilt ? laborGilPerSynth : null;
     }
 
     private static TradeOrderPricingWorkflowResult PricingScopeRequired() =>
