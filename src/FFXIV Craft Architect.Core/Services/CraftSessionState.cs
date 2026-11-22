@@ -1170,6 +1170,7 @@ public sealed class CraftSessionState
             ModifiedAt = plan.ModifiedAt,
             DataCenter = plan.DataCenter,
             World = plan.World,
+            AcquisitionLaborGilPerSynth = plan.AcquisitionLaborGilPerSynth,
             PriceVersion = plan.PriceVersion,
             RootItems = plan.RootItems.Select(node =>
             {

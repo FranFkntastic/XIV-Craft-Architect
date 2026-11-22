@@ -105,6 +105,107 @@ public static class MarketPurchaseCostProjectionService
         return true;
     }
 
+    /// <summary>
+    /// Describes the listings behind a market purchase: how many units the pricing scope lists,
+    /// how many listings the purchase draws on, and when the oldest contributing world was observed.
+    /// </summary>
+    public static MarketListingEvidence DescribeListings(
+        DetailedShoppingPlan? shoppingPlan,
+        int quantity,
+        bool hqOnly)
+    {
+        if (shoppingPlan == null ||
+            quantity <= 0 ||
+            !string.IsNullOrWhiteSpace(shoppingPlan.Error))
+        {
+            return MarketListingEvidence.None;
+        }
+
+        var marketWorlds = shoppingPlan.WorldOptions
+            .Where(world => !IsVendorWorld(world))
+            .ToList();
+        var listedQuantity = marketWorlds
+            .SelectMany(world => FilterProjectionListings(world.Listings, hqOnly))
+            .Sum(listing => (long)listing.Quantity);
+        var estimate = Estimate(shoppingPlan, quantity, hqOnly, includeVendor: false);
+
+        int listingCount;
+        IEnumerable<string> contributingWorlds;
+        if (estimate.Coverage is { } coverage)
+        {
+            var used = coverage.Listings.Where(listing => listing.QuantityPurchased > 0).ToList();
+            listingCount = used.Count;
+            contributingWorlds = used.Select(listing => listing.WorldName);
+        }
+        else if (estimate.World is { } world)
+        {
+            var worldOption = marketWorlds.FirstOrDefault(option =>
+                string.Equals(option.WorldName, world.WorldName, StringComparison.OrdinalIgnoreCase));
+            listingCount = worldOption?.ListingsUsed > 0
+                ? worldOption.ListingsUsed
+                : CountListingsToCover(worldOption?.Listings ?? [], quantity, hqOnly);
+            contributingWorlds = [world.WorldName];
+        }
+        else
+        {
+            var cheapest = marketWorlds
+                .SelectMany(option => FilterProjectionListings(option.Listings, hqOnly)
+                    .Select(listing => (option.WorldName, Listing: listing)))
+                .OrderBy(entry => entry.Listing.PricePerUnit)
+                .ToList();
+            var remaining = quantity;
+            var used = new List<string>();
+            foreach (var entry in cheapest)
+            {
+                if (remaining <= 0)
+                {
+                    break;
+                }
+
+                used.Add(entry.WorldName);
+                remaining -= entry.Listing.Quantity;
+            }
+
+            listingCount = used.Count;
+            contributingWorlds = used;
+        }
+
+        var worldNames = contributingWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var observedWorlds = worldNames.Count > 0
+            ? marketWorlds.Where(world => worldNames.Contains(world.WorldName))
+            : marketWorlds;
+        var observedAtUtc = observedWorlds
+            .Select(world => world.MarketUploadedAtUtc)
+            .Where(uploadedAt => uploadedAt.HasValue)
+            .Min();
+
+        return new MarketListingEvidence(
+            (int)Math.Min(int.MaxValue, listedQuantity),
+            listingCount,
+            observedAtUtc);
+    }
+
+    private static int CountListingsToCover(
+        IEnumerable<ShoppingListingEntry> listings,
+        int quantity,
+        bool hqOnly)
+    {
+        var count = 0;
+        var remaining = quantity;
+        foreach (var listing in FilterProjectionListings(listings, hqOnly).OrderBy(listing => listing.PricePerUnit))
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            count++;
+            remaining -= listing.Quantity;
+        }
+
+        return count;
+    }
+
     public static bool IsUnsupportedProjectedCost(
         DetailedShoppingPlan? shoppingPlan,
         int? quantity = null,
@@ -299,6 +400,15 @@ public sealed record MarketPurchaseCostEstimate(
     public bool HasCost => Cost > 0;
     public bool IsUnsupportedProjection => Kind == MarketPurchaseCostEstimateKind.UnsupportedProjection;
     public bool IsDefaultEligible => Kind == MarketPurchaseCostEstimateKind.SupportedEvidence;
+}
+
+/// <summary>Listings behind a market purchase, for display beside its cost.</summary>
+public sealed record MarketListingEvidence(
+    int ListedQuantity,
+    int ListingCount,
+    DateTime? ObservedAtUtc)
+{
+    public static MarketListingEvidence None { get; } = new(0, 0, null);
 }
 
 public enum MarketPurchaseCostEstimateKind
