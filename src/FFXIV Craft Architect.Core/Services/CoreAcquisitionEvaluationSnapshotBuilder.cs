@@ -11,7 +11,9 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
         CoreAcquisitionFilter filter,
         RecipeDemandProjection demandProjection)
     {
-        var costContext = AcquisitionPlanningService.CreateCostContext(shoppingPlans);
+        var costContext = AcquisitionPlanningService.CreateCostContext(
+            shoppingPlans,
+            plan?.AcquisitionLaborGilPerSynth ?? 0);
         var marketCandidates = demandProjection.ToMarketAnalysisMaterialAggregates().ToList();
         var activeProcurementItems = demandProjection.ToActiveProcurementMaterialAggregates()
             .Where(item => item.TotalQuantity > 0)
@@ -33,7 +35,9 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
         IReadOnlySet<int> unavailableMarketItemIds,
         RecipeDemandProjection demandProjection)
     {
-        var costContext = AcquisitionPlanningService.CreateCostContext(shoppingPlans);
+        var costContext = AcquisitionPlanningService.CreateCostContext(
+            shoppingPlans,
+            plan?.AcquisitionLaborGilPerSynth ?? 0);
         var expectedRows = BuildLegacyRows(plan, costContext, unavailableMarketItemIds);
         var actualRows = BuildRows(plan, demandProjection, costContext, unavailableMarketItemIds);
         var mismatches = new List<CoreAcquisitionEvaluationParityMismatch>();

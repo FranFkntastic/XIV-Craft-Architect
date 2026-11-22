@@ -1057,6 +1057,34 @@
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
                                     </div>
+                                    @if (!IsCommissionPublished && GetOutputPurchaseQuotes() is { Count: > 0 } outputPurchaseQuotes)
+                                    {
+                                        <section class="trade-orders-payment-table trade-orders-buy-instead" aria-label="Cost to buy instead">
+                                            <div class="trade-orders-payment-table-title">
+                                                <span>Cost to buy instead</span>
+                                                <span>@FormatOutputPurchaseContext(outputPurchaseQuotes)</span>
+                                            </div>
+                                            @foreach (var quote in outputPurchaseQuotes)
+                                            {
+                                                <div class="trade-orders-buy-instead-row" @key="@($"buy:{quote.ItemId}:{quote.MustBeHq}")">
+                                                    <span>@quote.ItemName ×@TradeDisplayFormatter.FormatQuantity(quote.Quantity)</span>
+                                                    @if (quote.IsShort)
+                                                    {
+                                                        <span class="is-short">⚠ Only @TradeDisplayFormatter.FormatQuantity(quote.ListedQuantity) of @TradeDisplayFormatter.FormatQuantity(quote.Quantity) listed</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span>@(quote.ListingCount > 0 ? $"{quote.ListingCount:N0} listings" : string.Empty)</span>
+                                                    }
+                                                    <strong>@(quote.TotalCost is { } buyTotal ? FormatGilShort(buyTotal) : "—")</strong>
+                                                    <button type="button"
+                                                            @onclick="@(() => OpenMarketAnalysisForItemAsync(quote.ItemId))">
+                                                        Market
+                                                    </button>
+                                                </div>
+                                            }
+                                        </section>
+                                    }
                                     <div class="trade-orders-payment-heading">
                                         <div>
                                             <MudText Typo="Typo.subtitle2">Supply Summary</MudText>
@@ -2353,32 +2381,32 @@
 
 @code {
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
-        @if (CanEditProcurementSource(row))
-        {
-            <select class="trade-orders-procurement-select"
-                    aria-label="@($"{row.ItemName} procurement route")"
-                    value="@row.Source.ToString()"
-                    @onchange="args => ChangeProcurementRowSourceValueAsync(row, args.Value?.ToString())">
-                @foreach (var source in GetProcurementSourceOptions(row))
-                {
-                    <option value="@source.ToString()"
-                            disabled="@(source == AcquisitionSource.Craft && row.Responsibility == CommissionMaterialResponsibility.Provided)"
-                            selected="@(source == row.Source)">@RecipePlanDisplayHelpers.GetSourceDisplayName(source)</option>
-                }
-            </select>
+        @{
+            var routeOverride = GetProcurementRouteOverrideDelta(row);
         }
-        else
-        {
-            <strong class="trade-orders-source-locked">@row.SourceLabel</strong>
-        }
+        <div class="trade-orders-procurement-route-picker">
+            @if (CanEditProcurementSource(row))
+            {
+                <ListboxPicker Items="@GetProcurementRouteItems(row)"
+                               Value="@row.Source.ToString()"
+                               ValueChanged="@(value => ChangeProcurementRowSourceValueAsync(row, value))"
+                               AriaLabel="@($"{row.ItemName} procurement route")" />
+            }
+            else
+            {
+                <strong class="trade-orders-source-locked">@row.SourceLabel</strong>
+            }
+            @if (routeOverride is { } delta)
+            {
+                <span class="trade-orders-route-override"
+                      title="Total payment vs. default route"
+                      aria-label="@($"Total payment {(delta > 0 ? "up" : "down")} {FormatGilShort(Math.Abs(delta))} versus default route")">@FormatSignedGilShort(delta)</span>
+            }
+        </div>
         <div class="trade-orders-procurement-route-actions">
             <button type="button"
                     @onclick="@(() => OpenMarketAnalysisForProcurementRowAsync(row))">
                 Market
-            </button>
-            <button type="button"
-                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
-                Compare routes
             </button>
         </div>
     </div>;

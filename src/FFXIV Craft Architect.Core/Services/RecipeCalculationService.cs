@@ -780,6 +780,7 @@ public class RecipeCalculationService
             ModifiedAt = plan.ModifiedAt,
             DataCenter = plan.DataCenter,
             World = plan.World,
+            AcquisitionLaborGilPerSynth = plan.AcquisitionLaborGilPerSynth,
             RootNodeIds = plan.RootItems.Select(r => r.NodeId).ToList(),
             Nodes = serializableNodes
         };
@@ -925,7 +926,8 @@ public class RecipeCalculationService
                 CreatedAt = wrapper.CreatedAt,
                 ModifiedAt = wrapper.ModifiedAt,
                 DataCenter = wrapper.DataCenter,
-                World = wrapper.World
+                World = wrapper.World,
+                AcquisitionLaborGilPerSynth = wrapper.AcquisitionLaborGilPerSynth
             };
 
             foreach (var rootId in wrapper.RootNodeIds)
@@ -1455,6 +1457,10 @@ public class PlanSerializationWrapper
     public DateTime ModifiedAt { get; set; }
     public string DataCenter { get; set; } = string.Empty;
     public string World { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public decimal AcquisitionLaborGilPerSynth { get; set; }
+
     public List<string> RootNodeIds { get; set; } = new();
     public List<SerializablePlanNode> Nodes { get; set; } = new();
 }

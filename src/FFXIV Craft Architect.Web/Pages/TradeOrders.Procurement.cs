@@ -622,9 +622,12 @@ public partial class TradeOrders
         _isRefreshingLiveProcurement = true;
         try
         {
+            // Draft orders also show what buying each output whole would cost; the Worker
+            // prices that from evidence the plan already loaded.
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
                 materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken,
+                includeOutputPurchaseQuotes: !IsCommissionPublished);
             if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;
@@ -800,7 +803,7 @@ public partial class TradeOrders
         builder.OpenElement(sequence++, "span");
         builder.AddAttribute(sequence++, "class", GetProcurementEvidenceTextClass(row));
         builder.AddAttribute(sequence++, "title", row.UnitCostExplanation);
-        builder.AddContent(sequence++, FormatProcurementEvidence(row));
+        builder.AddContent(sequence++, FormatPrecraftLaborEvidence(row) ?? FormatProcurementEvidence(row));
         builder.CloseElement();
     };
 
@@ -980,17 +983,22 @@ public partial class TradeOrders
 
     private static string FormatProcurementEvidenceContext(TradeOrder order)
     {
-        var scope = order.SourceSnapshot.MarketFetchScope == MarketFetchScope.EntireRegion
+        var scope = FormatProcurementScopeLabel(order);
+        var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        return string.IsNullOrWhiteSpace(scope)
+            ? $"Refreshed {refreshed}"
+            : $"{scope} | refreshed {refreshed}";
+    }
+
+    private static string? FormatProcurementScopeLabel(TradeOrder order)
+    {
+        return order.SourceSnapshot.MarketFetchScope == MarketFetchScope.EntireRegion
             ? string.IsNullOrWhiteSpace(order.SourceSnapshot.Region)
                 ? "Entire region"
                 : $"{order.SourceSnapshot.Region} region"
             : string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
                 ? order.SourceSnapshot.Region
                 : order.SourceSnapshot.DataCenter;
-        var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-        return string.IsNullOrWhiteSpace(scope)
-            ? $"Refreshed {refreshed}"
-            : $"{scope} | refreshed {refreshed}";
     }
 
     private string FormatProcurementFooter(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -1298,7 +1306,11 @@ public partial class TradeOrders
             return false;
         }
 
-        if (!liveRow.AvailableSources.Contains(source))
+        var liveOption = liveRow.Options.FirstOrDefault(option => option.Source == source);
+        if (!liveRow.AvailableSources.Contains(source) ||
+            (source != liveRow.Source &&
+             source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq &&
+             liveOption is { IsAvailable: false }))
         {
             Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
             return false;

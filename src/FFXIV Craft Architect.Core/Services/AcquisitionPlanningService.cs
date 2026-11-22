@@ -169,7 +169,9 @@ public static class AcquisitionPlanningService
             return 0;
         }
 
-        return ApplyCheapestAcquisitionDefaults(plan, CreateCostContext(shoppingPlans));
+        return ApplyCheapestAcquisitionDefaults(
+            plan,
+            CreateCostContext(shoppingPlans, plan.AcquisitionLaborGilPerSynth));
     }
 
     public static int ApplyCheapestAcquisitionDefaults(
@@ -185,6 +187,10 @@ public static class AcquisitionPlanningService
         foreach (var root in plan.RootItems)
         {
             changed += ApplyCheapestAcquisitionDefaults(root, context);
+            if (context.IsCommission)
+            {
+                changed += KeepCommissionedOutputCrafted(root);
+            }
         }
 
         return changed;
@@ -302,6 +308,42 @@ public static class AcquisitionPlanningService
     public static AcquisitionCostContext CreateCostContext(IEnumerable<DetailedShoppingPlan> shoppingPlans)
     {
         return new AcquisitionCostContext(CreatePlanLookup(shoppingPlans));
+    }
+
+    /// <summary>
+    /// Cost context for a plan whose crafts are paid per synth. A positive rate adds
+    /// synths x rate to every craft cost, so automatic craft-vs-buy defaults weigh the labor a
+    /// precraft costs the commissioning company. Zero keeps materials-only evaluation.
+    /// </summary>
+    public static AcquisitionCostContext CreateCostContext(
+        IEnumerable<DetailedShoppingPlan> shoppingPlans,
+        decimal laborGilPerSynth)
+    {
+        return new AcquisitionCostContext(CreatePlanLookup(shoppingPlans), laborGilPerSynth);
+    }
+
+    /// <summary>
+    /// Synths this node performs while crafted, plus those of every crafted descendant whose
+    /// cost rolls into it. Matches the labor term inside the node's craft cost.
+    /// </summary>
+    public static int GetCraftSubtreeSynthCount(PlanNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        if (!node.Children.Any())
+        {
+            return 0;
+        }
+
+        var synths = RecipeResolutionService.GetPlannedSynthCount(node);
+        foreach (var child in node.Children)
+        {
+            if (child.Source == AcquisitionSource.Craft)
+            {
+                synths += GetCraftSubtreeSynthCount(child);
+            }
+        }
+
+        return synths;
     }
 
     public static List<AcquisitionSource> GetAvailableSources(PlanNode node)
@@ -619,6 +661,24 @@ public static class AcquisitionPlanningService
         return changed;
     }
 
+    /// <summary>
+    /// A commission is an order to craft its outputs, so automatic defaults never turn a
+    /// commissioned output into a purchase. Explicit operator choices are left alone.
+    /// </summary>
+    private static int KeepCommissionedOutputCrafted(PlanNode root)
+    {
+        if (root.Source == AcquisitionSource.Craft ||
+            !root.CanCraft ||
+            root.Children.Count == 0 ||
+            !CanAutomaticallyChangeSource(root))
+        {
+            return 0;
+        }
+
+        SetAcquisitionSource(root, AcquisitionSource.Craft, AcquisitionSourceReason.SystemDefault);
+        return root.Source == AcquisitionSource.Craft ? 1 : 0;
+    }
+
     private static bool CanAutomaticallyChangeSource(PlanNode node)
     {
         return node.SourceReason is
@@ -686,9 +746,9 @@ public static class AcquisitionPlanningService
         cost = source switch
         {
             AcquisitionSource.MarketBuyNq when node.CanBuyFromMarket && !node.MustBeHq =>
-                GetDefaultEligibleMarketBuyCost(node, planByItemId, hqOnly: false),
+                GetDefaultEligibleMarketBuyCost(node, planByItemId, hqOnly: false, context?.IsCommission == true),
             AcquisitionSource.MarketBuyHq when node.CanBuyFromMarket && node.CanBeHq =>
-                GetDefaultEligibleMarketBuyCost(node, planByItemId, hqOnly: true),
+                GetDefaultEligibleMarketBuyCost(node, planByItemId, hqOnly: true, context?.IsCommission == true),
             _ => TryGetAcquisitionCost(node, source, planByItemId, context, out var sourceCost) ? sourceCost : 0
         };
 
@@ -769,7 +829,8 @@ public static class AcquisitionPlanningService
     private static decimal GetDefaultEligibleMarketBuyCost(
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
-        bool hqOnly)
+        bool hqOnly,
+        bool requireListings)
     {
         if (planByItemId.TryGetValue(node.ItemId, out var shoppingPlan))
         {
@@ -784,6 +845,13 @@ public static class AcquisitionPlanningService
             }
 
             return GetSupportedWideSplitCost(shoppingPlan, node.Quantity, hqOnly);
+        }
+
+        // A commission buys from real listings in its pricing scope; a remembered unit price
+        // is not evidence that the whole quantity can be bought.
+        if (requireListings)
+        {
+            return 0;
         }
 
         return (hqOnly ? node.HqMarketPrice : node.MarketPrice) * node.Quantity;
@@ -885,6 +953,13 @@ public static class AcquisitionPlanningService
                 context.SetCachedCost(child, child.Source, directCost);
                 cost += directCost;
             }
+        }
+
+        // Labor is added only to a craft whose materials priced. Without that, an unpriced
+        // craft would look like it costs labor alone and beat a real purchase.
+        if (context.LaborGilPerSynth > 0 && cost > 0)
+        {
+            cost += context.LaborGilPerSynth * RecipeResolutionService.GetPlannedSynthCount(node);
         }
 
         context.SetCachedCost(node, AcquisitionSource.Craft, cost);
@@ -1032,12 +1107,20 @@ public sealed class AcquisitionCostContext
 {
     private readonly Dictionary<(string NodeId, AcquisitionSource Source), decimal> _costByNodeAndSource = new();
 
-    internal AcquisitionCostContext(IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
+    internal AcquisitionCostContext(
+        IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
+        decimal laborGilPerSynth = 0)
     {
         PlanByItemId = planByItemId;
+        LaborGilPerSynth = Math.Max(0, laborGilPerSynth);
     }
 
     internal IReadOnlyDictionary<int, DetailedShoppingPlan> PlanByItemId { get; }
+
+    /// <summary>Gil paid per craft synth; zero outside commission plans.</summary>
+    public decimal LaborGilPerSynth { get; }
+
+    public bool IsCommission => LaborGilPerSynth > 0;
 
     public int CachedCostEntryCount => _costByNodeAndSource.Count;
 

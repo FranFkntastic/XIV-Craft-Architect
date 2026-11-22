@@ -509,24 +509,17 @@ public partial class TradeOrders
         }
     }
 
-    private async Task OpenMarketAnalysisForProcurementRowAsync(TradeOrderProcurementRow row)
+    private Task OpenMarketAnalysisForProcurementRowAsync(TradeOrderProcurementRow row) =>
+        OpenMarketAnalysisForItemAsync(row.ItemId);
+
+    private async Task OpenMarketAnalysisForItemAsync(int itemId)
     {
         if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
         {
             return;
         }
 
-        NavigationManager.NavigateTo($"market?itemId={row.ItemId}");
-    }
-
-    private async Task OpenAcquisitionEvaluationForProcurementRowAsync(TradeOrderProcurementRow row)
-    {
-        if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
-        {
-            return;
-        }
-
-        NavigationManager.NavigateTo($"acquisition?itemId={row.ItemId}");
+        NavigationManager.NavigateTo($"market?itemId={itemId}");
     }
 
     private async Task<bool> LoadSelectedOrderCraftPlanForNavigationAsync()
