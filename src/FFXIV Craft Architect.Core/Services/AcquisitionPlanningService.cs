@@ -955,7 +955,9 @@ public static class AcquisitionPlanningService
             }
         }
 
-        if (context.LaborGilPerSynth > 0)
+        // Labor is added only to a craft whose materials priced. Without that, an unpriced
+        // craft would look like it costs labor alone and beat a real purchase.
+        if (context.LaborGilPerSynth > 0 && cost > 0)
         {
             cost += context.LaborGilPerSynth * RecipeResolutionService.GetPlannedSynthCount(node);
         }

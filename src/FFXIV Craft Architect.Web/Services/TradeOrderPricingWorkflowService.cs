@@ -159,7 +159,7 @@ public sealed class TradeOrderPricingWorkflowService
                 orderToSave,
                 operation.Token,
                 workerOperation.OperationId,
-                laborGilPerSynth);
+                GetPlanLaborRateStamp(order, laborGilPerSynth, planRebuilt: !reusedActivePlan));
             var source = await _worker.GetTradeProjectionAsync(
                 cancellationToken: operation.Token)
                 ?? throw new InvalidOperationException(
@@ -283,7 +283,7 @@ public sealed class TradeOrderPricingWorkflowService
                 orderToSave,
                 operation.Token,
                 workerOperation.OperationId,
-                laborGilPerSynth);
+                GetPlanLaborRateStamp(order, laborGilPerSynth, planRebuilt: false));
             return await PriceAndPersistAsync(
                 orderToSave,
                 pricingScope,
@@ -376,7 +376,7 @@ public sealed class TradeOrderPricingWorkflowService
                 order,
                 operation.Token,
                 workerOperation.OperationId,
-                laborGilPerSynth);
+                GetPlanLaborRateStamp(order, laborGilPerSynth, planRebuilt: false));
             await _worker.MutateAcquisitionAsync(
                 mutation,
                 operation.Token,
@@ -650,20 +650,27 @@ public sealed class TradeOrderPricingWorkflowService
         return expected.Length > 0 && expected.SequenceEqual(actual, StringComparer.Ordinal);
     }
 
-    private async Task<(TradeCompanyPricingScope? Scope, decimal? LaborGilPerSynth)> LoadPricingScopeAsync(
+    private async Task<(TradeCompanyPricingScope? Scope, decimal LaborGilPerSynth)> LoadPricingScopeAsync(
         TradeOrder order, CancellationToken cancellationToken)
     {
         // Same hosted-then-local resolution the Orders page uses, so an unhosted company
         // still prices from its own scope while profile sync is connected. The labor rate
         // comes from the same resolution: the order's payment override, else company policy.
-        // A published commission keeps the rate its plan was priced with, so editing one
-        // route in a terms revision never re-decides the other routes at a newer rate.
         var resolved = await new TradeCompany.TradeWorkspaceProfileResolver(_companies, _companyHub)
             .ResolveAsync(order.CompanyProfileId, cancellationToken);
         var paymentPolicy = TradeOrderWorkflow.ResolvePaymentPolicy(order, resolved.Profile?.PaymentPolicy);
-        return (
-            resolved.Profile?.CommissionPricingScope,
-            order.CompanyCommission is null ? paymentPolicy.LaborGilPerSynth : null);
+        return (resolved.Profile?.CommissionPricingScope, paymentPolicy.LaborGilPerSynth);
+    }
+
+    /// <summary>
+    /// The rate to stamp on the order's plan, or null to leave the plan's own rate alone. A
+    /// published commission keeps the rate its plan was priced with, so editing one route in a
+    /// terms revision never re-decides the other routes at a newer rate; a plan rebuilt from
+    /// scratch has no rate yet and takes the order's.
+    /// </summary>
+    private static decimal? GetPlanLaborRateStamp(TradeOrder order, decimal laborGilPerSynth, bool planRebuilt)
+    {
+        return order.CompanyCommission is null || planRebuilt ? laborGilPerSynth : null;
     }
 
     private static TradeOrderPricingWorkflowResult PricingScopeRequired() =>
