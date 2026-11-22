@@ -54,7 +54,13 @@ public partial class TradeOrders
 
             if (option is { IsAvailable: false })
             {
-                return new ListboxPickerItem(value, name, Amount: UnavailableAmount, Disabled: true);
+                return new ListboxPickerItem(
+                    value,
+                    name,
+                    option.ListingCount == 0 ? "⚠ None listed" : "⚠ Not fillable in pricing scope",
+                    UnavailableAmount,
+                    Disabled: true,
+                    IsWarning: true);
             }
 
             return new ListboxPickerItem(
@@ -164,7 +170,7 @@ public partial class TradeOrders
 
     private static string FormatGilShort(decimal value)
     {
-        return $"{Math.Ceiling(value):N0}g";
+        return $"{Math.Ceiling(value):N0} gil";
     }
 
     private static string FormatSignedGilShort(decimal value)
