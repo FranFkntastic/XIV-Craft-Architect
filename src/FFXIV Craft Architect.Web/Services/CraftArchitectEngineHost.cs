@@ -361,11 +361,16 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         bool includeCraftLabor,
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken cancellationToken = default,
-        bool includeOutputPurchaseQuotes = false) =>
+        bool includeOutputPurchaseQuotes = false,
+        WorkerRoutePaymentBasis? routePaymentBasis = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.TradeProjection,
             expectedRevision,
-            new WorkerTradeProjectionRequest(includeCraftLabor, materialPricingPolicy, includeOutputPurchaseQuotes),
+            new WorkerTradeProjectionRequest(
+                includeCraftLabor,
+                materialPricingPolicy,
+                includeOutputPurchaseQuotes,
+                routePaymentBasis),
             includeCraftLabor
                 ? EngineCommandPriority.UserRequestedDerivation
                 : EngineCommandPriority.Interactive,
