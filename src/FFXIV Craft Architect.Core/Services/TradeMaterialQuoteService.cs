@@ -5,13 +5,22 @@ namespace FFXIV_Craft_Architect.Core.Services;
 public sealed record TradeMaterialQuoteResult(
     TradeMaterialQuote? Quote,
     IReadOnlyList<CommissionPayrollInputLine> MaterialLines,
-    string? FailureReason)
+    string? FailureReason,
+    IReadOnlyList<string>? Warnings = null)
 {
     public bool IsComplete => Quote != null && string.IsNullOrWhiteSpace(FailureReason);
+
+    /// <summary>Non-blocking route notes, such as a route that needs more worlds than policy.</summary>
+    public IReadOnlyList<string> RouteWarnings => Warnings ?? [];
 }
 
 public sealed class TradeMaterialQuoteService
 {
+    /// <summary>
+    /// Quotes the executable route for the crafter's purchases only. On-hand stock is covered at
+    /// zero cash, and company-provided materials keep their selected-source company value: they
+    /// never join the route, so they cannot add world stops or block the crafter's quote.
+    /// </summary>
     public async Task<TradeMaterialQuoteResult> PriceAsync(
         MarketShoppingService shopping,
         IReadOnlyList<DetailedShoppingPlan> plans,
@@ -20,10 +29,14 @@ public sealed class TradeMaterialQuoteService
         TradeMaterialPricingPolicy policy,
         DateTime now,
         IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines,
+        IReadOnlySet<(int ItemId, bool RequiresHq)>? companyProvided = null,
         CancellationToken ct = default)
     {
         var stock = demand.Where(item => sources.GetValueOrDefault((item.ItemId, item.RequiresHq)) == AcquisitionSource.OnHand).ToArray();
-        var purchases = demand.Except(stock).ToArray();
+        var provided = companyProvided is { Count: > 0 }
+            ? demand.Except(stock).Where(item => companyProvided.Contains((item.ItemId, item.RequiresHq))).ToArray()
+            : [];
+        var purchases = demand.Except(stock).Except(provided).ToArray();
         var references = selectedSourceLines.Where(line => line.EvidenceSource == TradeOrderWorkflow.OnHandEvidenceSource)
             .ToDictionary(line => (line.ItemId, line.RequiresHq));
         if (stock.Any(item => !references.TryGetValue((item.ItemId, item.RequiresHq), out var line) ||
@@ -35,12 +48,18 @@ public sealed class TradeMaterialQuoteService
         var stockLines = stock.Select(item => references[(item.ItemId, item.RequiresHq)]).ToArray();
         var stockCoverage = stock.Select(item => new TradeMaterialQuoteLine(
             item.ItemId, item.Name, item.TotalQuantity, item.RequiresHq, 0, [], null)).ToArray();
-        if (stock.Length > 0 && purchases.Length == 0)
+        // Demand arrives one aggregate per acquisition source; company value is one line per
+        // item and quality, so mixed-source company materials are consolidated first.
+        var providedLines = provided
+            .GroupBy(item => (item.ItemId, item.RequiresHq))
+            .Select(group => BuildCompanyValueLine(group.ToArray(), selectedSourceLines))
+            .ToArray();
+        if (purchases.Length == 0 && (stock.Length > 0 || provided.Length > 0))
         {
             var normalized = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
             return new(new TradeMaterialQuote
             {
-                RouteSelectionKey = "on-hand",
+                RouteSelectionKey = provided.Length > 0 ? "company-provided" : "on-hand",
                 WorldStops = 0,
                 RouteCashRequired = 0,
                 MaterialReimbursement = 0,
@@ -50,7 +69,7 @@ public sealed class TradeMaterialQuoteService
                 PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(normalized),
                 QuotedAtUtc = now,
                 ExpiresAtUtc = now.AddMinutes(normalized.QuoteLifetimeMinutes)
-            }, stockLines, null);
+            }, [.. stockLines, .. providedLines], null);
         }
 
         var input = PrepareOptimizationInput(plans, purchases, sources, policy, now);
@@ -65,9 +84,69 @@ public sealed class TradeMaterialQuoteService
             }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
             executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
         var result = Build(optimization, purchases, policy, now);
-        return result.Quote is { } quote && stock.Length > 0
-            ? new(quote with { Lines = [.. quote.Lines, .. stockCoverage] }, [.. result.MaterialLines, .. stockLines], null)
+        if (!result.IsComplete || result.Quote!.WorldStops > routePolicy.MaximumWorldStops)
+        {
+            // The stop limit is advisory: when no capped route fits it, search again without the
+            // per-item and route caps so Build sees the purchases those caps excluded and can
+            // return the best route with a warning. Genuine shortfalls and unsupported sources
+            // still fail on this uncapped pass; a capped over-limit quote is kept if it does.
+            var uncapped = await shopping.OptimizeProcurementRouteWithDecisionAsync(
+                input, new MarketAnalysisConfig
+                {
+                    EnableSplitWorld = routePolicy.AllowSplitPurchases,
+                    TravelTolerance = 11
+                }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
+                executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
+            var uncappedResult = Build(uncapped, purchases, policy, now);
+            if (uncappedResult.IsComplete || !result.IsComplete)
+            {
+                result = uncappedResult;
+            }
+        }
+
+        return result.Quote is { } quote
+            ? new(
+                quote with { Lines = [.. quote.Lines, .. stockCoverage] },
+                [.. result.MaterialLines, .. stockLines, .. providedLines],
+                null,
+                result.RouteWarnings)
             : result;
+    }
+
+    /// <summary>
+    /// The company-value line for a provided material (all of its per-source demand for one
+    /// item and quality): its selected-source evidence, which already carries the combined
+    /// quantity, or the demand's own quantity-weighted estimate when that evidence is missing.
+    /// </summary>
+    private static CommissionPayrollInputLine BuildCompanyValueLine(
+        IReadOnlyList<MaterialAggregate> items,
+        IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines)
+    {
+        var first = items[0];
+        var evidence = selectedSourceLines.FirstOrDefault(line =>
+            line.ItemId == first.ItemId &&
+            line.RequiresHq == first.RequiresHq &&
+            line.EvidenceSource != TradeOrderWorkflow.OnHandEvidenceSource);
+        if (evidence != null)
+        {
+            return evidence;
+        }
+
+        var quantity = items.Sum(item => item.TotalQuantity);
+        var unitPrice = quantity > 0
+            ? items.Sum(item => Math.Max(0m, item.UnitPrice) * item.TotalQuantity) / quantity
+            : 0m;
+        return new CommissionPayrollInputLine(
+            first.ItemId,
+            first.Name,
+            quantity,
+            unitPrice,
+            first.RequiresHq,
+            CommissionMaterialResponsibility.Provided,
+            "Company value",
+            "Company-provided material; not part of the crafter's route.",
+            null,
+            []);
     }
 
     public static string DescribeNoExecutableRoute(
@@ -136,30 +215,37 @@ public sealed class TradeMaterialQuoteService
             return Failure(DescribeNoExecutableRoute(policy, optimization.ShoppingPlans, demand));
         }
 
-        // Every complete route the optimizer exported that fits the stop limit: the slider ticks
-        // plus the bounded frontier routes those 12 ticks can skip.
-        var bounded = decision.ToleranceSelections
+        // Every complete route the optimizer exported: the slider ticks plus the bounded frontier
+        // routes those 12 ticks can skip.
+        var complete = decision.ToleranceSelections
             .Concat(decision.BoundedRouteSelections)
-            .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
             .Where(IsCompleteSelection)
             .DistinctBy(candidate => candidate.SelectionKey, StringComparer.Ordinal)
             .ToArray();
-        if (bounded.Length == 0)
+        if (complete.Length == 0)
         {
             return Failure(DescribeNoExecutableRoute(policy, optimization.ShoppingPlans, demand));
         }
 
+        // The stop limit is advisory. Routes within it win; when none exists, the best complete
+        // route is quoted anyway and carries a warning naming the stops it actually needs.
+        var bounded = complete
+            .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
+            .ToArray();
+        var overLimit = bounded.Length == 0;
+        var eligible = overLimit ? complete : bounded;
+
         // Premium is measured against the cheapest route overall. When that route needs more
-        // stops than policy allows and no bounded route lands inside its premium window, anchor
-        // the window to the cheapest bounded route instead of rejecting every bounded route.
+        // stops than policy allows and no eligible route lands inside its premium window, anchor
+        // the window to the cheapest eligible route instead of rejecting every eligible route.
         var premiumFactor = 1m + policy.MaximumConsolidationPremiumPercent / 100m;
         var maximumCost = decision.CheapestGilCost * premiumFactor;
-        if (!bounded.Any(candidate => candidate.GilCost <= maximumCost))
+        if (!eligible.Any(candidate => candidate.GilCost <= maximumCost))
         {
-            maximumCost = bounded.Min(candidate => candidate.GilCost) * premiumFactor;
+            maximumCost = eligible.Min(candidate => candidate.GilCost) * premiumFactor;
         }
 
-        var selections = bounded
+        var selections = eligible
             .Where(candidate => candidate.GilCost <= maximumCost)
             .OrderBy(candidate => candidate.WorldStops)
             .ThenBy(candidate => candidate.EvidencePenalty)
@@ -181,7 +267,9 @@ public sealed class TradeMaterialQuoteService
                 quotedAtUtc);
             if (result.IsComplete)
             {
-                return result;
+                return overLimit && result.Quote is { } quote
+                    ? result with { Warnings = [DescribeOverStopLimit(policy, quote)] }
+                    : result;
             }
             firstRejection ??= result.FailureReason;
         }
@@ -189,6 +277,28 @@ public sealed class TradeMaterialQuoteService
         return Failure(
             "No complete route within company policy could be reconciled to listing-level purchases." +
             (string.IsNullOrWhiteSpace(firstRejection) ? string.Empty : $" {firstRejection}"));
+    }
+
+    /// <summary>Leading text of the stop-limit advisory, so refreshed pricing can replace it.</summary>
+    public const string OverStopLimitPrefix = "Route needs ";
+
+    /// <summary>
+    /// "Route needs 11 worlds (company policy: 8)." plus the material with the most stops when
+    /// one material alone visits several worlds.
+    /// </summary>
+    private static string DescribeOverStopLimit(
+        TradeMaterialPricingPolicy policy,
+        TradeMaterialQuote quote)
+    {
+        var summary = $"{OverStopLimitPrefix}{quote.WorldStops:N0} worlds (company policy: {policy.MaximumWorldStops:N0})";
+        var widest = quote.Lines
+            .Where(line => !line.Worlds.Contains(MarketShoppingConstants.VendorWorldName, StringComparer.OrdinalIgnoreCase))
+            .OrderByDescending(line => line.Worlds.Count)
+            .ThenBy(line => line.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        return widest is { Worlds.Count: > 1 }
+            ? $"{summary}; {widest.Name} spans {widest.Worlds.Count:N0}."
+            : $"{summary}.";
     }
 
     private static bool IsCompleteSelection(MarketRouteToleranceSelection selection) =>
@@ -200,8 +310,8 @@ public sealed class TradeMaterialQuoteService
 
     /// <summary>
     /// Names the materials that block every executable route, using the plans the optimizer saw:
-    /// unsupported sources, stock shortfalls, and items whose stock is spread across more worlds
-    /// than the stop limit allows.
+    /// unsupported sources, stock shortfalls, and single-world requirements when split purchases
+    /// are disabled. The world-stop limit is advisory and never named as a blocker.
     /// </summary>
     private static string DescribeNoExecutableRoute(
         TradeMaterialPricingPolicy policy,
@@ -268,13 +378,8 @@ public sealed class TradeMaterialQuoteService
                 }
             }
 
-            if (worldsNeeded > policy.MaximumWorldStops)
-            {
-                blockers.Add(
-                    $"{plan.Name}: {quality}stock for {required:N0} is spread across at least " +
-                    $"{worldsNeeded:N0} worlds");
-            }
-            else if (worldsNeeded > 1 && !policy.AllowSplitPurchases)
+            // World count alone never blocks: over-limit routes are quoted with a warning.
+            if (worldsNeeded > 1 && !policy.AllowSplitPurchases)
             {
                 blockers.Add(
                     $"{plan.Name}: no single world has {required:N0} {quality}in current listings " +
@@ -284,8 +389,8 @@ public sealed class TradeMaterialQuoteService
 
         if (blockers.Count == 0)
         {
-            return $"{summary} Each material is individually available, but no combined route fits " +
-                   $"within {policy.MaximumWorldStops} worlds.";
+            return $"{summary} Each material is individually available, but no complete combined " +
+                   "route could be built.";
         }
 
         const int maximumListed = 3;

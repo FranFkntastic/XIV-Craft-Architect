@@ -645,7 +645,8 @@ public partial class TradeOrders
                 materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
                 cancellationToken: cancellationToken,
                 includeOutputPurchaseQuotes: !IsCommissionPublished,
-                routePaymentBasis: CreateRoutePaymentBasis());
+                routePaymentBasis: CreateRoutePaymentBasis(),
+                materialResponsibilities: GetSelectedOrderMaterialResponsibilities());
             if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;
@@ -706,8 +707,25 @@ public partial class TradeOrders
             WorkerProjections.Shell.Revision,
             TradeMaterialPricingPolicyNormalizer.Fingerprint(
                 _companyProfile?.MaterialPricingPolicy),
-            FingerprintRoutePaymentBasis(CreateRoutePaymentBasis()));
+            FingerprintRoutePaymentBasis(CreateRoutePaymentBasis()),
+            FingerprintResponsibilities(GetSelectedOrderMaterialResponsibilities()));
     }
+
+    /// <summary>
+    /// The selected order's material responsibilities. Company-provided materials stay out of
+    /// the crafter's executable route quote, so every pricing call passes these.
+    /// </summary>
+    private IReadOnlyList<TradePayrollResponsibilityLine> GetSelectedOrderMaterialResponsibilities() =>
+        GetSelectedOrderResponsibilityProjection()?.Responsibilities ?? [];
+
+    private static string FingerprintResponsibilities(
+        IReadOnlyList<TradePayrollResponsibilityLine>? responsibilities) =>
+        string.Join(
+            "|",
+            (responsibilities ?? [])
+                .Where(line => line.Responsibility != CommissionMaterialResponsibility.Crafter)
+                .Select(line => $"{line.ItemId}:{line.RequiresHq}:{line.Responsibility}")
+                .Order(StringComparer.Ordinal));
 
     /// <summary>
     /// Payment terms precraft route options are priced against. Published commissions keep
@@ -733,13 +751,8 @@ public partial class TradeOrders
             return string.Empty;
         }
 
-        var responsibilities = (basis.Responsibilities ?? [])
-            .Where(line => line.Responsibility != CommissionMaterialResponsibility.Crafter)
-            .Select(line => $"{line.ItemId}:{line.RequiresHq}:{line.Responsibility}")
-            .Order(StringComparer.Ordinal);
-        return string.Join(
-            "|",
-            responsibilities.Prepend($"{basis.PaymentPolicy.ActiveContract}:{basis.PaymentPolicy.LaborGilPerSynth}"));
+        return $"{basis.PaymentPolicy.ActiveContract}:{basis.PaymentPolicy.LaborGilPerSynth}|" +
+            FingerprintResponsibilities(basis.Responsibilities);
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -1398,7 +1411,8 @@ public partial class TradeOrders
                 source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
                     ? [row.ItemId]
                     : null,
-                _companyProfile?.MaterialPricingPolicy);
+                _companyProfile?.MaterialPricingPolicy,
+                materialResponsibilities: GetSelectedOrderMaterialResponsibilities());
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (pricingResult.ActivePlanFence is { } failedFence)

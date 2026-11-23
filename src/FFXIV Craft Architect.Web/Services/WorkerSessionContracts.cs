@@ -152,7 +152,10 @@ public sealed record WorkerTradeProjectionRequest(
     bool IncludeCraftLabor = false,
     TradeMaterialPricingPolicy? MaterialPricingPolicy = null,
     bool IncludeOutputPurchaseQuotes = false,
-    WorkerRoutePaymentBasis? RoutePaymentBasis = null);
+    WorkerRoutePaymentBasis? RoutePaymentBasis = null,
+    // Company-provided materials stay out of the crafter's executable route quote. Falls back
+    // to RoutePaymentBasis responsibilities when absent.
+    IReadOnlyList<TradePayrollResponsibilityLine>? MaterialResponsibilities = null);
 
 /// <summary>
 /// The order's payment terms for pricing precraft route choices. When present on a plan with a
