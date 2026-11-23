@@ -119,7 +119,8 @@ public partial class TradeOrders
                 orderToSave,
                 new TradeOrderPricingWorkflowOptions(
                     ForceRefreshMarketData: false,
-                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
+                    MaterialResponsibilities: GetSelectedOrderMaterialResponsibilities()));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null)
@@ -381,7 +382,8 @@ public partial class TradeOrders
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
                     ForceRefreshMarketData: false,
-                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
+                    MaterialResponsibilities: GetSelectedOrderMaterialResponsibilities()));
             if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
             {
                 Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
@@ -551,17 +553,27 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task RepriceSelectedOrderAsync()
+    private Task RepriceSelectedOrderAsync() =>
+        RepriceSelectedOrderCoreAsync(stagedResponsibilities: null, forceRefreshMarketData: true);
+
+    /// <summary>
+    /// Reprices the selected order from its linked plan. A staged responsibility draft prices and
+    /// saves with those responsibilities, so a Crafter/Company change re-routes the crafter's
+    /// quote in the same save. Returns whether the repriced order was saved.
+    /// </summary>
+    private async Task<bool> RepriceSelectedOrderCoreAsync(
+        TradePayrollWorkflowDraft? stagedResponsibilities,
+        bool forceRefreshMarketData)
     {
         if (_selectedOrder == null || _companyProfile == null || _isRepricingSelectedOrder)
         {
-            return;
+            return false;
         }
 
         if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
         {
             Snackbar.Add("Reopen archived orders before repricing.", Severity.Warning);
-            return;
+            return false;
         }
 
         if (!CanEditSelectedOrderPlan)
@@ -569,13 +581,13 @@ public partial class TradeOrders
             Snackbar.Add(
                 "Published pricing is part of the accepted terms. Use Revise Terms to refresh it.",
                 Severity.Warning);
-            return;
+            return false;
         }
 
         if (!HasLinkedCraftPlan(_selectedOrder))
         {
             Snackbar.Add("Create a linked craft plan before repricing.", Severity.Warning);
-            return;
+            return false;
         }
 
         _isRepricingSelectedOrder = true;
@@ -592,14 +604,16 @@ public partial class TradeOrders
                 "Repricing this order",
                 _selectedOrder.CraftPlanId))
             {
-                return;
+                return false;
             }
 
             pricingResult = await TradeOrderPricingWorkflow.RepriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: true,
-                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
+                    ForceRefreshMarketData: forceRefreshMarketData,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
+                    MaterialResponsibilities: (stagedResponsibilities ?? GetSelectedOrderResponsibilityProjection())
+                        ?.Responsibilities ?? []));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null && pricingResult.ActivePlanFence is { } failedFence)
@@ -611,7 +625,7 @@ public partial class TradeOrders
                 Snackbar.Add(
                     pricingResult.Message,
                     ToSnackbarSeverity(pricingResult.MessageLevel));
-                return;
+                return false;
             }
 
             var saved = !HasCanonicalCommission
@@ -622,7 +636,7 @@ public partial class TradeOrders
                         pricingResult.UpdatedOrder,
                         TradeCommissionPaymentSummary.FromOrder(
                             pricingResult.UpdatedOrder,
-                            GetSelectedOrderResponsibilityProjection(),
+                            stagedResponsibilities ?? GetSelectedOrderResponsibilityProjection(),
                             GetSelectedOrderEffectivePaymentPolicy())),
                     "Pricing refreshed and saved to the commission draft",
                     result => commissionResult = result);
@@ -643,7 +657,7 @@ public partial class TradeOrders
                         ? "Order pricing updated, but failed to save it to the order."
                         : $"Order pricing could not be saved. {quoteFailureReason}",
                     Severity.Error);
-                return;
+                return false;
             }
 
             if (!HasCanonicalCommission)
@@ -662,6 +676,7 @@ public partial class TradeOrders
             Snackbar.Add(
                 pricingResult.Message,
                 ToSnackbarSeverity(pricingResult.MessageLevel));
+            return true;
         }
         catch (Exception ex)
         {
@@ -674,6 +689,7 @@ public partial class TradeOrders
                     failedExceptionFence);
             }
             Snackbar.Add($"Failed to reprice order: {ex.Message}", Severity.Error);
+            return false;
         }
         finally
         {

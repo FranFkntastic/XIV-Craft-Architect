@@ -193,7 +193,8 @@ public partial class TradeOrders
         string PlanId,
         long Revision,
         string MaterialPolicyFingerprint,
-        string RoutePaymentFingerprint);
+        string RoutePaymentFingerprint,
+        string ResponsibilityFingerprint);
 
     private enum TradeOrderProcurementColumn
     {

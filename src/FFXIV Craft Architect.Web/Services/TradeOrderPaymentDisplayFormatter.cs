@@ -42,9 +42,13 @@ public static class TradeOrderPaymentDisplayFormatter
         {
             var lines = quote.Lines.Where(line => line.ItemId == material.ItemId &&
                 line.RequiresHq == material.RequiresHq).ToArray();
-            return lines.Length == 1 && lines[0].RequiredQuantity == material.Quantity
-                ? FormatGilAllowZero(lines[0].CashRequired)
-                : "Impact unavailable";
+            return lines.Length switch
+            {
+                1 when lines[0].RequiredQuantity == material.Quantity => FormatGilAllowZero(lines[0].CashRequired),
+                // Moved to the crafter after the route was quoted: last known value until repriced.
+                0 when !requireQuotedCash => FormatGil(material.TotalCost),
+                _ => "Impact unavailable"
+            };
         }
 
         if (requireQuotedCash)
