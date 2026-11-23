@@ -362,7 +362,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken cancellationToken = default,
         bool includeOutputPurchaseQuotes = false,
-        WorkerRoutePaymentBasis? routePaymentBasis = null) =>
+        WorkerRoutePaymentBasis? routePaymentBasis = null,
+        IReadOnlyList<TradePayrollResponsibilityLine>? materialResponsibilities = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.TradeProjection,
             expectedRevision,
@@ -370,7 +371,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
                 includeCraftLabor,
                 materialPricingPolicy,
                 includeOutputPurchaseQuotes,
-                routePaymentBasis),
+                routePaymentBasis,
+                materialResponsibilities),
             includeCraftLabor
                 ? EngineCommandPriority.UserRequestedDerivation
                 : EngineCommandPriority.Interactive,

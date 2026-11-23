@@ -47,6 +47,13 @@ public partial class TradeOrders
             material.ItemId,
             material.RequiresHq,
             responsibility);
+        // The crafter's route quote covers only crafter-supplied purchases, so moving a
+        // purchased material between Crafter and Company re-routes it when the plan is at hand.
+        var repriceRoute = material.Responsibility != responsibility &&
+            !material.IsOnHand &&
+            _selectedOrder.SourceSnapshot?.CostBasis == CommissionCostBasis.ProcurementRoute &&
+            HasLinkedCraftPlan(_selectedOrder) &&
+            CanEditSelectedOrderPlan;
         if (_selectedOrder.CompanyCommission != null)
         {
             if (!CanEditCanonicalWorkPackage)
@@ -55,6 +62,12 @@ public partial class TradeOrders
                     "Published responsibility is part of the accepted terms. Use Revise Terms to change it.",
                     Severity.Warning);
                 return false;
+            }
+
+            if (repriceRoute &&
+                await RepriceSelectedOrderCoreAsync(draftToSave, forceRefreshMarketData: false))
+            {
+                return true;
             }
 
             var payment = TradeCommissionPaymentSummary.FromOrder(
@@ -98,6 +111,10 @@ public partial class TradeOrders
             if (SelectOrderAfterReload(orderId, "Payment responsibility was saved, but the order could not be loaded."))
             {
                 _activeOpsTab = activeOpsTab;
+                if (repriceRoute && _selectedOrder?.Id == orderId)
+                {
+                    await RepriceSelectedOrderCoreAsync(stagedResponsibilities: null, forceRefreshMarketData: false);
+                }
             }
         }
         return true;

@@ -128,9 +128,22 @@ public sealed record TradeCommissionPaymentSummary(
         var requiresMaterialQuote = materials.Any(material =>
             material.Responsibility == CommissionMaterialResponsibility.Crafter &&
             !material.IsOnHand);
+        var crafterPurchases = materials
+            .Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter && !m.IsOnHand)
+            .ToArray();
         var (quotedCrafterCash, appliedAllowance) = TradePaymentCalculator.CrafterShare(quote,
-            materials.Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter && !m.IsOnHand)
-                .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet());
+            crafterPurchases.Select(m => (m.ItemId, m.RequiresHq)).ToHashSet());
+        // Quotes route only the crafter's purchases. A material moved to the crafter after the
+        // quote was taken keeps its last known value until the order is repriced.
+        var unquoted = quote is null
+            ? []
+            : crafterPurchases
+                .Where(m => !quote.Lines.Any(line => line.ItemId == m.ItemId && line.RequiresHq == m.RequiresHq))
+                .ToArray();
+        quotedCrafterCash += unquoted.Sum(m => m.TotalCost);
+        var unquotedWarnings = unquoted
+            .Select(m => $"{m.Name}: {m.TotalCost:N0} gil company value; not in the route quote.")
+            .ToArray();
         var comparison = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             paymentMaterials,
             laborInputs,
@@ -146,6 +159,7 @@ public sealed record TradeCommissionPaymentSummary(
                         string.IsNullOrWhiteSpace(sourceSnapshot.MaterialQuoteFailureReason)
                     ? []
                     : [sourceSnapshot.MaterialQuoteFailureReason])
+                .Concat(unquotedWarnings)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
             appliedAllowance,

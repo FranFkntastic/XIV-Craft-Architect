@@ -1692,7 +1692,11 @@ public static partial class ManagedHost
             JsonSerializer.SerializeToElement(
                 new WorkerAcquisitionProjectionRequest("All"),
                 WireJsonOptions)));
-        var pricing = await PriceTradeMaterialsAsync(demand, evidence, request.MaterialPricingPolicy);
+        var pricing = await PriceTradeMaterialsAsync(
+            demand,
+            evidence,
+            request.MaterialPricingPolicy,
+            request.MaterialResponsibilities ?? request.RoutePaymentBasis?.Responsibilities);
         var activeItems = pricing.ActiveItems;
         var materialQuote = pricing.Quote;
         var materialQuoteFailureReason = pricing.FailureReason;
@@ -1795,14 +1799,20 @@ public static partial class ManagedHost
 
     /// <summary>
     /// Executable whole-listing material quote for a plan's active demand. The order payment
-    /// and the route-choice counterfactuals both price through here, so they agree by
-    /// construction. Reads loaded evidence only.
+    /// and the route-choice counterfactuals both price through here with the same material
+    /// responsibilities, so they agree by construction. Company-provided materials keep their
+    /// selected-source value and stay out of the crafter's route. Reads loaded evidence only.
     /// </summary>
     private static async Task<TradeMaterialPricing> PriceTradeMaterialsAsync(
         RecipeDemandProjection demand,
         CraftSessionMarketEvidence evidence,
-        TradeMaterialPricingPolicy? materialPricingPolicy)
+        TradeMaterialPricingPolicy? materialPricingPolicy,
+        IReadOnlyList<TradePayrollResponsibilityLine>? responsibilities)
     {
+        var companyProvided = (responsibilities ?? [])
+            .Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Select(line => (line.ItemId, line.RequiresHq))
+            .ToHashSet();
         var activeDemand = demand.ActiveProcurementDemand
             .Where(row => row.Quantity > 0)
             .ToArray();
@@ -1850,11 +1860,12 @@ public static partial class ManagedHost
             var policy = TradeMaterialPricingPolicyNormalizer.Normalize(materialPricingPolicy);
             var quoteResult = await new TradeMaterialQuoteService().PriceAsync(
                 new MarketShoppingService(SessionMarketCache), evidence.ShoppingPlans ?? [],
-                activeItems, selectedSources, policy, DateTime.UtcNow, materialLines);
+                activeItems, selectedSources, policy, DateTime.UtcNow, materialLines, companyProvided);
             if (quoteResult.IsComplete)
             {
                 materialQuote = quoteResult.Quote;
                 materialLines = quoteResult.MaterialLines;
+                warnings.AddRange(quoteResult.RouteWarnings);
             }
             else
             {
@@ -1939,7 +1950,11 @@ public static partial class ManagedHost
         try
         {
             var demand = new RecipeDemandProjectionService().Build(plan, snapshot: null);
-            var pricing = await PriceTradeMaterialsAsync(demand, evidence, materialPricingPolicy);
+            var pricing = await PriceTradeMaterialsAsync(
+                demand,
+                evidence,
+                materialPricingPolicy,
+                basis.Responsibilities);
             var labor = await BuildCraftLaborAsync(plan);
             var payment = TradeCommissionPaymentSummary.FromSnapshot(
                 new TradeOrderSourceSnapshot

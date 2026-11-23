@@ -491,7 +491,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken cancellationToken = default,
         bool includeOutputPurchaseQuotes = false,
-        WorkerRoutePaymentBasis? routePaymentBasis = null)
+        WorkerRoutePaymentBasis? routePaymentBasis = null,
+        IReadOnlyList<TradePayrollResponsibilityLine>? materialResponsibilities = null)
     {
         if (!IsEnabled)
         {
@@ -504,7 +505,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             materialPricingPolicy,
             cancellationToken,
             includeOutputPurchaseQuotes,
-            routePaymentBasis);
+            routePaymentBasis,
+            materialResponsibilities);
         if (string.Equals(
                 result.RejectionCode,
                 "stale-revision",
@@ -517,7 +519,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 materialPricingPolicy,
                 cancellationToken,
                 includeOutputPurchaseQuotes,
-                routePaymentBasis);
+                routePaymentBasis,
+                materialResponsibilities);
         }
 
         if (!result.Accepted)

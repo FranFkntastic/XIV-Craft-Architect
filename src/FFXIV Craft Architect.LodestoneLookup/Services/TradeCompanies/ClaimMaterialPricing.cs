@@ -73,9 +73,14 @@ public sealed class ClaimMaterialPricing(
             .GroupBy(row => (row.ItemId, row.MustBeHq))
             .ToDictionary(group => group.Key, group => group.Select(row => row.Source).Distinct().Single());
         var now = clock.GetUtcNow().UtcDateTime;
+        // Company-provided materials stay out of the crafter's route, exactly as when the terms
+        // were priced; their published value is kept below.
+        var companyProvided = terms.Materials.Where(m => m.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet();
         var result = await new TradeMaterialQuoteService().PriceAsync(new MarketShoppingService(cache),
             plans, items, sources, old.AppliedPolicy, now,
-            new CommissionCostBasisResolver().BuildSelectedSourceLines(demand.ActiveProcurementDemand, [], plans), ct);
+            new CommissionCostBasisResolver().BuildSelectedSourceLines(demand.ActiveProcurementDemand, [], plans),
+            companyProvided, ct);
         var quote = result.Quote ?? throw new InvalidOperationException(result.FailureReason);
         if (string.IsNullOrWhiteSpace(quote.RouteSelectionKey))
         {

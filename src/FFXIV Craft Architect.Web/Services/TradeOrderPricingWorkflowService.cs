@@ -10,7 +10,9 @@ public sealed record TradeOrderPricingWorkflowOptions(
     // price it in place (keeping its recipe tree and acquisition choices) instead of
     // rebuilding the tree from scratch. Market evidence is still reconciled so the
     // order never prices from evidence older than the reusable-cache window.
-    bool ReuseMatchingActivePlan = false);
+    bool ReuseMatchingActivePlan = false,
+    // Company-provided materials are excluded from the crafter's executable route quote.
+    IReadOnlyList<TradePayrollResponsibilityLine>? MaterialResponsibilities = null);
 
 public sealed record TradeOrderPricingWorkflowResult(
     TradeOrderPricingWorkflowStatus Status,
@@ -186,7 +188,8 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation,
                 savedAt,
                 useCurrentSettingsContext: true,
-                materialPricingPolicy: options.MaterialPricingPolicy);
+                materialPricingPolicy: options.MaterialPricingPolicy,
+                materialResponsibilities: options.MaterialResponsibilities);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -293,6 +296,7 @@ public sealed class TradeOrderPricingWorkflowService
                 DateTime.UtcNow,
                 useCurrentSettingsContext: true,
                 materialPricingPolicy: options.MaterialPricingPolicy,
+                materialResponsibilities: options.MaterialResponsibilities,
                 initialWarnings: string.IsNullOrWhiteSpace(_projections.Shell.RestoreWarning)
                     ? []
                     : [_projections.Shell.RestoreWarning]);
@@ -335,7 +339,8 @@ public sealed class TradeOrderPricingWorkflowService
         WorkerAcquisitionMutation mutation,
         IReadOnlyCollection<int>? marketItemIdsToRefresh,
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyList<TradePayrollResponsibilityLine>? materialResponsibilities = null)
     {
         ArgumentNullException.ThrowIfNull(order);
         if (TradeOrderStatusWorkflow.IsArchived(order.Status))
@@ -391,7 +396,8 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation,
                 DateTime.UtcNow,
                 useCurrentSettingsContext: false,
-                materialPricingPolicy: materialPricingPolicy);
+                materialPricingPolicy: materialPricingPolicy,
+                materialResponsibilities: materialResponsibilities);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -460,6 +466,7 @@ public sealed class TradeOrderPricingWorkflowService
         DateTime refreshedAt,
         bool useCurrentSettingsContext,
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
+        IReadOnlyList<TradePayrollResponsibilityLine>? materialResponsibilities = null,
         IReadOnlyList<string>? initialWarnings = null)
     {
         // The caller resolved and validated the company pricing scope before taking
@@ -498,7 +505,8 @@ public sealed class TradeOrderPricingWorkflowService
         source = await _worker.GetTradeProjectionAsync(
             includeCraftLabor: true,
             materialPricingPolicy: materialPricingPolicy,
-            cancellationToken: operation.Token)
+            cancellationToken: operation.Token,
+            materialResponsibilities: materialResponsibilities)
             ?? throw new InvalidOperationException(
                 "The Worker did not publish Trade pricing evidence.");
         warnings.AddRange(source.Warnings);
