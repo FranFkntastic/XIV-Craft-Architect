@@ -349,10 +349,18 @@ public partial class TradeOrders
         });
     }
 
+    /// <summary>
+    /// True while any tab sharing this Worker owns an active plan operation. The shell projection
+    /// carries the operation cross-tab, so background tabs see another tab's in-flight work here.
+    /// </summary>
+    private bool IsWorkerOperationActive =>
+        WorkerProjections.Operation?.IsActive == true;
+
     private void ScheduleSelectedOrderPlanRestoration()
     {
         if (_isDisposed ||
             IsPlanMutationTransactionRunning ||
+            IsWorkerOperationActive ||
             _activeOpsTab != ProcurementTabIndex ||
             _selectedOrder == null ||
             !HasLinkedCraftPlan(_selectedOrder) ||
@@ -388,6 +396,14 @@ public partial class TradeOrders
     {
         if (_isLoadingSelectedOrderSupplyPlan)
         {
+            _selectedOrderPlanRestoreRetryRequested = true;
+            return;
+        }
+
+        if (IsWorkerOperationActive)
+        {
+            // Another tab (or this one) holds the shared Worker operation. A "restore" would
+            // supersede and abort it; the operation's completion broadcast re-schedules us.
             _selectedOrderPlanRestoreRetryRequested = true;
             return;
         }
@@ -1173,6 +1189,7 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
+            !IsRequestedOutputRow(row) &&
             TradeProcurementSourceMutationPolicy.CanMutateLivePlan(
                 HasCanonicalCommission,
                 CanEditCanonicalWorkPackage) &&
@@ -1287,7 +1304,7 @@ public partial class TradeOrders
         AcquisitionSource source,
         bool showSuccess = true)
     {
-        if (_selectedOrder == null)
+        if (_selectedOrder == null || IsRequestedOutputRow(row))
         {
             return false;
         }
