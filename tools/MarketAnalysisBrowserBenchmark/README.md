@@ -60,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBro
 The browser runner can also drive simple app interactions before capturing the report:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBrowserBenchmark.ps1" -HarnessCommandLine "--navigate --enable-developer-mode --import-native-plan \"C:\Users\gianf\Downloads\Unmod comparison sheet.craftplan\" --post-action-delay-seconds 8 --scenario clean-unmod-imported --cache-state warm --system-profile clean --output C:\tmp\market-analysis-browser-benchmark-clean-unmod-imported.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBrowserBenchmark.ps1" -HarnessCommandLine "--navigate --enable-developer-mode --import-native-plan \"<path-to-plan.craftplan>\" --post-action-delay-seconds 8 --scenario clean-imported --cache-state warm --system-profile clean --output C:\tmp\market-analysis-browser-benchmark.json"
 ```
 
 Interaction options are intentionally small and boring:
@@ -116,21 +116,21 @@ Comparison validity:
 
 ## Benchmark Suite Runner
 
-Use `tools\Run-MarketAnalysisBenchmarkSuite.ps1` when comparing the pinned `local-dev`
-worktree against the current diagnostics/stabilization worktree. The suite runner writes
-one JSON manifest plus one JSON file per executed benchmark to the chosen output folder.
-It builds commands as native PowerShell arrays and records skipped browser runs instead
-of silently dropping them.
+Use `tools\Run-MarketAnalysisBenchmarkSuite.ps1` to compare a baseline checkout
+against a candidate branch. The suite runner writes one JSON manifest plus one
+JSON file per executed benchmark to the chosen output folder. It builds commands
+as native PowerShell arrays and records skipped browser runs instead of silently
+dropping them.
 
-Dry-run the Plan 17:43 matrix before any live calls:
+Dry-run a benchmark matrix before any live calls:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBenchmarkSuite.ps1" `
-  -PlanPath "C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan" `
-  -Scenario "plan-1743" `
-  -OutputDirectory "C:\tmp\market-analysis-suite-plan-1743" `
-  -BaselineRepoRoot "C:\Users\gianf\.codex\worktrees\a2bd\FFXIV Craft Architect C# Edition" `
-  -StabilizationRepoRoot "C:\Users\gianf\.codex\worktrees\4466\FFXIV Craft Architect C# Edition" `
+  -PlanPath "<path-to-plan.craftplan>" `
+  -Scenario "sample-plan" `
+  -OutputDirectory "C:\tmp\market-analysis-suite" `
+  -BaselineRepoRoot "<path-to-baseline-checkout>" `
+  -StabilizationRepoRoot "<path-to-candidate-checkout>" `
   -SystemProfile "ffxiv-open" `
   -IncludeBrowser `
   -IncludeFake `
@@ -143,9 +143,9 @@ Run CLI/Core live plus mechanism-only fake rows without browser automation:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBenchmarkSuite.ps1" `
-  -PlanPath "C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan" `
-  -Scenario "plan-1743" `
-  -OutputDirectory "C:\tmp\market-analysis-suite-plan-1743" `
+  -PlanPath "<path-to-plan.craftplan>" `
+  -Scenario "sample-plan" `
+  -OutputDirectory "C:\tmp\market-analysis-suite" `
   -SystemProfile "ffxiv-open" `
   -IncludeFake
 ```
@@ -155,9 +155,9 @@ Run browser rows against externally managed dev servers. Start the baseline app 
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Run-MarketAnalysisBenchmarkSuite.ps1" `
-  -PlanPath "C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan" `
-  -Scenario "plan-1743-browser" `
-  -OutputDirectory "C:\tmp\market-analysis-suite-plan-1743-browser" `
+  -PlanPath "<path-to-plan.craftplan>" `
+  -Scenario "sample-plan-browser" `
+  -OutputDirectory "C:\tmp\market-analysis-suite-browser" `
   -BaselineAppPort 5002 `
   -StabilizationAppPort 5003 `
   -BaselineDevToolsPort 9232 `
@@ -180,17 +180,6 @@ The runner also accepts explicit URLs when ports alone are not enough:
 ```powershell
 -BaselineUrl "http://127.0.0.1:5002" -StabilizationUrl "http://127.0.0.1:5003"
 ```
-
-Known plan paths used as benchmark sentinels:
-
-- Plan 17:43: `C:\Users\gianf\Downloads\Plan 2026-06-06 17_43.craftplan`
-- SSUC: `C:\Users\gianf\Downloads\SSUC Benchmark.craftplan`
-- Unmod stress: `C:\Users\gianf\Downloads\Unmod comparison sheet.craftplan`
-
-The suite runner defaults the `local-dev` baseline to
-`C:\Users\gianf\.codex\worktrees\a2bd\FFXIV Craft Architect C# Edition` and records
-`git worktree list --porcelain` in the manifest. It must not move or check out
-`local-dev`.
 
 Safety defaults:
 
