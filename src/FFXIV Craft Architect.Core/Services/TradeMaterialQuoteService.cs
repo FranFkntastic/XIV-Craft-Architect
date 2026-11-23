@@ -48,7 +48,12 @@ public sealed class TradeMaterialQuoteService
         var stockLines = stock.Select(item => references[(item.ItemId, item.RequiresHq)]).ToArray();
         var stockCoverage = stock.Select(item => new TradeMaterialQuoteLine(
             item.ItemId, item.Name, item.TotalQuantity, item.RequiresHq, 0, [], null)).ToArray();
-        var providedLines = provided.Select(item => BuildCompanyValueLine(item, selectedSourceLines)).ToArray();
+        // Demand arrives one aggregate per acquisition source; company value is one line per
+        // item and quality, so mixed-source company materials are consolidated first.
+        var providedLines = provided
+            .GroupBy(item => (item.ItemId, item.RequiresHq))
+            .Select(group => BuildCompanyValueLine(group.ToArray(), selectedSourceLines))
+            .ToArray();
         if (purchases.Length == 0 && (stock.Length > 0 || provided.Length > 0))
         {
             var normalized = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
@@ -109,27 +114,40 @@ public sealed class TradeMaterialQuoteService
     }
 
     /// <summary>
-    /// The company-value line for a provided material: its selected-source evidence, or the
-    /// demand's own estimate when that evidence is missing.
+    /// The company-value line for a provided material (all of its per-source demand for one
+    /// item and quality): its selected-source evidence, which already carries the combined
+    /// quantity, or the demand's own quantity-weighted estimate when that evidence is missing.
     /// </summary>
     private static CommissionPayrollInputLine BuildCompanyValueLine(
-        MaterialAggregate item,
-        IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines) =>
-        selectedSourceLines.FirstOrDefault(line =>
-            line.ItemId == item.ItemId &&
-            line.RequiresHq == item.RequiresHq &&
-            line.EvidenceSource != TradeOrderWorkflow.OnHandEvidenceSource)
-        ?? new CommissionPayrollInputLine(
-            item.ItemId,
-            item.Name,
-            item.TotalQuantity,
-            Math.Max(0m, item.UnitPrice),
-            item.RequiresHq,
+        IReadOnlyList<MaterialAggregate> items,
+        IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines)
+    {
+        var first = items[0];
+        var evidence = selectedSourceLines.FirstOrDefault(line =>
+            line.ItemId == first.ItemId &&
+            line.RequiresHq == first.RequiresHq &&
+            line.EvidenceSource != TradeOrderWorkflow.OnHandEvidenceSource);
+        if (evidence != null)
+        {
+            return evidence;
+        }
+
+        var quantity = items.Sum(item => item.TotalQuantity);
+        var unitPrice = quantity > 0
+            ? items.Sum(item => Math.Max(0m, item.UnitPrice) * item.TotalQuantity) / quantity
+            : 0m;
+        return new CommissionPayrollInputLine(
+            first.ItemId,
+            first.Name,
+            quantity,
+            unitPrice,
+            first.RequiresHq,
             CommissionMaterialResponsibility.Provided,
             "Company value",
             "Company-provided material; not part of the crafter's route.",
             null,
             []);
+    }
 
     public static string DescribeNoExecutableRoute(
         TradeMaterialPricingPolicy? requestedPolicy)
