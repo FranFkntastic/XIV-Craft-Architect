@@ -1819,7 +1819,10 @@ public static partial class ManagedHost
         var selectedDemandGroups = activeDemand
             .GroupBy(row => (row.ItemId, row.MustBeHq))
             .ToArray();
+        // Company-provided materials never join the crafter's route, so their sources can
+        // neither conflict nor demand market evidence for the quote.
         var conflictingSelections = selectedDemandGroups
+            .Where(group => !companyProvided.Contains(group.Key))
             .Where(group => group.Select(row => row.Source).Distinct().Count() != 1)
             .ToArray();
         var selectedSources = selectedDemandGroups
@@ -1828,8 +1831,9 @@ public static partial class ManagedHost
         var activeItems = demand.ToSelectedProcurementMaterialAggregates()
             .Where(item => item.TotalQuantity > 0)
             .ToArray();
-        var requiresMarketEvidence = selectedSources.Values.Any(source =>
-            source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq);
+        var requiresMarketEvidence = selectedSources
+            .Where(pair => !companyProvided.Contains(pair.Key))
+            .Any(pair => pair.Value is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq);
         var warnings = new List<string>();
         TradeMaterialQuote? materialQuote = null;
         string? materialQuoteFailureReason = null;

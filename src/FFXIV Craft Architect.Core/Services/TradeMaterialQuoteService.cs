@@ -79,11 +79,12 @@ public sealed class TradeMaterialQuoteService
             }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
             executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
         var result = Build(optimization, purchases, policy, now);
-        if (!result.IsComplete)
+        if (!result.IsComplete || result.Quote!.WorldStops > routePolicy.MaximumWorldStops)
         {
-            // The stop limit is advisory: when no capped route completes, search again without
-            // the per-item and route caps so Build can return the best route with a warning.
-            // Genuine shortfalls and unsupported sources still fail on this uncapped pass.
+            // The stop limit is advisory: when no capped route fits it, search again without the
+            // per-item and route caps so Build sees the purchases those caps excluded and can
+            // return the best route with a warning. Genuine shortfalls and unsupported sources
+            // still fail on this uncapped pass; a capped over-limit quote is kept if it does.
             var uncapped = await shopping.OptimizeProcurementRouteWithDecisionAsync(
                 input, new MarketAnalysisConfig
                 {
@@ -91,7 +92,11 @@ public sealed class TradeMaterialQuoteService
                     TravelTolerance = 11
                 }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
                 executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
-            result = Build(uncapped, purchases, policy, now);
+            var uncappedResult = Build(uncapped, purchases, policy, now);
+            if (uncappedResult.IsComplete || !result.IsComplete)
+            {
+                result = uncappedResult;
+            }
         }
 
         return result.Quote is { } quote
