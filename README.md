@@ -21,13 +21,16 @@ The canonical app is the hosted Blazor web app — no installation required:
 
 ## Building from Source
 
+Craft Architect depends on [Franthropy](https://github.com/FranFkntastic/Franthropy) at the revision pinned in `eng/Franthropy.Version.props`. From a fresh checkout, resolve the pinned Franthropy source and build in local source mode:
+
 ```powershell
-dotnet restore ".\FFXIV Craft Architect.sln"
-dotnet build ".\FFXIV Craft Architect.sln" --configuration Release --no-restore
-dotnet test ".\FFXIV Craft Architect.sln" --configuration Release --no-build --no-restore
+$franthropyRoot = powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Resolve-Franthropy.ps1"
+dotnet restore ".\FFXIV Craft Architect.sln" -p:FranthropySource=Local -p:FranthropyRoot="$franthropyRoot"
+dotnet build ".\FFXIV Craft Architect.sln" --configuration Release --no-restore -p:FranthropySource=Local -p:FranthropyRoot="$franthropyRoot"
+dotnet test ".\FFXIV Craft Architect.sln" --configuration Release --no-build --no-restore -p:FranthropySource=Local -p:FranthropyRoot="$franthropyRoot"
 ```
 
-If you are developing against a local checkout of [Franthropy](https://github.com/FranFkntastic/Franthropy), pass `-p:FranthropySource=Local -p:FranthropyRoot=<path-to-Franthropy>` to `dotnet restore` and `dotnet build`.
+Alternatively, if you have a local Franthropy NuGet package feed (default `$(LOCALAPPDATA)/Franthropy/packages`, or pass `-p:FranthropyFeed=<dir>`), you can run `dotnet restore`, `dotnet build`, and `dotnet test` directly without `FranthropySource=Local`.
 
 ## License
 
