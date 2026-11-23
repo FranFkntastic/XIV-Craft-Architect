@@ -63,8 +63,9 @@ public sealed class ClaimMaterialPricing(
             {
                 throw new InvalidOperationException("Market analysis is unavailable for one or more plan materials.");
             }
+            // The published routes are part of the terms: claim-time repricing refreshes
+            // what they cost and never re-decides craft versus buy from newer evidence.
             plans = evidence.ShoppingPlans;
-            AcquisitionPlanningService.ReconcileAcquisitionDecisions(plan, plans);
         }
         var demand = projector.Build(plan, null);
         var items = demand.ToSelectedProcurementMaterialAggregates();

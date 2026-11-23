@@ -1057,6 +1057,10 @@
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
                                     </div>
+                                    @if (!IsCommissionPublished && GetOutputPurchaseQuotes() is { Count: > 0 } outputPurchaseQuotes)
+                                    {
+                                        @RenderBuyInsteadBox(outputPurchaseQuotes)
+                                    }
                                     <div class="trade-orders-payment-heading">
                                         <div>
                                             <MudText Typo="Typo.subtitle2">Supply Summary</MudText>
@@ -1616,6 +1620,13 @@
                                         </MudButton>
                                     }
                                 </section>
+                                @* Private drafts have no center payment breakdown; their payment lives here. *@
+                                @if (!IsCommissionPublished &&
+                                     BuildSelectedOrderCenterOverview() is null &&
+                                     GetOutputPurchaseQuotes() is { Count: > 0 } planOutputPurchaseQuotes)
+                                {
+                                    @RenderBuyInsteadBox(planOutputPurchaseQuotes)
+                                }
                                 <MudText Typo="Typo.caption">Quote region: @(string.IsNullOrWhiteSpace(_selectedOrder.SourceSnapshot.Region) ? "Not recorded" : _selectedOrder.SourceSnapshot.Region)</MudText>
                                 @if (_companyProfile?.CommissionPricingScope is not { IsValid: true })
                                 {
@@ -2352,33 +2363,66 @@
 </div>
 
 @code {
-    private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
-        @if (CanEditProcurementSource(row))
+    private RenderFragment<IReadOnlyList<WorkerOutputPurchaseQuote>> RenderBuyInsteadBox => outputPurchaseQuotes => @<section class="trade-orders-payment-table trade-orders-buy-instead" aria-label="Cost to buy instead">
+        <div class="trade-orders-payment-table-title">
+            <span>Cost to buy instead</span>
+            <span>@FormatOutputPurchaseContext(outputPurchaseQuotes)</span>
+        </div>
+        @foreach (var quote in outputPurchaseQuotes)
         {
-            <select class="trade-orders-procurement-select"
-                    aria-label="@($"{row.ItemName} procurement route")"
-                    value="@row.Source.ToString()"
-                    @onchange="args => ChangeProcurementRowSourceValueAsync(row, args.Value?.ToString())">
-                @foreach (var source in GetProcurementSourceOptions(row))
+            <div class="trade-orders-buy-instead-row" @key="@($"buy:{quote.ItemId}:{quote.MustBeHq}")">
+                <span>@quote.ItemName ×@quote.Quantity.ToString("N0")</span>
+                @if (quote.IsShort)
                 {
-                    <option value="@source.ToString()"
-                            disabled="@(source == AcquisitionSource.Craft && row.Responsibility == CommissionMaterialResponsibility.Provided)"
-                            selected="@(source == row.Source)">@RecipePlanDisplayHelpers.GetSourceDisplayName(source)</option>
+                    if (quote.ListedQuantity <= 0)
+                    {
+                        <span class="is-short">⚠ None listed</span>
+                    }
+                    else
+                    {
+                        <span class="is-short">⚠ Only @quote.ListedQuantity.ToString("N0") of @quote.Quantity.ToString("N0") listed</span>
+                    }
                 }
-            </select>
+                else
+                {
+                    <span>@(quote.ListingCount switch { <= 0 => string.Empty, 1 => "1 listing", _ => $"{quote.ListingCount:N0} listings" })</span>
+                }
+                <strong>@(quote.TotalCost is { } buyTotal ? FormatGilShort(buyTotal) : "—")</strong>
+                <button type="button"
+                        @onclick="@(() => OpenMarketAnalysisForItemAsync(quote.ItemId))">
+                    Market
+                </button>
+            </div>
         }
-        else
-        {
-            <strong class="trade-orders-source-locked">@row.SourceLabel</strong>
+    </section>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
+        @{
+            var routeOverride = GetProcurementRouteOverrideDelta(row);
         }
+        <div class="trade-orders-procurement-route-picker">
+            @if (CanEditProcurementSource(row))
+            {
+                <ListboxPicker Items="@GetProcurementRouteItems(row)"
+                               Value="@row.Source.ToString()"
+                               ValueChanged="@(value => ChangeProcurementRowSourceValueAsync(row, value))"
+                               AriaLabel="@($"{row.ItemName} procurement route")" />
+            }
+            else
+            {
+                <strong class="trade-orders-source-locked">@row.SourceLabel</strong>
+            }
+            @if (routeOverride is { } delta)
+            {
+                <span class="trade-orders-route-override"
+                      title="Total payment vs. default route"
+                      aria-label="@($"Total payment {(delta > 0 ? "up" : "down")} {FormatGilShort(Math.Abs(delta))} versus default route")">@FormatSignedGilShort(delta)</span>
+            }
+        </div>
         <div class="trade-orders-procurement-route-actions">
             <button type="button"
                     @onclick="@(() => OpenMarketAnalysisForProcurementRowAsync(row))">
                 Market
-            </button>
-            <button type="button"
-                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
-                Compare routes
             </button>
         </div>
     </div>;

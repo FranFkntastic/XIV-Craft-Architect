@@ -18,6 +18,11 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
+    // A canonical commission exists for drafts too; only a non-draft one is published.
+    private bool IsCommissionPublished =>
+        (SelectedCanonicalCommission ?? _selectedOrder?.CompanyCommission) is { } commission &&
+        commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft;
+
     private bool HasAgreedPaymentTerms => HasCanonicalCommission && !IsEditingCommissionTermsRevision &&
         (SelectedCanonicalCommission ?? _selectedOrder?.CompanyCommission)?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft;
 
@@ -187,7 +192,8 @@ public partial class TradeOrders
         Guid OrderId,
         string PlanId,
         long Revision,
-        string MaterialPolicyFingerprint);
+        string MaterialPolicyFingerprint,
+        string RoutePaymentFingerprint);
 
     private enum TradeOrderProcurementColumn
     {

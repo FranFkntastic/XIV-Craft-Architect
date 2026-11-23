@@ -592,13 +592,53 @@ public static partial class ManagedHost
             throw new InvalidOperationException("Plan identity requires an id and name.");
         }
 
-        _canonicalSession.Session.TrackSourceIdentity(
+        var session = _canonicalSession.Session;
+        session.TrackSourceIdentity(
             mutation.PlanId.Trim(),
             mutation.PlanName.Trim());
+        var laborRateChanged = mutation.AcquisitionLaborGilPerSynth is { } laborRate &&
+            ApplyAcquisitionLaborRate(session, laborRate);
         return CompleteMutation(
             command.CommandKind,
             CaptureShellProjection,
-            _canonicalSession.CreateDurablePatch(replaceSourceIdentity: true));
+            _canonicalSession.CreateDurablePatch(
+                replacePlanJson: laborRateChanged,
+                replacePlanStateJson: laborRateChanged,
+                replaceProcurementRoute: laborRateChanged,
+                replaceSourceIdentity: true));
+    }
+
+    /// <summary>
+    /// Stamps the commission labor rate on the active plan and re-evaluates automatic
+    /// acquisition defaults with it. Operator-selected routes are never changed.
+    /// </summary>
+    private static bool ApplyAcquisitionLaborRate(CraftSessionState session, decimal requestedRate)
+    {
+        var rate = Math.Max(0m, requestedRate);
+        var planSessionVersion = session.PlanSessionVersion;
+        var stamp = session.CaptureVersionStamp();
+        var plan = session.ActivePlan;
+        if (plan is null || plan.AcquisitionLaborGilPerSynth == rate)
+        {
+            return false;
+        }
+
+        plan.AcquisitionLaborGilPerSynth = rate;
+        AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            plan,
+            session.BorrowMarketEvidence().ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>());
+        if (!session.TryReplaceActivePlanDecisions(
+                stamp,
+                plan,
+                planSessionVersion,
+                "commission labor rate changed"))
+        {
+            throw new InvalidOperationException(
+                "The plan changed before its commission labor rate could be applied.");
+        }
+
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        return true;
     }
 
     private static WorkerSessionResultEnvelope MutateStoredPlanRevision(
@@ -1644,9 +1684,6 @@ public static partial class ManagedHost
 
         var recipeLayer = new WorkerRecipeLayerWorkflow(_canonicalSession);
         var demand = recipeLayer.BuildDemandProjection(plan);
-        var activeDemand = demand.ActiveProcurementDemand
-            .Where(row => row.Quantity > 0)
-            .ToArray();
         var evidence = session.BorrowMarketEvidence();
         var acquisition = CaptureAcquisitionProjection(new WorkerSessionCommandEnvelope(
             WorkerSessionProtocol.ContractVersion,
@@ -1655,6 +1692,120 @@ public static partial class ManagedHost
             JsonSerializer.SerializeToElement(
                 new WorkerAcquisitionProjectionRequest("All"),
                 WireJsonOptions)));
+        var pricing = await PriceTradeMaterialsAsync(demand, evidence, request.MaterialPricingPolicy);
+        var activeItems = pricing.ActiveItems;
+        var materialQuote = pricing.Quote;
+        var materialQuoteFailureReason = pricing.FailureReason;
+        var materialLines = materialQuote is null
+            ? pricing.MaterialLines
+            : ApplyOnHandReferenceValues(pricing.MaterialLines, acquisition.Rows);
+        var warnings = new List<string>(pricing.Warnings);
+        warnings.AddRange(materialLines.SelectMany(line => line.Warnings));
+
+        IReadOnlyList<TradeOrderCraftLaborSnapshot> craftLabor = Array.Empty<TradeOrderCraftLaborSnapshot>();
+        if (request.IncludeCraftLabor)
+        {
+            var labor = await BuildCraftLaborAsync(plan);
+            craftLabor = labor.CraftLabor;
+            warnings.AddRange(labor.Warnings);
+        }
+
+        // Option totals are replaced only after on-hand reference values were read from the
+        // estimate-based options above, so material values on the grid stay as they were.
+        var acquisitionRows = request.RoutePaymentBasis is { } paymentBasis &&
+            plan.AcquisitionLaborGilPerSynth > 0
+                ? await PriceRouteOptionsAsPaymentAsync(
+                    plan,
+                    acquisition.Rows,
+                    evidence,
+                    request.MaterialPricingPolicy,
+                    paymentBasis)
+                : acquisition.Rows;
+
+        var outputPurchaseQuotes = request.IncludeOutputPurchaseQuotes
+            ? await CaptureOutputPurchaseQuotesAsync(
+                plan,
+                evidence.ShoppingPlans ?? [],
+                TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy))
+            : null;
+
+        var rootItems = plan.RootItems
+            .Select(node =>
+            {
+                var unitPrice = node.MustBeHq && node.HqMarketPrice > 0
+                    ? node.HqMarketPrice
+                    : node.MarketPrice;
+                return new TradeOrderRootItemSnapshot(
+                    node.ItemId,
+                    node.Name,
+                    node.Quantity,
+                    node.MustBeHq,
+                    unitPrice * node.Quantity);
+            })
+            .ToArray();
+        var activeProcurementIds = demand.ActiveProcurementDemand.Select(node => node.NodeId)
+            .ToHashSet(StringComparer.Ordinal);
+        return new WorkerTradeProjection(
+            _sessionRevision,
+            HasPlan: true,
+            session.Identity.SourcePlanId,
+            session.Identity.SourcePlanName ?? plan.Name ?? "Active craft plan",
+            session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
+            session.ActiveContext.Region ?? "North America",
+            session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+            ResolveTradeRequestedDataCenters(
+                evidence.PublicationContext,
+                session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+                session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
+                session.ActiveContext.Region ?? "North America"),
+            evidence.Lens,
+            session.PlanSessionVersion,
+            session.Versions.MarketAnalysis,
+            session.ProjectItems,
+            rootItems,
+            materialLines,
+            activeItems,
+            acquisitionRows,
+            craftLabor,
+            warnings
+                .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            materialQuote,
+            materialQuoteFailureReason,
+            demand.AllPlanDemand.Select(occurrence => new WorkerPlanOccurrence(
+                occurrence.NodeId,
+                occurrence.ParentNodeId,
+                occurrence.ItemId,
+                occurrence.MustBeHq,
+                occurrence.Quantity,
+                occurrence.Source,
+                activeProcurementIds.Contains(occurrence.NodeId),
+                occurrence.SuppressedByNodeId != null)).ToArray(),
+            outputPurchaseQuotes);
+    }
+
+    private sealed record TradeMaterialPricing(
+        IReadOnlyList<MaterialAggregate> ActiveItems,
+        IReadOnlyList<CommissionPayrollInputLine> MaterialLines,
+        TradeMaterialQuote? Quote,
+        string? FailureReason,
+        IReadOnlyList<string> Warnings);
+
+    /// <summary>
+    /// Executable whole-listing material quote for a plan's active demand. The order payment
+    /// and the route-choice counterfactuals both price through here, so they agree by
+    /// construction. Reads loaded evidence only.
+    /// </summary>
+    private static async Task<TradeMaterialPricing> PriceTradeMaterialsAsync(
+        RecipeDemandProjection demand,
+        CraftSessionMarketEvidence evidence,
+        TradeMaterialPricingPolicy? materialPricingPolicy)
+    {
+        var activeDemand = demand.ActiveProcurementDemand
+            .Where(row => row.Quantity > 0)
+            .ToArray();
         var selectedDemandGroups = activeDemand
             .GroupBy(row => (row.ItemId, row.MustBeHq))
             .ToArray();
@@ -1696,14 +1847,14 @@ public static partial class ManagedHost
         }
         else
         {
-            var policy = TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy);
+            var policy = TradeMaterialPricingPolicyNormalizer.Normalize(materialPricingPolicy);
             var quoteResult = await new TradeMaterialQuoteService().PriceAsync(
                 new MarketShoppingService(SessionMarketCache), evidence.ShoppingPlans ?? [],
                 activeItems, selectedSources, policy, DateTime.UtcNow, materialLines);
             if (quoteResult.IsComplete)
             {
                 materialQuote = quoteResult.Quote;
-                materialLines = ApplyOnHandReferenceValues(quoteResult.MaterialLines, acquisition.Rows);
+                materialLines = quoteResult.MaterialLines;
             }
             else
             {
@@ -1712,97 +1863,326 @@ public static partial class ManagedHost
                 warnings.Add(materialQuoteFailureReason);
             }
         }
-        warnings.AddRange(materialLines.SelectMany(line => line.Warnings));
 
-        var craftLabor = Array.Empty<TradeOrderCraftLaborSnapshot>();
-        if (request.IncludeCraftLabor)
-        {
-            var snapshotService = new RecipeOperationSnapshotService(
-                SessionGarland,
-                new RecipeResolutionService(),
-                NullLogger<RecipeOperationSnapshotService>.Instance);
-            var snapshot = await snapshotService.BuildAsync(plan);
-            craftLabor = snapshot.GetRequiredCrafts()
-                .Where(craft => craft.CraftCount > 0)
-                .Select(craft => new TradeOrderCraftLaborSnapshot(
-                    craft.NodeId,
-                    craft.ResultItemId,
-                    craft.ResultItemName,
-                    craft.RequestedQuantity,
-                    craft.CraftCount,
-                    craft.JobName,
-                    craft.RecipeLevel,
-                    craft.HasStructuralDiagnostics
-                        ? [$"Recipe-operation diagnostics exist for {craft.ResultItemName}."]
-                        : []))
-                .ToArray();
-            var unresolvedCount = snapshot.GetUnresolvedRequiredCrafts().Count();
-            if (unresolvedCount > 0)
-            {
-                warnings.Add(
-                    $"Labor-standard evidence is incomplete: {unresolvedCount:N0} active crafts could not be resolved.");
-            }
-            if (craftLabor.Length == 0)
-            {
-                warnings.Add(
-                    "Labor-standard evidence is unavailable. No active craft synths were resolved for this order.");
-            }
-        }
-
-        var rootItems = plan.RootItems
-            .Select(node =>
-            {
-                var unitPrice = node.MustBeHq && node.HqMarketPrice > 0
-                    ? node.HqMarketPrice
-                    : node.MarketPrice;
-                return new TradeOrderRootItemSnapshot(
-                    node.ItemId,
-                    node.Name,
-                    node.Quantity,
-                    node.MustBeHq,
-                    unitPrice * node.Quantity);
-            })
-            .ToArray();
-        var activeProcurementIds = demand.ActiveProcurementDemand.Select(node => node.NodeId)
-            .ToHashSet(StringComparer.Ordinal);
-        return new WorkerTradeProjection(
-            _sessionRevision,
-            HasPlan: true,
-            session.Identity.SourcePlanId,
-            session.Identity.SourcePlanName ?? plan.Name ?? "Active craft plan",
-            session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
-            session.ActiveContext.Region ?? "North America",
-            session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
-            ResolveTradeRequestedDataCenters(
-                evidence.PublicationContext,
-                session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
-                session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
-                session.ActiveContext.Region ?? "North America"),
-            evidence.Lens,
-            session.PlanSessionVersion,
-            session.Versions.MarketAnalysis,
-            session.ProjectItems,
-            rootItems,
-            materialLines,
+        return new TradeMaterialPricing(
             activeItems,
-            acquisition.Rows,
-            craftLabor,
-            warnings
-                .Where(warning => !string.IsNullOrWhiteSpace(warning))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
+            materialLines,
             materialQuote,
             materialQuoteFailureReason,
-            demand.AllPlanDemand.Select(occurrence => new WorkerPlanOccurrence(
-                occurrence.NodeId,
-                occurrence.ParentNodeId,
-                occurrence.ItemId,
-                occurrence.MustBeHq,
-                occurrence.Quantity,
-                occurrence.Source,
-                activeProcurementIds.Contains(occurrence.NodeId),
-                occurrence.SuppressedByNodeId != null)).ToArray());
+            warnings);
+    }
+
+    /// <summary>Synths the order pays labor for: every active resolved craft in the plan.</summary>
+    private static async Task<(IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor, IReadOnlyList<string> Warnings)>
+        BuildCraftLaborAsync(CraftingPlan plan)
+    {
+        var warnings = new List<string>();
+        var snapshotService = new RecipeOperationSnapshotService(
+            SessionGarland,
+            new RecipeResolutionService(),
+            NullLogger<RecipeOperationSnapshotService>.Instance);
+        var snapshot = await snapshotService.BuildAsync(plan);
+        var craftLabor = snapshot.GetRequiredCrafts()
+            .Where(craft => craft.CraftCount > 0)
+            .Select(craft => new TradeOrderCraftLaborSnapshot(
+                craft.NodeId,
+                craft.ResultItemId,
+                craft.ResultItemName,
+                craft.RequestedQuantity,
+                craft.CraftCount,
+                craft.JobName,
+                craft.RecipeLevel,
+                craft.HasStructuralDiagnostics
+                    ? [$"Recipe-operation diagnostics exist for {craft.ResultItemName}."]
+                    : []))
+            .ToArray();
+        var unresolvedCount = snapshot.GetUnresolvedRequiredCrafts().Count();
+        if (unresolvedCount > 0)
+        {
+            warnings.Add(
+                $"Labor-standard evidence is incomplete: {unresolvedCount:N0} active crafts could not be resolved.");
+        }
+        if (craftLabor.Length == 0)
+        {
+            warnings.Add(
+                "Labor-standard evidence is unavailable. No active craft synths were resolved for this order.");
+        }
+
+        return (craftLabor, warnings);
+    }
+
+    private sealed record RoutePayment(decimal Materials, decimal Labor, int Synths)
+    {
+        public decimal Total => Materials + Labor;
+    }
+
+    private static readonly AcquisitionSource[] PaymentPricedRoutes =
+    [
+        AcquisitionSource.Craft,
+        AcquisitionSource.MarketBuyNq,
+        AcquisitionSource.MarketBuyHq,
+        AcquisitionSource.VendorBuy,
+        AcquisitionSource.OnHand
+    ];
+
+    /// <summary>
+    /// What the order would pay for this plan: the executable material reimbursement plus
+    /// labor, through the same quote, labor snapshot and payment calculator the order's real
+    /// payment uses. Null when that payment would be unavailable.
+    /// </summary>
+    private static async Task<RoutePayment?> PriceOrderPaymentAsync(
+        CraftingPlan plan,
+        CraftSessionMarketEvidence evidence,
+        TradeMaterialPricingPolicy? materialPricingPolicy,
+        WorkerRoutePaymentBasis basis)
+    {
+        try
+        {
+            var demand = new RecipeDemandProjectionService().Build(plan, snapshot: null);
+            var pricing = await PriceTradeMaterialsAsync(demand, evidence, materialPricingPolicy);
+            var labor = await BuildCraftLaborAsync(plan);
+            var payment = TradeCommissionPaymentSummary.FromSnapshot(
+                new TradeOrderSourceSnapshot
+                {
+                    Materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(pricing.MaterialLines),
+                    CraftLabor = labor.CraftLabor,
+                    MaterialQuote = pricing.Quote,
+                    MaterialQuoteFailureReason = pricing.Quote is null ? pricing.FailureReason : null
+                },
+                new TradePayrollWorkflowDraft
+                {
+                    Responsibilities = basis.Responsibilities ?? []
+                },
+                basis.PaymentPolicy).Active;
+            return payment.IsAvailable
+                ? new RoutePayment(
+                    payment.MaterialReimbursementTotal,
+                    payment.CraftLaborTotal,
+                    payment.CraftSynthCount)
+                : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Re-prices each commission precraft's route options as their marginal effect on the
+    /// order payment: Payment(route) minus Payment(on hand). Every counterfactual runs on a
+    /// clone of the plan; the live plan and session are never touched.
+    /// </summary>
+    private static async Task<IReadOnlyList<WorkerAcquisitionRowProjection>> PriceRouteOptionsAsPaymentAsync(
+        CraftingPlan plan,
+        IReadOnlyList<WorkerAcquisitionRowProjection> rows,
+        CraftSessionMarketEvidence evidence,
+        TradeMaterialPricingPolicy? materialPricingPolicy,
+        WorkerRoutePaymentBasis basis)
+    {
+        if (!rows.Any(row => IsPrecraftDecisionRow(plan, row)))
+        {
+            return rows;
+        }
+
+        var payments = new Dictionary<(int ItemId, AcquisitionSource Source), RoutePayment?>();
+        RoutePayment? livePayment = null;
+        var livePriced = false;
+        async Task<RoutePayment?> PriceRouteAsync(int itemId, AcquisitionSource source)
+        {
+            if (payments.TryGetValue((itemId, source), out var known))
+            {
+                return known;
+            }
+
+            RoutePayment? payment;
+            if (IsRouteInEffect(plan, itemId, source))
+            {
+                if (!livePriced)
+                {
+                    livePayment = await PriceOrderPaymentAsync(plan, evidence, materialPricingPolicy, basis);
+                    livePriced = true;
+                }
+                payment = livePayment;
+            }
+            else
+            {
+                var counterfactual = ClonePlanForCounterfactual(plan);
+                AcquisitionDecisionMutation.ChangeSource(counterfactual, itemId, source);
+                payment = await PriceOrderPaymentAsync(counterfactual, evidence, materialPricingPolicy, basis);
+            }
+
+            payments[(itemId, source)] = payment;
+            return payment;
+        }
+
+        var priced = new List<WorkerAcquisitionRowProjection>(rows.Count);
+        foreach (var row in rows)
+        {
+            if (!IsPrecraftDecisionRow(plan, row))
+            {
+                priced.Add(row);
+                continue;
+            }
+
+            var routePayments = new Dictionary<AcquisitionSource, RoutePayment?>();
+            foreach (var option in row.Options.Where(option => PaymentPricedRoutes.Contains(option.Source)))
+            {
+                routePayments[option.Source] = CanPriceRoute(option)
+                    ? await PriceRouteAsync(row.ItemId, option.Source)
+                    : null;
+            }
+
+            var baseline = routePayments.GetValueOrDefault(AcquisitionSource.OnHand);
+            priced.Add(row with
+            {
+                Options = row.Options
+                    .Select(option => PaymentPricedRoutes.Contains(option.Source)
+                        ? WithMarginalPayment(option, routePayments.GetValueOrDefault(option.Source), baseline)
+                        : option)
+                    .ToArray()
+            });
+        }
+
+        return priced;
+    }
+
+    /// <summary>A craftable intermediate the operator routes; commissioned outputs stay crafted.</summary>
+    private static bool IsPrecraftDecisionRow(CraftingPlan plan, WorkerAcquisitionRowProjection row) =>
+        row.HasChildren &&
+        row.CanCraft &&
+        !plan.RootItems.Any(root => root.ItemId == row.ItemId && root.MustBeHq == row.MustBeHq);
+
+    /// <summary>Disabled routes keep their existing unavailable treatment and are never priced.</summary>
+    private static bool CanPriceRoute(WorkerAcquisitionOptionProjection option) =>
+        option.Source switch
+        {
+            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq =>
+                option.IsAvailable && !option.IsShortOfListings,
+            AcquisitionSource.VendorBuy => option.IsAvailable,
+            _ => true
+        };
+
+    /// <summary>Whether choosing this route would leave the plan's demand exactly as it is.</summary>
+    private static bool IsRouteInEffect(CraftingPlan plan, int itemId, AcquisitionSource source) =>
+        AcquisitionDecisionMutation.FindNodesByItemId(plan.RootItems, itemId).All(node =>
+            node.Source == source &&
+            (source != AcquisitionSource.MarketBuyNq || !node.MustBeHq) &&
+            (source != AcquisitionSource.MarketBuyHq || node.MustBeHq));
+
+    private static CraftingPlan ClonePlanForCounterfactual(CraftingPlan plan) =>
+        new()
+        {
+            Id = plan.Id,
+            Name = plan.Name,
+            DataCenter = plan.DataCenter,
+            World = plan.World,
+            AcquisitionLaborGilPerSynth = plan.AcquisitionLaborGilPerSynth,
+            PriceVersion = plan.PriceVersion,
+            RootItems = plan.RootItems.Select(node =>
+            {
+                var clone = node.Clone();
+                clone.Parent = null;
+                clone.ParentNodeId = node.ParentNodeId;
+                return clone;
+            }).ToList()
+        };
+
+    private static WorkerAcquisitionOptionProjection WithMarginalPayment(
+        WorkerAcquisitionOptionProjection option,
+        RoutePayment? payment,
+        RoutePayment? baseline)
+    {
+        if (payment is null || baseline is null)
+        {
+            return option with
+            {
+                CostText = "-",
+                TotalCost = null,
+                MaterialCost = null,
+                LaborCost = null,
+                SynthCount = 0
+            };
+        }
+
+        var total = payment.Total - baseline.Total;
+        return option with
+        {
+            CostText = $"{total:N0}g",
+            TotalCost = total,
+            MaterialCost = option.Source == AcquisitionSource.Craft ? payment.Materials - baseline.Materials : null,
+            LaborCost = option.Source == AcquisitionSource.Craft ? payment.Labor - baseline.Labor : null,
+            SynthCount = option.Source == AcquisitionSource.Craft ? payment.Synths - baseline.Synths : 0
+        };
+    }
+
+    /// <summary>
+    /// Prices buying each commissioned output whole through the same executable whole-listing
+    /// quote the material route uses. Outputs are market-analysis candidates already, so this
+    /// reads existing evidence and never fetches.
+    /// </summary>
+    private static async Task<IReadOnlyList<WorkerOutputPurchaseQuote>> CaptureOutputPurchaseQuotesAsync(
+        CraftingPlan plan,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        TradeMaterialPricingPolicy policy)
+    {
+        var quotes = new List<WorkerOutputPurchaseQuote>();
+        var outputs = plan.RootItems
+            .Where(node => node.Quantity > 0)
+            .GroupBy(node => (node.ItemId, node.MustBeHq));
+        foreach (var output in outputs)
+        {
+            var node = output.First();
+            var quantity = output.Sum(item => item.Quantity);
+            var shoppingPlan = shoppingPlans.FirstOrDefault(candidate => candidate.ItemId == node.ItemId);
+            var listings = MarketPurchaseCostProjectionService.DescribeListings(
+                shoppingPlan,
+                quantity,
+                node.MustBeHq);
+            decimal? total = null;
+            var observedAtUtc = listings.ObservedAtUtc;
+            if (shoppingPlan is not null && listings.ListedQuantity >= quantity)
+            {
+                var demand = new MaterialAggregate
+                {
+                    ItemId = node.ItemId,
+                    Name = node.Name,
+                    IconId = node.IconId,
+                    TotalQuantity = quantity,
+                    RequiresHq = node.MustBeHq
+                };
+                var source = node.MustBeHq ? AcquisitionSource.MarketBuyHq : AcquisitionSource.MarketBuyNq;
+                var result = await new TradeMaterialQuoteService().PriceAsync(
+                    new MarketShoppingService(SessionMarketCache),
+                    [shoppingPlan],
+                    [demand],
+                    new Dictionary<(int ItemId, bool RequiresHq), AcquisitionSource>
+                    {
+                        [(node.ItemId, node.MustBeHq)] = source
+                    },
+                    policy,
+                    DateTime.UtcNow,
+                    []);
+                var line = result.Quote?.Lines.FirstOrDefault(candidate =>
+                    candidate.ItemId == node.ItemId && candidate.RequiresHq == node.MustBeHq);
+                if (result.IsComplete && line is { CashRequired: > 0 } && line.RequiredQuantity >= quantity)
+                {
+                    total = line.CashRequired;
+                    observedAtUtc = line.OldestEvidenceAtUtc ?? observedAtUtc;
+                }
+            }
+
+            quotes.Add(new WorkerOutputPurchaseQuote(
+                node.ItemId,
+                node.Name,
+                quantity,
+                node.MustBeHq,
+                total,
+                listings.ListedQuantity,
+                listings.ListingCount,
+                observedAtUtc));
+        }
+
+        return quotes;
     }
 
     private static IReadOnlyList<string> ResolveTradeRequestedDataCenters(
@@ -1873,7 +2253,7 @@ public static partial class ManagedHost
             filter,
             demand);
         var rows = snapshot.VisibleRows
-            .Select(row => ProjectAcquisitionRow(row, snapshot.CostContext, evidence))
+            .Select(row => ProjectAcquisitionRow(plan, row, snapshot.CostContext, evidence))
             .ToArray();
         var unavailableItems = evidence.UnavailableMarketItemIds
             .Select(itemId =>
@@ -1900,10 +2280,12 @@ public static partial class ManagedHost
     }
 
     private static WorkerAcquisitionRowProjection ProjectAcquisitionRow(
+        CraftingPlan plan,
         CoreDecisionRow row,
         AcquisitionCostContext costContext,
         CraftSessionMarketEvidence evidence)
     {
+        var occurrences = GetActiveOccurrences(plan, row.ItemId, row.MustBeHq);
         var availableSources = AcquisitionPlanningService.GetAvailableSources(row.Node);
         if (!availableSources.Contains(row.Source))
         {
@@ -1944,12 +2326,69 @@ public static partial class ManagedHost
             row.UnitPrice,
             hasCalculatedCost ? calculatedTotalCost : 0m,
             availableSources,
-            BuildAcquisitionOptions(row, costContext));
+            BuildAcquisitionOptions(row, costContext, occurrences),
+            GetDefaultSource(plan, row, costContext),
+            occurrences
+                .Where(node => node.Source == AcquisitionSource.Craft && node.Children.Count > 0)
+                .Sum(RecipeResolutionService.GetPlannedSynthCount),
+            costContext.LaborGilPerSynth);
+    }
+
+    /// <summary>
+    /// The route automatic defaults would pick for this item. Commissioned outputs stay
+    /// crafted under a labor rate, matching how reconciliation treats them.
+    /// </summary>
+    private static AcquisitionSource? GetDefaultSource(
+        CraftingPlan plan,
+        CoreDecisionRow row,
+        AcquisitionCostContext costContext)
+    {
+        if (costContext.IsCommission &&
+            row.HasChildren &&
+            row.CanCraft &&
+            plan.RootItems.Any(root => root.ItemId == row.ItemId && root.MustBeHq == row.MustBeHq))
+        {
+            return AcquisitionSource.Craft;
+        }
+
+        return AcquisitionPlanningService.DetermineCheapestAcquisitionSource(row.Node, costContext);
+    }
+
+    /// <summary>
+    /// Plan occurrences of an item that the active route reaches: every ancestor is crafted.
+    /// These are the nodes whose synths a commission pays for.
+    /// </summary>
+    private static IReadOnlyList<PlanNode> GetActiveOccurrences(CraftingPlan plan, int itemId, bool mustBeHq)
+    {
+        var matches = new List<PlanNode>();
+        var pending = new Stack<PlanNode>(plan.RootItems);
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (node.ItemId == itemId && node.MustBeHq == mustBeHq)
+            {
+                matches.Add(node);
+                continue;
+            }
+
+            if (node.Source != AcquisitionSource.Craft)
+            {
+                continue;
+            }
+
+            foreach (var child in node.Children)
+            {
+                pending.Push(child);
+            }
+        }
+
+        return matches;
     }
 
     private static IReadOnlyList<WorkerAcquisitionOptionProjection> BuildAcquisitionOptions(
         CoreDecisionRow row,
-        AcquisitionCostContext costContext)
+        AcquisitionCostContext costContext,
+        IReadOnlyList<PlanNode> occurrences)
     {
         var options = new List<WorkerAcquisitionOptionProjection>();
         if (row.HasChildren && row.CanCraft)
@@ -1959,6 +2398,32 @@ public static partial class ManagedHost
                 AcquisitionSource.Craft,
                 costContext,
                 out var cost);
+            // Labor is counted per occurrence the same way payment counts synths; materials
+            // are the evaluated craft cost with its labor term removed.
+            var synthCount = 0;
+            decimal? materialCost = null;
+            decimal? laborCost = null;
+            if (hasCost && costContext.IsCommission)
+            {
+                var primarySynths = AcquisitionPlanningService.GetCraftSubtreeSynthCount(row.Node);
+                var primaryCraftCost = AcquisitionPlanningService.TryGetAcquisitionCost(
+                    row.Node,
+                    AcquisitionSource.Craft,
+                    costContext,
+                    out var primaryCost)
+                    ? primaryCost
+                    : 0m;
+                var primaryMaterials = Math.Max(0m, primaryCraftCost - costContext.LaborGilPerSynth * primarySynths);
+                materialCost = row.Node.Quantity > 0
+                    ? Math.Ceiling(primaryMaterials * row.TotalQuantity / row.Node.Quantity)
+                    : primaryMaterials;
+                synthCount = occurrences.Count > 0
+                    ? occurrences.Sum(AcquisitionPlanningService.GetCraftSubtreeSynthCount)
+                    : primarySynths;
+                laborCost = costContext.LaborGilPerSynth * synthCount;
+                cost = materialCost.Value + laborCost.Value;
+            }
+
             options.Add(new WorkerAcquisitionOptionProjection(
                 AcquisitionSource.Craft,
                 "Craft",
@@ -1966,7 +2431,10 @@ public static partial class ManagedHost
                 hasCost ? $"{cost:N0}g" : "-",
                 IsAvailable: true,
                 IsProjectedUnsupported: false,
-                TotalCost: hasCost ? cost : null));
+                TotalCost: hasCost ? cost : null,
+                MaterialCost: materialCost,
+                LaborCost: laborCost,
+                SynthCount: synthCount));
         }
 
         if (row.CanBuyFromMarket && !row.MustBeHq)
@@ -2049,6 +2517,12 @@ public static partial class ManagedHost
             source,
             costContext,
             out var cost);
+        var listings = MarketPurchaseCostProjectionService.DescribeListings(
+            marketPlan,
+            row.TotalQuantity,
+            hqOnly);
+        // A commission only buys from real listings in its pricing scope.
+        var lacksScopeListings = costContext.IsCommission && marketPlan is null;
         var detail = estimate.IsUnsupportedProjection
             ? "Projected cost; current search scope cannot fill this purchase."
             : estimate.World is not null
@@ -2063,9 +2537,13 @@ public static partial class ManagedHost
             name,
             detail,
             hasCost ? $"{cost:N0}g" : "-",
-            hasCost && !estimate.IsUnsupportedProjection,
+            hasCost && !estimate.IsUnsupportedProjection && !lacksScopeListings,
             estimate.IsUnsupportedProjection,
-            TotalCost: hasCost ? cost : null);
+            TotalCost: hasCost ? cost : null,
+            RequiredQuantity: marketPlan is null ? 0 : row.TotalQuantity,
+            ListedQuantity: listings.ListedQuantity,
+            ListingCount: listings.ListingCount,
+            ObservedAtUtc: listings.ObservedAtUtc);
     }
 
     private static IReadOnlyList<CommissionPayrollInputLine> ApplyOnHandReferenceValues(

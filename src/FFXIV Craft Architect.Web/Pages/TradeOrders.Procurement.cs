@@ -349,10 +349,18 @@ public partial class TradeOrders
         });
     }
 
+    /// <summary>
+    /// True while any tab sharing this Worker owns an active plan operation. The shell projection
+    /// carries the operation cross-tab, so background tabs see another tab's in-flight work here.
+    /// </summary>
+    private bool IsWorkerOperationActive =>
+        WorkerProjections.Operation?.IsActive == true;
+
     private void ScheduleSelectedOrderPlanRestoration()
     {
         if (_isDisposed ||
             IsPlanMutationTransactionRunning ||
+            IsWorkerOperationActive ||
             _activeOpsTab != ProcurementTabIndex ||
             _selectedOrder == null ||
             !HasLinkedCraftPlan(_selectedOrder) ||
@@ -388,6 +396,14 @@ public partial class TradeOrders
     {
         if (_isLoadingSelectedOrderSupplyPlan)
         {
+            _selectedOrderPlanRestoreRetryRequested = true;
+            return;
+        }
+
+        if (IsWorkerOperationActive)
+        {
+            // Another tab (or this one) holds the shared Worker operation. A "restore" would
+            // supersede and abort it; the operation's completion broadcast re-schedules us.
             _selectedOrderPlanRestoreRetryRequested = true;
             return;
         }
@@ -622,9 +638,14 @@ public partial class TradeOrders
         _isRefreshingLiveProcurement = true;
         try
         {
+            // Draft orders also show what buying each output whole would cost, and price each
+            // precraft route as its effect on the order payment; the Worker prices both from
+            // evidence the plan already loaded.
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
                 materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken,
+                includeOutputPurchaseQuotes: !IsCommissionPublished,
+                routePaymentBasis: CreateRoutePaymentBasis());
             if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;
@@ -684,7 +705,41 @@ public partial class TradeOrders
             WorkerProjections.Shell.PlanId ?? string.Empty,
             WorkerProjections.Shell.Revision,
             TradeMaterialPricingPolicyNormalizer.Fingerprint(
-                _companyProfile?.MaterialPricingPolicy));
+                _companyProfile?.MaterialPricingPolicy),
+            FingerprintRoutePaymentBasis(CreateRoutePaymentBasis()));
+    }
+
+    /// <summary>
+    /// Payment terms precraft route options are priced against. Published commissions keep
+    /// their existing picker figures, so they get none.
+    /// </summary>
+    private WorkerRoutePaymentBasis? CreateRoutePaymentBasis()
+    {
+        if (_selectedOrder == null || IsCommissionPublished)
+        {
+            return null;
+        }
+
+        var workPackage = GetSelectedOrderPricingWorkPackage();
+        return new WorkerRoutePaymentBasis(
+            TradeOrderWorkflow.ResolvePaymentPolicy(workPackage, _companyProfile?.PaymentPolicy),
+            GetSelectedOrderResponsibilityProjection()?.Responsibilities ?? []);
+    }
+
+    private static string FingerprintRoutePaymentBasis(WorkerRoutePaymentBasis? basis)
+    {
+        if (basis == null)
+        {
+            return string.Empty;
+        }
+
+        var responsibilities = (basis.Responsibilities ?? [])
+            .Where(line => line.Responsibility != CommissionMaterialResponsibility.Crafter)
+            .Select(line => $"{line.ItemId}:{line.RequiresHq}:{line.Responsibility}")
+            .Order(StringComparer.Ordinal);
+        return string.Join(
+            "|",
+            responsibilities.Prepend($"{basis.PaymentPolicy.ActiveContract}:{basis.PaymentPolicy.LaborGilPerSynth}"));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -800,7 +855,7 @@ public partial class TradeOrders
         builder.OpenElement(sequence++, "span");
         builder.AddAttribute(sequence++, "class", GetProcurementEvidenceTextClass(row));
         builder.AddAttribute(sequence++, "title", row.UnitCostExplanation);
-        builder.AddContent(sequence++, FormatProcurementEvidence(row));
+        builder.AddContent(sequence++, FormatPrecraftLaborEvidence(row) ?? FormatProcurementEvidence(row));
         builder.CloseElement();
     };
 
@@ -980,17 +1035,22 @@ public partial class TradeOrders
 
     private static string FormatProcurementEvidenceContext(TradeOrder order)
     {
-        var scope = order.SourceSnapshot.MarketFetchScope == MarketFetchScope.EntireRegion
+        var scope = FormatProcurementScopeLabel(order);
+        var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        return string.IsNullOrWhiteSpace(scope)
+            ? $"Refreshed {refreshed}"
+            : $"{scope} | refreshed {refreshed}";
+    }
+
+    private static string? FormatProcurementScopeLabel(TradeOrder order)
+    {
+        return order.SourceSnapshot.MarketFetchScope == MarketFetchScope.EntireRegion
             ? string.IsNullOrWhiteSpace(order.SourceSnapshot.Region)
                 ? "Entire region"
                 : $"{order.SourceSnapshot.Region} region"
             : string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
                 ? order.SourceSnapshot.Region
                 : order.SourceSnapshot.DataCenter;
-        var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-        return string.IsNullOrWhiteSpace(scope)
-            ? $"Refreshed {refreshed}"
-            : $"{scope} | refreshed {refreshed}";
     }
 
     private string FormatProcurementFooter(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -1129,6 +1189,7 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
+            !IsRequestedOutputRow(row) &&
             TradeProcurementSourceMutationPolicy.CanMutateLivePlan(
                 HasCanonicalCommission,
                 CanEditCanonicalWorkPackage) &&
@@ -1243,7 +1304,7 @@ public partial class TradeOrders
         AcquisitionSource source,
         bool showSuccess = true)
     {
-        if (_selectedOrder == null)
+        if (_selectedOrder == null || IsRequestedOutputRow(row))
         {
             return false;
         }
@@ -1298,7 +1359,11 @@ public partial class TradeOrders
             return false;
         }
 
-        if (!liveRow.AvailableSources.Contains(source))
+        var liveOption = liveRow.Options.FirstOrDefault(option => option.Source == source);
+        if (!liveRow.AvailableSources.Contains(source) ||
+            (source != liveRow.Source &&
+             source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq &&
+             liveOption is { IsAvailable: false }))
         {
             Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
             return false;

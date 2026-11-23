@@ -191,6 +191,26 @@ public sealed class RecipeResolutionService : IRecipeResolutionService
             ]);
     }
 
+    /// <summary>
+    /// Synths needed to produce <paramref name="quantity"/> units of a recipe with the given yield.
+    /// </summary>
+    public static int GetSynthCount(int quantity, int yield)
+    {
+        return quantity <= 0 ? 0 : (int)Math.Ceiling((double)quantity / Math.Max(1, yield));
+    }
+
+    /// <summary>
+    /// Synths a crafter performs for this node at its planned quantity, counted the way commission
+    /// labor is paid: one synth per company-workshop unit, otherwise quantity over recipe yield.
+    /// </summary>
+    public static int GetPlannedSynthCount(PlanNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        return IsCompanyCraftNode(node)
+            ? Math.Max(0, node.Quantity)
+            : GetSynthCount(node.Quantity, node.Yield);
+    }
+
     private static bool IsCompanyCraftNode(PlanNode node)
     {
         return string.Equals(node.Job, "Company Workshop", StringComparison.OrdinalIgnoreCase);
@@ -224,7 +244,7 @@ public sealed class RecipeResolutionService : IRecipeResolutionService
     {
         var recipe = parsedRecipe.Recipe;
         var yield = Math.Max(1, recipe.Yield);
-        var craftCount = (int)Math.Ceiling((double)node.Quantity / yield);
+        var craftCount = GetSynthCount(node.Quantity, yield);
         return new RecipeResolutionResult(
             RecipeOperationKind.StandardCraft,
             confidence,

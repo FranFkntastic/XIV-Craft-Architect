@@ -106,7 +106,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder? stagedOrder = null;
         try
         {
-            var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+            var (pricingScope, laborGilPerSynth) = await LoadPricingScopeAsync(order, operation.Token);
             if (pricingScope is not { IsValid: true })
             {
                 return PricingScopeRequired();
@@ -158,7 +158,8 @@ public sealed class TradeOrderPricingWorkflowService
             var link = await BeginLinkedPlanRevisionAsync(
                 orderToSave,
                 operation.Token,
-                workerOperation.OperationId);
+                workerOperation.OperationId,
+                GetPlanLaborRateStamp(order, laborGilPerSynth, planRebuilt: !reusedActivePlan));
             var source = await _worker.GetTradeProjectionAsync(
                 cancellationToken: operation.Token)
                 ?? throw new InvalidOperationException(
@@ -260,7 +261,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder? stagedOrder = null;
         try
         {
-            var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+            var (pricingScope, laborGilPerSynth) = await LoadPricingScopeAsync(order, operation.Token);
             if (pricingScope is not { IsValid: true })
             {
                 return PricingScopeRequired();
@@ -281,7 +282,8 @@ public sealed class TradeOrderPricingWorkflowService
             await BeginLinkedPlanRevisionAsync(
                 orderToSave,
                 operation.Token,
-                workerOperation.OperationId);
+                workerOperation.OperationId,
+                GetPlanLaborRateStamp(order, laborGilPerSynth, planRebuilt: false));
             return await PriceAndPersistAsync(
                 orderToSave,
                 pricingScope,
@@ -351,7 +353,7 @@ public sealed class TradeOrderPricingWorkflowService
         WorkerSessionOperationLease? workerOperation = null;
         try
         {
-            var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+            var (pricingScope, laborGilPerSynth) = await LoadPricingScopeAsync(order, operation.Token);
             if (pricingScope is not { IsValid: true })
             {
                 return PricingScopeRequired();
@@ -373,7 +375,8 @@ public sealed class TradeOrderPricingWorkflowService
             await BeginLinkedPlanRevisionAsync(
                 order,
                 operation.Token,
-                workerOperation.OperationId);
+                workerOperation.OperationId,
+                GetPlanLaborRateStamp(order, laborGilPerSynth, planRebuilt: false));
             await _worker.MutateAcquisitionAsync(
                 mutation,
                 operation.Token,
@@ -423,10 +426,15 @@ public sealed class TradeOrderPricingWorkflowService
         }
     }
 
+    /// <param name="laborGilPerSynth">
+    /// The order's effective per-synth labor rate. When set, it is stamped on the linked plan so
+    /// automatic craft-vs-buy defaults count the labor each precraft adds to the payment.
+    /// </param>
     public async Task<TradeOrderCraftPlanLinkDraft> BeginLinkedPlanRevisionAsync(
         TradeOrder order,
         CancellationToken cancellationToken = default,
-        Guid? operationId = null)
+        Guid? operationId = null,
+        decimal? laborGilPerSynth = null)
     {
         ArgumentNullException.ThrowIfNull(order);
         var link = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(order);
@@ -434,7 +442,8 @@ public sealed class TradeOrderPricingWorkflowService
             link.PlanId,
             link.PlanName,
             cancellationToken,
-            operationId);
+            operationId,
+            laborGilPerSynth);
         order.CraftPlanId = link.PlanId;
         order.CraftPlanName = link.PlanName;
         order.CraftPlanSavedAtUtc = null;
@@ -641,14 +650,29 @@ public sealed class TradeOrderPricingWorkflowService
         return expected.Length > 0 && expected.SequenceEqual(actual, StringComparer.Ordinal);
     }
 
-    private async Task<TradeCompanyPricingScope?> LoadPricingScopeAsync(
+    private async Task<(TradeCompanyPricingScope? Scope, decimal LaborGilPerSynth)> LoadPricingScopeAsync(
         TradeOrder order, CancellationToken cancellationToken)
     {
         // Same hosted-then-local resolution the Orders page uses, so an unhosted company
-        // still prices from its own scope while profile sync is connected.
+        // still prices from its own scope while profile sync is connected. The labor rate
+        // comes from the same resolution: the order's payment override, else company policy.
         var resolved = await new TradeCompany.TradeWorkspaceProfileResolver(_companies, _companyHub)
             .ResolveAsync(order.CompanyProfileId, cancellationToken);
-        return resolved.Profile?.CommissionPricingScope;
+        var paymentPolicy = TradeOrderWorkflow.ResolvePaymentPolicy(order, resolved.Profile?.PaymentPolicy);
+        return (resolved.Profile?.CommissionPricingScope, paymentPolicy.LaborGilPerSynth);
+    }
+
+    /// <summary>
+    /// The rate to stamp on the order's plan, or null to leave the plan's own rate alone. A
+    /// published commission keeps the rate its plan was priced with, so editing one route in a
+    /// terms revision never re-decides the other routes at a newer rate; a plan rebuilt from
+    /// scratch has no rate yet and takes the order's.
+    /// </summary>
+    private static decimal? GetPlanLaborRateStamp(TradeOrder order, decimal laborGilPerSynth, bool planRebuilt)
+    {
+        var published = order.CompanyCommission is { } commission &&
+            commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft;
+        return !published || planRebuilt ? laborGilPerSynth : null;
     }
 
     private static TradeOrderPricingWorkflowResult PricingScopeRequired() =>

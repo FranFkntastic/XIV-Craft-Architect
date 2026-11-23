@@ -150,7 +150,18 @@ public sealed record WorkerSessionOperationProjection(
 
 public sealed record WorkerTradeProjectionRequest(
     bool IncludeCraftLabor = false,
-    TradeMaterialPricingPolicy? MaterialPricingPolicy = null);
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null,
+    bool IncludeOutputPurchaseQuotes = false,
+    WorkerRoutePaymentBasis? RoutePaymentBasis = null);
+
+/// <summary>
+/// The order's payment terms for pricing precraft route choices. When present on a plan with a
+/// labor rate, each precraft option total becomes its marginal effect on the order payment,
+/// priced by the same quote, labor and payment path the order uses.
+/// </summary>
+public sealed record WorkerRoutePaymentBasis(
+    TradePaymentPolicy PaymentPolicy,
+    IReadOnlyList<TradePayrollResponsibilityLine>? Responsibilities);
 
 public sealed record WorkerTradeProjection(
     long Revision,
@@ -173,7 +184,26 @@ public sealed record WorkerTradeProjection(
     IReadOnlyList<string> Warnings,
     TradeMaterialQuote? MaterialQuote = null,
     string? MaterialQuoteFailureReason = null,
-    IReadOnlyList<WorkerPlanOccurrence>? PlanOccurrences = null);
+    IReadOnlyList<WorkerPlanOccurrence>? PlanOccurrences = null,
+    IReadOnlyList<WorkerOutputPurchaseQuote>? OutputPurchaseQuotes = null);
+
+/// <summary>
+/// What buying one commissioned output whole would cost from real listings in the pricing
+/// scope. <see cref="TotalCost"/> is null whenever the listings cannot cover the full quantity
+/// or the executable quote fails; a partial total is never reported.
+/// </summary>
+public sealed record WorkerOutputPurchaseQuote(
+    int ItemId,
+    string ItemName,
+    int Quantity,
+    bool MustBeHq,
+    decimal? TotalCost,
+    int ListedQuantity,
+    int ListingCount,
+    DateTime? ObservedAtUtc)
+{
+    public bool IsShort => TotalCost is null && ListedQuantity < Quantity;
+}
 
 // Occurrence identity, not presentation strings, defines acquisition ancestry.
 public sealed record WorkerPlanOccurrence(
@@ -232,7 +262,14 @@ public sealed record WorkerProjectItemsMutation(
     bool MustBeHq = false,
     IReadOnlyList<ProjectItem>? Items = null);
 
-public sealed record WorkerPlanIdentityMutation(string PlanId, string PlanName);
+/// <param name="AcquisitionLaborGilPerSynth">
+/// When set, the plan's per-synth labor rate is replaced and automatic acquisition defaults
+/// are re-evaluated with it. Null leaves the rate and the plan's routes untouched.
+/// </param>
+public sealed record WorkerPlanIdentityMutation(
+    string PlanId,
+    string PlanName,
+    decimal? AcquisitionLaborGilPerSynth = null);
 
 /// <summary>
 /// Stamps the identity of a stored snapshot that was just exported from the live
@@ -342,7 +379,10 @@ public sealed record WorkerAcquisitionRowProjection(
     decimal UnitPrice,
     decimal CalculatedTotalCost,
     IReadOnlyList<AcquisitionSource> AvailableSources,
-    IReadOnlyList<WorkerAcquisitionOptionProjection> Options);
+    IReadOnlyList<WorkerAcquisitionOptionProjection> Options,
+    AcquisitionSource? DefaultSource = null,
+    int CraftSynthCount = 0,
+    decimal LaborGilPerSynth = 0);
 
 public sealed record WorkerAcquisitionOptionProjection(
     AcquisitionSource Source,
@@ -351,7 +391,19 @@ public sealed record WorkerAcquisitionOptionProjection(
     string CostText,
     bool IsAvailable,
     bool IsProjectedUnsupported,
-    decimal? TotalCost = null);
+    decimal? TotalCost = null,
+    decimal? MaterialCost = null,
+    decimal? LaborCost = null,
+    int SynthCount = 0,
+    int RequiredQuantity = 0,
+    int ListedQuantity = 0,
+    int ListingCount = 0,
+    DateTime? ObservedAtUtc = null)
+{
+    /// <summary>Market route whose scope lists fewer units than the purchase needs.</summary>
+    public bool IsShortOfListings => ListedQuantity < RequiredQuantity &&
+        Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq;
+}
 
 public sealed record WorkerMarketAnalysisRequest(
     bool ForceRefreshData,

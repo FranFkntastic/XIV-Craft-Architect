@@ -1,0 +1,122 @@
+.listbox-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #575d57;
+  border-radius: 4px;
+  background: #292d29;
+  color: #e0e8dd;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.listbox-picker-trigger:focus-visible {
+  border-color: #d8b13d;
+  outline: 1px solid #d8b13d;
+}
+
+.listbox-picker-trigger:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.listbox-picker-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listbox-picker-trigger i {
+  flex: 0 0 auto;
+  color: #9aa39a;
+  font-style: normal;
+}
+
+.listbox-picker-menu {
+  position: fixed;
+  z-index: 1500;
+  max-width: calc(100vw - 16px);
+  max-height: min(360px, calc(100vh - 16px));
+  overflow-y: auto;
+  border: 1px solid #575d57;
+  border-radius: 4px;
+  background: #262926;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  min-width: 300px;
+}
+
+.listbox-picker-menu:focus {
+  outline: none;
+}
+
+.listbox-picker-option {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #343834;
+  padding: 8px 10px;
+  color: #e0e8dd;
+  cursor: pointer;
+}
+
+.listbox-picker-option:first-child {
+  border-top: 0;
+}
+
+.listbox-picker-option[aria-selected="true"] {
+  background: #2c332b;
+}
+
+.listbox-picker-option.is-active {
+  background: #30362f;
+  box-shadow: inset 2px 0 0 #d8b13d;
+}
+
+.listbox-picker-option i {
+  color: #9fd17e;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.listbox-picker-option b {
+  display: block;
+  font-size: 12px;
+}
+
+.listbox-picker-option small {
+  display: block;
+  color: #999;
+  font-size: 11px;
+}
+
+.listbox-picker-option em {
+  font-style: normal;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.listbox-picker-option.is-disabled {
+  cursor: default;
+}
+
+.listbox-picker-option.is-disabled b,
+.listbox-picker-option.is-disabled em {
+  color: #8a8a8a;
+}
+
+.listbox-picker-option small.is-warning {
+  color: #e1bf64;
+  font-weight: 700;
+}

@@ -142,7 +142,8 @@ public partial class TradeOrders
         _isSavingSelectedOrderCraftPlan ||
         _isRepricingSelectedOrder ||
         _isChangingProcurementSource ||
-        _isCommissionCommandRunning;
+        _isCommissionCommandRunning ||
+        _isCreatingRequestedOrder;
 
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [

@@ -135,6 +135,14 @@ public class CraftingPlan
     public List<PlanNode> RootItems { get; set; } = new();
 
     /// <summary>
+    /// Gil the commissioning company pays per craft synth. Zero for ordinary plans; a
+    /// commission plan carries its company labor rate so automatic craft-vs-buy defaults
+    /// count the labor a precraft adds, wherever the plan is re-evaluated.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public decimal AcquisitionLaborGilPerSynth { get; set; }
+
+    /// <summary>
     /// Saved market shopping plans with recommended worlds and listings.
     /// Populated when prices are fetched and saved with the plan.
     /// </summary>

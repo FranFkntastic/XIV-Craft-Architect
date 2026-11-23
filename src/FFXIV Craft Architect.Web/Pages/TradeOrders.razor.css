@@ -835,6 +835,65 @@ button.trade-orders-rail-order.is-device-only:hover {
   color: #9fd17e;
 }
 
+.trade-orders-buy-instead-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid #303030;
+  padding: 8px 10px;
+  font-size: 0.75rem;
+}
+
+.trade-orders-buy-instead-row:last-child {
+  border-bottom: 0;
+}
+
+.trade-orders-buy-instead-row span {
+  min-width: 0;
+  color: #d6d6d6;
+  overflow-wrap: anywhere;
+}
+
+.trade-orders-buy-instead-row span:nth-child(2) {
+  color: #999;
+  font-size: 0.69rem;
+}
+
+.trade-orders-buy-instead-row span.is-short {
+  color: #e1bf64;
+  font-weight: 700;
+}
+
+.trade-orders-buy-instead-row strong {
+  color: #f0f0f0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.trade-orders-buy-instead-row button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #9fc690;
+  cursor: pointer;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.trade-orders-buy-instead-row button:hover,
+.trade-orders-buy-instead-row button:focus-visible {
+  color: #d8b13d;
+  text-decoration: underline;
+}
+
+.trade-orders-buy-instead-row button:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 2px;
+}
+
 .trade-orders-payment-heading {
   align-items: baseline;
   margin-top: 12px;
@@ -1160,6 +1219,30 @@ button.trade-orders-rail-order.is-device-only:hover {
   min-width: 0;
 }
 
+::deep .trade-orders-procurement-route-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+::deep .trade-orders-procurement-route-picker > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+::deep .trade-orders-route-override {
+  flex: 0 0 auto;
+  border: 1px solid #6b5a2c;
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: #e1bf64;
+  font-size: 0.64rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 ::deep .trade-orders-procurement-route-actions {
   display: flex;
   align-items: center;
@@ -1178,10 +1261,6 @@ button.trade-orders-rail-order.is-device-only:hover {
   font-size: 0.64rem;
   font-weight: 700;
   white-space: nowrap;
-}
-
-::deep .trade-orders-procurement-route-actions button + button {
-  color: #cfb56d;
 }
 
 ::deep .trade-orders-procurement-route-actions button:hover,
