@@ -151,7 +151,7 @@ public partial class TradeOrders
     private string FormatListingBasis(int listingCount, DateTime? observedAtUtc)
     {
         return JoinContext(
-            $"{listingCount:N0} listings",
+            listingCount == 1 ? "1 listing" : $"{listingCount:N0} listings",
             _selectedOrder is null ? null : FormatProcurementScopeLabel(_selectedOrder),
             FormatObservationAge(observedAtUtc));
     }

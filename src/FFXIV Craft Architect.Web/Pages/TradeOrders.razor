@@ -2371,14 +2371,21 @@
         @foreach (var quote in outputPurchaseQuotes)
         {
             <div class="trade-orders-buy-instead-row" @key="@($"buy:{quote.ItemId}:{quote.MustBeHq}")">
-                <span>@quote.ItemName ×@TradeDisplayFormatter.FormatQuantity(quote.Quantity)</span>
+                <span>@quote.ItemName ×@quote.Quantity.ToString("N0")</span>
                 @if (quote.IsShort)
                 {
-                    <span class="is-short">⚠ Only @TradeDisplayFormatter.FormatQuantity(quote.ListedQuantity) of @TradeDisplayFormatter.FormatQuantity(quote.Quantity) listed</span>
+                    if (quote.ListedQuantity <= 0)
+                    {
+                        <span class="is-short">⚠ None listed</span>
+                    }
+                    else
+                    {
+                        <span class="is-short">⚠ Only @quote.ListedQuantity.ToString("N0") of @quote.Quantity.ToString("N0") listed</span>
+                    }
                 }
                 else
                 {
-                    <span>@(quote.ListingCount > 0 ? $"{quote.ListingCount:N0} listings" : string.Empty)</span>
+                    <span>@(quote.ListingCount switch { <= 0 => string.Empty, 1 => "1 listing", _ => $"{quote.ListingCount:N0} listings" })</span>
                 }
                 <strong>@(quote.TotalCost is { } buyTotal ? FormatGilShort(buyTotal) : "—")</strong>
                 <button type="button"
