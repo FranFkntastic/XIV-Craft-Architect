@@ -256,6 +256,9 @@ public sealed class TradeMaterialQuoteService
             (string.IsNullOrWhiteSpace(firstRejection) ? string.Empty : $" {firstRejection}"));
     }
 
+    /// <summary>Leading text of the stop-limit advisory, so refreshed pricing can replace it.</summary>
+    public const string OverStopLimitPrefix = "Route needs ";
+
     /// <summary>
     /// "Route needs 11 worlds (company policy: 8)." plus the material with the most stops when
     /// one material alone visits several worlds.
@@ -264,7 +267,7 @@ public sealed class TradeMaterialQuoteService
         TradeMaterialPricingPolicy policy,
         TradeMaterialQuote quote)
     {
-        var summary = $"Route needs {quote.WorldStops:N0} worlds (company policy: {policy.MaximumWorldStops:N0})";
+        var summary = $"{OverStopLimitPrefix}{quote.WorldStops:N0} worlds (company policy: {policy.MaximumWorldStops:N0})";
         var widest = quote.Lines
             .Where(line => !line.Worlds.Contains(MarketShoppingConstants.VendorWorldName, StringComparer.OrdinalIgnoreCase))
             .OrderByDescending(line => line.Worlds.Count)

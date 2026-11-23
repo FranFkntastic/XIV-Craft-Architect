@@ -132,7 +132,18 @@ public sealed class ClaimMaterialPricing(
         {
             Version = checked(terms.Version + 1),
             Materials = materials,
-            PricingEvidence = terms.PricingEvidence with { MaterialQuote = quote, CapturedAtUtc = now },
+            // The refreshed route replaces the old route's stop-limit advisory.
+            PricingEvidence = terms.PricingEvidence with
+            {
+                MaterialQuote = quote,
+                CapturedAtUtc = now,
+                Warnings = (terms.PricingEvidence.Warnings ?? [])
+                    .Where(warning => !warning.StartsWith(
+                        TradeMaterialQuoteService.OverStopLimitPrefix, StringComparison.Ordinal))
+                    .Concat(result.RouteWarnings)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+            },
             Payment = terms.Payment with
             {
                 MaterialReimbursement = reimbursement,
