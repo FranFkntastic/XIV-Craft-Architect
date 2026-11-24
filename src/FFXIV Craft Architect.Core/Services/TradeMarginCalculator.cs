@@ -89,11 +89,6 @@ public sealed class TradeMarginCalculator(
         }
     }
 
-    public async Task<TradeMarginCost> CalculateAsync(
-        int itemId, TradeCompanyPricingScope? scope, bool refresh = false, CancellationToken ct = default,
-        TradeMarginPricing? pricing = null, int batchSize = 1) =>
-        await CalculateFullAsync(await PrepareAsync(itemId, scope, ct, batchSize), scope, refresh, ct, pricing);
-
     /// <param name="batchSize">Units one production run makes; quantities and listings are evaluated for the whole run.</param>
     public async Task<PreparedRow> PrepareAsync(
         int itemId, TradeCompanyPricingScope? scope, CancellationToken ct = default, int batchSize = 1)
@@ -191,18 +186,86 @@ public sealed class TradeMarginCalculator(
         });
     }
 
-    public async Task<TradeMarginCost> CalculateFullAsync(PreparedRow row, TradeCompanyPricingScope? scope, bool refresh,
-        CancellationToken ct, TradeMarginPricing? pricing = null)
+    // Each stored entry holds every listing in a data center, so one read of many entries is
+    // seconds of deserialization. Small slices keep each main-thread task short.
+    private const int StoredReadSlice = 16;
+
+    /// <summary>Every item/data-center pair a row's materials are priced from.</summary>
+    public static IReadOnlyList<(int itemId, string dataCenter)> Pairs(PreparedRow row, TradeCompanyPricingScope? scope)
+    {
+        if (row.Issue != null || scope is not { IsValid: true })
+        {
+            return [];
+        }
+
+        var centers = DataCenters(scope);
+        return row.Leaves.SelectMany(id => centers.Select(dataCenter => (id, dataCenter))).ToArray();
+    }
+
+    /// <summary>True when every material of the row has stored market data in at least one data center.</summary>
+    public static bool HasMarketData(PreparedRow row, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
+    {
+        var priced = stored.Keys.Select(pair => pair.itemId).ToHashSet();
+        return row.Leaves.All(priced.Contains);
+    }
+
+    /// <summary>
+    /// Market data the browser holds for <paramref name="pairs"/>, whatever its age within retention.
+    /// Each entry keeps its fetch time; the row's price age comes from its listings' upload times.
+    /// </summary>
+    public async Task<Dictionary<(int itemId, string dataCenter), CachedMarketData>> ReadStoredAsync(
+        IEnumerable<(int itemId, string dataCenter)> pairs, CancellationToken ct = default)
+    {
+        var stored = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+        foreach (var slice in pairs.Distinct().Chunk(StoredReadSlice))
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var (pair, entry) in await market.GetManyAsync(slice, MarketEvidencePolicyDefaults.RetainedCacheMaxAge))
+            {
+                stored[pair] = entry;
+            }
+            await Task.Delay(1, ct);
+        }
+        return stored;
+    }
+
+    /// <summary>Refetches exactly <paramref name="pairs"/>, once each, and returns what was stored.</summary>
+    public async Task<MarketPairRefreshResult> FetchAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> pairs, CancellationToken ct = default)
+    {
+        if (market is IMarketCachePairRefresher refresher)
+        {
+            return await refresher.RefreshPairsAsync(pairs, ct);
+        }
+
+        var started = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await market.RefreshRequestedAsync(pairs.ToList(), progress: null, ct);
+        var stored = (await market.GetManyAsync(pairs, MarketEvidencePolicyDefaults.RetainedCacheMaxAge))
+            .Where(entry => entry.Value.FetchedAtUnix >= started)
+            .ToDictionary(entry => entry.Key, entry => entry.Value);
+        return new(stored, pairs.Where(pair => !stored.ContainsKey(pair)).ToArray(), new Dictionary<string, string>());
+    }
+
+    /// <summary>Prices a prepared row from <paramref name="stored"/> market data, without fetching.</summary>
+    public static Task<TradeMarginCost> PriceAsync(PreparedRow row, TradeCompanyPricingScope? scope,
+        IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored, TradeMarginPricing? pricing,
+        CancellationToken ct = default)
     {
         if (row.Issue != null)
         {
-            return row.Issue;
+            return Task.FromResult(row.Issue);
         }
+
         ArgumentNullException.ThrowIfNull(scope);
-        var evidence = await MarketEvidenceLoader.LoadAsync(market, row.Leaves, scope.MarketFetchScope,
-            scope.EffectiveDataCenter, scope.Region, forceRefreshData: refresh, ct: ct);
-        return await row.Price(evidence, pricing ?? TradeMarginPricing.None, ct);
+        var pairs = Pairs(row, scope);
+        var entries = pairs.Where(stored.ContainsKey).ToDictionary(pair => pair, pair => stored[pair]);
+        var evidence = new MarketEvidenceSet(entries, pairs, scope.MarketFetchScope, DataCenters(scope),
+            scope.EffectiveDataCenter, scope.Region, maxAge: null, fetchedCount: 0, DateTime.UtcNow);
+        return row.Price(evidence, pricing ?? TradeMarginPricing.None, ct);
     }
+
+    private static IReadOnlyList<string> DataCenters(TradeCompanyPricingScope scope) =>
+        MarketFetchScopeResolver.GetDataCenters(scope.MarketFetchScope, scope.EffectiveDataCenter, scope.Region);
 
     /// <summary>Reprices a row for new company inputs from the evidence it was priced with.</summary>
     public static Task<TradeMarginCost> RepriceAsync(TradeMarginCost cost, TradeMarginPricing pricing, CancellationToken ct = default) =>
@@ -611,6 +674,8 @@ public sealed class TradeMarginBasis
                 Evidence = _evidence,
                 Items = [new MaterialAggregate { ItemId = id, Name = _tree.Data[id].Name, TotalQuantity = quantity }]
             }, ct: ct)).Single(entry => entry.ItemId == id);
+            // One analysis is tens of milliseconds of listing work; let the page render between them.
+            await Task.Delay(1, ct);
             var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
             if (price > 0)
             {

@@ -11,12 +11,12 @@
 @inject ProfileSyncService Sync
 @inject IGarlandService Garland
 @inject TradeMarginCalculator Calculator
-@inject TradeMarginQuickPass QuickPass
 @inject ISettingsService Settings
 @inject AppState AppState
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+@inject ILogger<TradeMargins> Log
 @implements IAsyncDisposable
 
 <div class="margins-backdrop @(_glass ? "franthropy-glass-backdrop" : null)">
@@ -43,7 +43,7 @@
             }
         </div>
         <span class="toolbar-spacer"></span>
-        <button type="button" class="margin-button" disabled="@_busy" @onclick="RefreshAsync">@(_refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
+        <button type="button" class="margin-button" disabled="@Refreshing" @onclick="RefreshAsync">@(Refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
     </div>
     <div @ref="_tableWrap" class="margins-table-wrap @Glass("table")">
         <WebDataTable TItem="MarginRow" TColumnId="Column" Items="@SortedRows" Columns="@Columns"
@@ -70,7 +70,7 @@
     [Parameter, SupplyParameterFromQuery(Name = "company")] public string? Company { get; set; }
     private TradeCompanyProfile? _profile;
     private long? _revision;
-    private bool _hosted, _glass = true, _busy, _refreshing, _disposed;
+    private bool _hosted, _glass = true, _disposed;
     private DateTime? _lastCheckedUtc;
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _ageLoop;
@@ -96,6 +96,13 @@
     // The batch size being typed, kept through hosted syncs and background repricing.
     private int? _editingBatch;
     private string _batchDraft = "";
+    // Background price update: one job at a time. Rows in _forceFetch refetch every pair
+    // (Refresh prices); other rows refetch only pairs older than the Margins reuse window.
+    private readonly HashSet<int> _forceFetch = [];
+    private CancellationTokenSource? _priceJob;
+    private (Guid? Company, TradeCompanyPricingScope? Scope) _priceJobScope;
+    private bool _priceAgain;
+    private bool Refreshing => _forceFetch.Count > 0;
     private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
     private TradeMarginPricing Pricing => new(Rate, _profile?.MaterialSources ?? []);
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
@@ -109,6 +116,9 @@
         public string ItemName { get; set; } = "Item";
         public TradeMarginCost? Cost { get; set; }
         public TradeMarginBreakdown? Breakdown { get; set; }
+        public TradeMarginCalculator.PreparedRow? Plan { get; set; }
+        /// <summary>Market data this row is priced from, by item and data center.</summary>
+        public Dictionary<(int itemId, string dataCenter), CachedMarketData>? Market { get; set; }
         public string Name => Cost?.Name ?? ItemName;
     }
     // Calculator costs the whole production run; every displayed figure is per unit sold.
@@ -409,7 +419,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             _loaded = true;
             _loadedCompany = null;
             if (Company != null) { Company = null; Navigation.NavigateTo("trade/margins", replace: true); }
-            await CalculateAsync(false, onlyMissing: true);
+            await CalculateAsync(false);
             if (previous != null && (previousRate != Rate ||
                 !(previous.MaterialSources ?? []).SequenceEqual(_profile.MaterialSources ?? [])))
                 await RepriceAllAsync();
@@ -419,6 +429,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private void RebuildRows(Dictionary<int, MarginRow> previousRows, bool scopeChanged, bool preserveEdit = true)
     {
+        if (scopeChanged) _forceFetch.Clear();
         _rows = (_profile?.MarginItems ?? []).DistinctBy(item => item.ItemId).Select(item =>
         {
             previousRows.TryGetValue(item.ItemId, out var prior);
@@ -431,74 +442,176 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 Batch = batch,
                 ItemName = prior?.Name ?? _itemNames.GetValueOrDefault(item.ItemId, "Item"),
                 Cost = stale ? null : prior?.Cost,
-                Breakdown = stale ? null : prior?.Breakdown
+                Breakdown = stale ? null : prior?.Breakdown,
+                // A plan is prepared for one batch size; market data is the same for any.
+                Plan = stale ? null : prior?.Plan,
+                Market = scopeChanged ? null : prior?.Market
             };
         }).ToList();
     }
-    private async Task CalculateAsync(bool refresh, bool onlyMissing = false)
+    private static bool NeedsPricing(MarginRow row) =>
+        row.Cost == null || row.Cost.Issue is "Pricing failed" or "Item data unavailable";
+    private static TradeMarginCost Named(MarginRow row, TradeMarginCost cost) =>
+        cost.Name == "Item unavailable" && row.ItemName != "Item" ? cost with { Name = row.ItemName } : cost;
+    /// <summary>
+    /// Runs under _gate. Rows without a figure are priced at once from the market data the
+    /// browser holds, whatever its age; the background update then refetches what is due.
+    /// </summary>
+    private async Task CalculateAsync(bool refresh)
     {
-        if (_disposed || (onlyMissing && _rows.All(row => row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")))) return;
-        _busy = true;
-        _refreshing = true;
+        if (_disposed) return;
+        var scope = _profile?.CommissionPricingScope;
+        var ct = _lifetime.Token;
+        if (refresh) foreach (var row in _rows) _forceFetch.Add(row.ItemId);
         StateHasChanged();
-        try
+        foreach (var row in _rows.ToArray())
         {
-            var plans = new Dictionary<int, TradeMarginCalculator.PreparedRow>();
-            var scope = _profile?.CommissionPricingScope;
-            var pending = new Dictionary<int, MarginRow>();
-            var ct = _lifetime.Token;
-            foreach (var row in _rows)
-            {
-                if (_disposed) return;
-                if (onlyMissing && row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")) continue;
-                try
-                {
-                    plans[row.ItemId] = await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
-                    pending.Add(row.ItemId, row);
-                }
-                catch (Exception ex) when (!ct.IsCancellationRequested)
-                {
-                    await ShowPricingFailureAsync(row, ex, ct);
-                }
-            }
-            using var quickLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var quick = scope is { IsValid: true } ? QuickPass.RunAsync(plans, scope, refresh, (id, cost) =>
-            {
-                if (_disposed || !pending.TryGetValue(id, out var row)) return;
-                SetCost(row, cost);
-                StateHasChanged();
-            }, quickLifetime.Token, Pricing) : Task.CompletedTask;
+            if (_disposed) return;
+            if (!NeedsPricing(row)) continue;
             try
             {
-                // All row/scope replacement is serialized by _gate. Retiring the row from
-                // pending before yielding prevents a late preview from replacing its full cost.
-                foreach (var (id, plan) in plans)
+                var plan = row.Plan != null && row.Cost == null ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
+                row.Plan = plan;
+                row.Market = await Calculator.ReadStoredAsync(TradeMarginCalculator.Pairs(plan, scope), ct);
+                // A row with no stored data for some material waits for the update rather
+                // than showing that material as unpriced.
+                if (TradeMarginCalculator.HasMarketData(plan, row.Market))
                 {
-                    ct.ThrowIfCancellationRequested();
-                    var row = pending[id];
-                    try
-                    {
-                        var full = await Calculator.CalculateFullAsync(plan, scope, refresh, ct, Pricing);
-                        ct.ThrowIfCancellationRequested();
-                        SetCost(row, full.Name == "Item unavailable" && row.ItemName != "Item"
-                            ? full with { Name = row.ItemName } : full);
-                    }
-                    catch (Exception ex) when (!ct.IsCancellationRequested)
-                    {
-                        await ShowPricingFailureAsync(row, ex, ct);
-                    }
-                    pending.Remove(id);
-                    if (!_disposed) StateHasChanged();
+                    SetCost(row, Named(row, await TradeMarginCalculator.PriceAsync(plan, scope, row.Market, Pricing, ct)));
+                    StateHasChanged();
                 }
             }
-            finally
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                quickLifetime.Cancel();
-                try { await quick; } catch (OperationCanceledException) when (quickLifetime.IsCancellationRequested) { }
+                row.Plan = null;
+                await ShowPricingFailureAsync(row, ex, ct);
             }
-            if (refresh && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
         }
-        finally { _busy = false; _refreshing = false; }
+        StartPriceUpdate();
+    }
+    private void StartPriceUpdate()
+    {
+        var scope = (_profile?.Id, _profile?.CommissionPricingScope);
+        if (_priceJob != null && _priceJobScope == scope)
+        {
+            _priceAgain = true;
+            return;
+        }
+        _priceJob?.Cancel();
+        _priceJobScope = scope;
+        var job = _priceJob = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _ = RunPriceUpdateAsync(job);
+    }
+    /// <summary>
+    /// Brings stored prices up to date without holding _gate while Universalis answers. Each
+    /// item/data-center pair is fetched at most once per pass; rows reprice in place as their
+    /// data lands, keeping expanded rows and values being typed.
+    /// </summary>
+    private async Task RunPriceUpdateAsync(CancellationTokenSource job)
+    {
+        var ct = job.Token;
+        try
+        {
+            do
+            {
+                _priceAgain = false;
+                var (company, scope) = _priceJobScope;
+                var forcedPass = _forceFetch.Count > 0;
+                var attempted = new HashSet<(int itemId, string dataCenter)>();
+                var landed = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+                // Rows still without a figure go first, then table order.
+                foreach (var itemId in _rows.OrderBy(row => row.Cost == null ? 0 : 1).Select(row => row.ItemId).ToArray())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
+                    if (row?.Plan is not { Issue: null } plan || row.Market is not { } stored)
+                    {
+                        _forceFetch.Remove(itemId);
+                        continue;
+                    }
+                    var forced = _forceFetch.Contains(itemId);
+                    var reuseCutoff = DateTime.UtcNow - MarketEvidencePolicyDefaults.AgingThreshold;
+                    var pairs = TradeMarginCalculator.Pairs(plan, scope);
+                    var due = pairs.Where(pair => !attempted.Contains(pair) &&
+                        (forced || !stored.TryGetValue(pair, out var entry) || entry.FetchedAt <= reuseCutoff)).ToArray();
+                    if (due.Length > 0)
+                    {
+                        attempted.UnionWith(due);
+                        var result = await Calculator.FetchAsync(due, ct);
+                        foreach (var (pair, entry) in result.Stored) landed[pair] = entry;
+                        LogKeptPrices(result, stored);
+                    }
+                    var updated = pairs.Where(landed.ContainsKey).ToArray();
+                    if (updated.Length > 0 || (row.Cost == null && due.Length > 0))
+                    {
+                        var market = new Dictionary<(int itemId, string dataCenter), CachedMarketData>(stored);
+                        foreach (var pair in updated) market[pair] = landed[pair];
+                        if (!await ApplyUpdateAsync(itemId, plan, market, company, scope, ct)) return;
+                    }
+                    if (forced && _forceFetch.Remove(itemId) && !_disposed) StateHasChanged();
+                }
+                if (forcedPass && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
+            } while (_priceAgain && !ct.IsCancellationRequested);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { Log.LogWarning(ex, "Margins price update stopped; stored prices kept"); }
+        finally
+        {
+            if (ReferenceEquals(_priceJob, job))
+            {
+                _priceJob = null;
+                _forceFetch.Clear();
+                if (!_disposed) StateHasChanged();
+            }
+            job.Dispose();
+        }
+    }
+    /// <summary>Reprices one row from updated market data; false when the company or scope changed.</summary>
+    private async Task<bool> ApplyUpdateAsync(int itemId, TradeMarginCalculator.PreparedRow plan,
+        Dictionary<(int itemId, string dataCenter), CachedMarketData> market, Guid? company, TradeCompanyPricingScope? scope,
+        CancellationToken ct)
+    {
+        TradeMarginCost cost;
+        var rate = Rate;
+        var sources = _profile?.MaterialSources ?? [];
+        try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, Pricing, ct); }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            Log.LogWarning(ex, "Margins could not price item {ItemId} from updated market data; stored prices kept", itemId);
+            return true;
+        }
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_disposed || _profile?.Id != company || _profile?.CommissionPricingScope != scope) return false;
+            var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
+            if (row == null) return true;
+            // Labor, material sources or the batch size may have changed while this row was priced.
+            while (cost.Basis != null && (rate != Rate || !sources.SequenceEqual(_profile?.MaterialSources ?? []) || cost.BatchSize != row.Batch))
+            {
+                rate = Rate;
+                sources = _profile?.MaterialSources ?? [];
+                cost = await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, ct);
+            }
+            row.Plan = plan;
+            row.Market = market;
+            SetCost(row, Named(row, cost));
+            StateHasChanged();
+            return true;
+        }
+        finally { _gate.Release(); }
+    }
+    /// <summary>Names every pair Universalis did not answer, per data center, and what the row keeps.</summary>
+    private void LogKeptPrices(MarketPairRefreshResult result, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
+    {
+        foreach (var group in result.Failed.GroupBy(pair => pair.dataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            var kept = group.Select(pair => stored.TryGetValue(pair, out var entry)
+                ? $"{pair.itemId} (stored {RelativeAge(entry.FetchedAt)} old)" : $"{pair.itemId} (nothing stored)");
+            Log.LogWarning("Margins price update: {DataCenter} did not answer for {Count} items ({Failure}); kept {Kept}",
+                group.Key, group.Count(), result.FailureByDataCenter.GetValueOrDefault(group.Key, "no data returned"),
+                string.Join(", ", kept));
+        }
     }
     private void SetCost(MarginRow row, TradeMarginCost cost)
     {
@@ -556,7 +669,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private async Task RefreshAsync()
     {
-        if (_busy) return;
+        if (Refreshing) return;
         await _gate.WaitAsync();
         try { if (!_disposed) await CalculateAsync(true); }
         catch (Exception ex) { ReportError(ex); }
@@ -618,7 +731,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     !(_profile.MaterialSources ?? []).SequenceEqual(current.Profile.MaterialSources ?? []);
                 _profile = current.Profile;
                 RebuildRows(_rows.ToDictionary(row => row.ItemId), scopeChanged);
-                await CalculateAsync(false, onlyMissing: true);
+                await CalculateAsync(false);
                 if (pricingChanged) await RepriceAllAsync();
                 return;
             }
@@ -804,7 +917,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         {
             row.Cost = null;
             row.Breakdown = null;
-            await CalculateAsync(false, onlyMissing: true);
+            row.Plan = null;
+            await CalculateAsync(false);
             return;
         }
         try { SetCost(row, await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, _lifetime.Token)); }

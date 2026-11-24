@@ -14,7 +14,7 @@ public class UniversalisService : IUniversalisService
 
     private const string UniversalisMarketUrl = "https://universalis.app/market/{0}";
     private readonly UniversalisBulkClient bulkClient;
-    private readonly Lazy<UniversalisBulkClient> listingsClient;
+    private readonly Lazy<UniversalisBulkClient> interactiveClient;
     private readonly ILogger<UniversalisService>? logger;
     private readonly PackagedWorldDirectoryService packagedWorldDirectory;
     private WorldData? worldDataCache;
@@ -26,8 +26,17 @@ public class UniversalisService : IUniversalisService
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         bulkClient = new UniversalisBulkClient(httpClient);
-        listingsClient = new(() => new UniversalisBulkClient(httpClient,
-            options: new UniversalisBulkClientOptions { MaxConcurrentRequests = 4 }));
+        // Interactive pages wait on every answer. Answered requests take under 3 s, while a
+        // stalled one never answers, so it is retried after 5 s rather than half a minute.
+        // Its own gate keeps the combined in-flight count (2 + 6) within Universalis's 8.
+        interactiveClient = new(() => new UniversalisBulkClient(
+            new HttpClient(new UniversalisSlimFieldsHandler(httpClient), disposeHandler: true),
+            options: new UniversalisBulkClientOptions
+            {
+                MaxConcurrentRequests = 6,
+                MaxAttemptsPerChunk = 3,
+                AttemptTimeout = TimeSpan.FromSeconds(5),
+            }));
         this.logger = logger;
         this.packagedWorldDirectory = packagedWorldDirectory ?? new PackagedWorldDirectoryService();
     }
@@ -98,8 +107,7 @@ public class UniversalisService : IUniversalisService
             worldOrDc,
             useParallel);
 
-        var client = historyEntriesPerItem == 0 ? listingsClient.Value : bulkClient;
-        var result = await client.FetchAsync<UniversalisResponse>(
+        var result = await bulkClient.FetchAsync<UniversalisResponse>(
             new UniversalisBulkRequest
             {
                 WorldOrDataCenter = worldOrDc,
@@ -128,6 +136,37 @@ public class UniversalisService : IUniversalisService
         return result.Items.ToDictionary(
             pair => checked((int)pair.Key),
             pair => pair.Value);
+    }
+
+    /// <summary>
+    /// Market data for an interactive page: the same items, history window and stored result
+    /// as <see cref="GetMarketDataBulkAsync"/>, with only the fields the cache keeps on the wire
+    /// and a short per-attempt timeout. Items Universalis did not return are listed as missing.
+    /// </summary>
+    public async Task<(Dictionary<int, UniversalisResponse> Items, IReadOnlyList<int> Missing, string? Failure)> GetInteractiveMarketDataAsync(
+        string dataCenter,
+        IReadOnlyCollection<int> itemIds,
+        CancellationToken ct = default)
+    {
+        var ids = itemIds.Distinct().ToArray();
+        if (ids.Length == 0)
+        {
+            return ([], [], null);
+        }
+
+        var result = await interactiveClient.Value.FetchAsync<UniversalisResponse>(
+            new UniversalisBulkRequest
+            {
+                WorldOrDataCenter = dataCenter,
+                ItemIds = ids.Select(itemId => (uint)itemId).ToArray(),
+                UseParallelRequests = true,
+                HistoryEntriesPerItem = 5,
+            },
+            cancellationToken: ct).ConfigureAwait(false);
+        var failure = result.Failures.Count == 0 ? null : string.Join("; ", result.Failures
+            .Select(entry => $"{string.Join(",", entry.ItemIds)}: {entry.Message}").Distinct());
+        return (result.Items.ToDictionary(pair => checked((int)pair.Key), pair => pair.Value),
+            result.MissingItemIds.Select(itemId => checked((int)itemId)).ToArray(), failure);
     }
 
     public Task<WorldData> GetWorldDataAsync(CancellationToken ct = default)
