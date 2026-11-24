@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 31;
+const MODULE_REVISION = 32;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -1825,6 +1825,46 @@ async function loadAllSettings() {
     });
 }
 
+/**
+ * Load every setting whose key starts with prefix, in one read.
+ */
+async function loadSettingsWithPrefix(prefix) {
+    if (typeof prefix !== 'string' || prefix.length === 0) return {};
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_SETTINGS], 'readonly');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        const request = store.getAll(IDBKeyRange.bound(prefix, prefix + '￿'));
+        request.onsuccess = () => {
+            const settings = {};
+            for (const record of request.result || []) {
+                if (record && typeof record.key === 'string') settings[record.key] = record.value;
+            }
+            resolve(settings);
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function deleteSettings(keys) {
+    const distinctKeys = [...new Set((keys || []).filter(key => typeof key === 'string'))];
+    if (distinctKeys.length === 0) return true;
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_SETTINGS], 'readwrite');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        for (const key of distinctKeys) {
+            store.delete(key);
+        }
+
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function saveSettingsBatch(settings) {
     const database = await initDB();
 
@@ -2454,6 +2494,8 @@ window.IndexedDB = {
     loadSetting,
     loadAllSettings,
     saveSettingsBatch,
+    loadSettingsWithPrefix,
+    deleteSettings,
     saveSettingsWhenSettingsMatchAndRevisionNotNewer,
     clearAllPlans,
     clearMarketCache,
