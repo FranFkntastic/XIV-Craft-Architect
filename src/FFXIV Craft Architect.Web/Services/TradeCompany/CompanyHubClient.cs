@@ -123,7 +123,8 @@ public sealed partial class CompanyHubClient(
         CancellationToken cancellationToken = default,
         bool updateMarginItems = false,
         bool updateCommissionTemplates = false,
-        bool updateDefaultCompanySuppliedItems = false)
+        bool updateDefaultCompanySuppliedItems = false,
+        bool updateMaterialSources = false)
     {
         using var response = await SendAsync(
             HttpMethod.Put,
@@ -146,7 +147,9 @@ public sealed partial class CompanyHubClient(
                 DefaultCompanySuppliedItems = updateDefaultCompanySuppliedItems
                     ? profile.DefaultCompanySuppliedItems
                     : null,
-                UpdateDefaultCompanySuppliedItems = updateDefaultCompanySuppliedItems
+                UpdateDefaultCompanySuppliedItems = updateDefaultCompanySuppliedItems,
+                MaterialSources = updateMaterialSources ? profile.MaterialSources : null,
+                UpdateMaterialSources = updateMaterialSources
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
@@ -692,7 +695,8 @@ public sealed record TradeCompanyWorkspaceProfile(
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
     bool FreelancerOpenCommissions = true,
     IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
-    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null)
+    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null,
+    IReadOnlyList<TradeMaterialSource>? MaterialSources = null)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -706,6 +710,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         MarginItems = MarginItems ?? [],
         CommissionTemplates = CommissionTemplates ?? [],
         DefaultCompanySuppliedItems = DefaultCompanySuppliedItems ?? [],
+        MaterialSources = MaterialSources ?? [],
         FreelancerOpenCommissions = FreelancerOpenCommissions,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,

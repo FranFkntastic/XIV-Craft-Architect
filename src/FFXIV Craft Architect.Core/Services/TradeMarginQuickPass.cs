@@ -8,7 +8,8 @@ namespace FFXIV_Craft_Architect.Core.Services;
 public sealed class TradeMarginQuickPass(IMarketCacheService market, IUniversalisService api, ILogger<TradeMarginQuickPass> log)
 {
     public async Task RunAsync(IReadOnlyDictionary<int, TradeMarginCalculator.PreparedRow> rows,
-        TradeCompanyPricingScope scope, bool refresh, Action<int, TradeMarginCost> publish, CancellationToken ct)
+        TradeCompanyPricingScope scope, bool refresh, Action<int, TradeMarginCost> publish, CancellationToken ct,
+        TradeMarginPricing? pricing = null)
     {
         var centers = MarketFetchScopeResolver.GetDataCenters(scope.MarketFetchScope, scope.EffectiveDataCenter, scope.Region);
         var pairs = rows.Values.SelectMany(row => row.Leaves).Distinct()
@@ -79,7 +80,7 @@ public sealed class TradeMarginQuickPass(IMarketCacheService market, IUniversali
                 }
                 try
                 {
-                    var cost = await row.Price(evidence, ct);
+                    var cost = await row.Price(evidence, pricing ?? TradeMarginPricing.None, ct);
                     ct.ThrowIfCancellationRequested();
                     publish(id, cost);
                 }

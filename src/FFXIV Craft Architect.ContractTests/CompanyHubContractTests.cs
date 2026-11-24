@@ -373,6 +373,60 @@ public sealed class CompanyHubContractTests
         Assert.Contains("https://example.test/path", json, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task MaterialSourcesSurviveSettingsSyncAndMarginItemSaves()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany();
+        using var client = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(client, company);
+        TradeMaterialSource[] sources =
+        [
+            new(5057, TradeMaterialRoute.Vendor),
+            new(5371, TradeMaterialRoute.SetPrice, 0)
+        ];
+        var workspace = $"/trade/v1/companies/{company.Id:D}/workspace-profile";
+
+        async Task<long> PutWorkspaceAsync(long revision, bool withSources) =>
+            await ReadRevisionAsync(await client.PutAsJsonAsync(workspace, new TradeCompanyWorkspaceProfileUpdateRequest(
+                revision, company.Name, "Settings edit", null, company.PaymentPolicy,
+                MaterialSources: withSources ? sources : null, UpdateMaterialSources: withSources)));
+
+        var revision = await PutWorkspaceAsync(1, withSources: true);
+        revision = await PutWorkspaceAsync(revision, withSources: false);
+        using (var synced = await client.PutAsJsonAsync(
+                   $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
+                   new ProfileSyncPutRequest
+                   {
+                       PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
+                       ExpectedRevision = revision
+                   }))
+        {
+            synced.EnsureSuccessStatusCode();
+            revision = (await synced.Content.ReadFromJsonAsync<ProfileSyncPutResponse>())!.Object!.Revision;
+        }
+        using (var margins = await client.PutAsJsonAsync(
+                   $"/trade/v1/companies/{company.Id:D}/margin-items",
+                   new CompanyMarginItemsUpdateRequest(revision, true, [new TradeMarginItem(5057, 120)])))
+        {
+            margins.EnsureSuccessStatusCode();
+        }
+
+        var stored = await client.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(workspace);
+        Assert.Equal(sources, stored!.MaterialSources);
+        Assert.Equal([new TradeMarginItem(5057, 120)], stored.MarginItems!);
+    }
+
+    private static async Task<long> ReadRevisionAsync(HttpResponseMessage response)
+    {
+        using (response)
+        {
+            response.EnsureSuccessStatusCode();
+            return (await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfileUpdateResponse>())!.Revision;
+        }
+    }
+
     private static TradeCompanyProfile CreateCompany(string name = "Sapphire Avenue", bool showCount = false)
     {
         var company = TradeCompanyProfile.CreateLocal(name, DateTime.UtcNow);

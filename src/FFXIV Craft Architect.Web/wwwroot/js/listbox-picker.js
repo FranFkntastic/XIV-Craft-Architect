@@ -22,6 +22,13 @@ export function open(trigger, menu, owner) {
         const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - width - margin));
         menu.style.top = `${Math.round(top)}px`;
         menu.style.left = `${Math.round(left)}px`;
+        // A filtered or transformed ancestor (e.g. a glass surface) becomes the containing
+        // block for fixed positioning; shift by the measured offset so the menu stays anchored.
+        const placed = menu.getBoundingClientRect();
+        if (Math.round(placed.top) !== Math.round(top) || Math.round(placed.left) !== Math.round(left)) {
+            menu.style.top = `${Math.round(2 * top - placed.top)}px`;
+            menu.style.left = `${Math.round(2 * left - placed.left)}px`;
+        }
     };
     const dismiss = () => owner.invokeMethodAsync("Dismiss");
     const onPointerDown = event => {
