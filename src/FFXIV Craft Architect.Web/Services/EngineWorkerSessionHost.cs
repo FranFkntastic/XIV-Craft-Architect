@@ -1792,7 +1792,8 @@ public static partial class ManagedHost
                 occurrence.Quantity,
                 occurrence.Source,
                 activeProcurementIds.Contains(occurrence.NodeId),
-                occurrence.SuppressedByNodeId != null)).ToArray(),
+                occurrence.SuppressedByNodeId != null,
+                occurrence.SourceReason)).ToArray(),
             outputPurchaseQuotes);
     }
 

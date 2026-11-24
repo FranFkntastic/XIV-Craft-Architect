@@ -1,0 +1,47 @@
+.batch-duplicate-dialog {
+  display: grid;
+  gap: 10px;
+  min-width: min(420px, 80vw);
+}
+
+.batch-duplicate-fields {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.batch-duplicate-fields ::deep .batch-duplicate-count input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-duplicate-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-duplicate-preview-label {
+  color: #9a9a9a;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.batch-duplicate-preview-value {
+  border: 1px solid #343434;
+  border-radius: 4px;
+  background: #242424;
+  padding: 2px 7px;
+  overflow-wrap: anywhere;
+}
+
+.batch-duplicate-preview-sep {
+  color: #a8a8a8;
+}
