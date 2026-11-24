@@ -40,7 +40,8 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
             sourceProfile.MaterialPricingPolicy);
         importedProfile.CommissionPricingScope = sourceProfile.CommissionPricingScope;
-        importedProfile.MarginItems = (sourceProfile.MarginItems ?? []).ToArray();
+        importedProfile.MarginItems = (sourceProfile.MarginItems ?? []).Where(item => item != null)
+            .Select(item => item with { BatchSize = Math.Clamp(item.BatchSize, 1, TradeMarginItem.MaxBatchSize) }).ToArray();
         importedProfile.CommissionTemplates = (sourceProfile.CommissionTemplates ?? []).ToArray();
         importedProfile.DefaultCompanySuppliedItems = (sourceProfile.DefaultCompanySuppliedItems ?? []).ToArray();
         importedProfile.MaterialSources = (sourceProfile.MaterialSources ?? []).ToArray();
