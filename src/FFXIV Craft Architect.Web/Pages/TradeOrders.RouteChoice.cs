@@ -41,6 +41,12 @@ public partial class TradeOrders
         var amount = option?.TotalCost is { } total ? FormatGilShort(total) : UnavailableAmount;
         if (source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq)
         {
+            // No listings are loaded before the first pricing run; the route stays selectable.
+            if (IsSelectedOrderUnpricedSkeleton)
+            {
+                return new ListboxPickerItem(value, name, "Not priced yet", UnavailableAmount);
+            }
+
             if (option is { IsShortOfListings: true })
             {
                 return new ListboxPickerItem(

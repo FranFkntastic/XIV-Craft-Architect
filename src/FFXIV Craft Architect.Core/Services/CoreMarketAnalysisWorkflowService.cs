@@ -12,7 +12,9 @@ public sealed record CoreMarketAnalysisWorkflowRequest(
     IReadOnlyDictionary<string, IReadOnlyList<string>> ExpectedWorldsByDataCenter,
     MarketAnalysisExecutionOptions? ExecutionOptions = null,
     RecommendationMode RecommendationMode = RecommendationMode.MinimizeTotalCost,
-    IReadOnlyList<string>? RequestedDataCenters = null);
+    IReadOnlyList<string>? RequestedDataCenters = null,
+    // When set, only these candidates are analyzed and published.
+    IReadOnlyCollection<int>? TargetItemIds = null);
 
 public sealed record CoreApplyMarketAnalysisLensRequest(MarketAcquisitionLens Lens);
 
@@ -64,6 +66,17 @@ public sealed class CoreMarketAnalysisWorkflowService
                     linkedCancellation.Token);
             var materials = candidateResult?.Candidates.ToList() ?? [];
             var recipeBasis = candidateResult?.RecipeBasis;
+            if (request.TargetItemIds is { } targetItemIds)
+            {
+                var targets = targetItemIds as IReadOnlySet<int> ?? targetItemIds.ToHashSet();
+                materials = materials.Where(item => targets.Contains(item.ItemId)).ToList();
+                if (plan != null && materials.Count == 0)
+                {
+                    // Nothing in the requested scope needs listings: a clean no-op.
+                    operation.Cancel();
+                    return new CoreMarketAnalysisWorkflowResult(true, 0, 0, 0);
+                }
+            }
             if (_session.PlanSessionVersion != planSessionVersion)
             {
                 operation.Cancel();

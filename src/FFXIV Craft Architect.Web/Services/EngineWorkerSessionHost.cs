@@ -840,7 +840,8 @@ public static partial class ManagedHost
                 request.Lens,
                 expectedWorlds,
                 MarketAnalysisExecutionOptions.Synchronous,
-                RequestedDataCenters: requestedDataCenters));
+                RequestedDataCenters: requestedDataCenters,
+                TargetItemIds: request.TargetItemIds));
         if (!result.Published)
         {
             throw new InvalidOperationException(
@@ -1714,9 +1715,14 @@ public static partial class ManagedHost
             warnings.AddRange(labor.Warnings);
         }
 
+        // An unpriced skeleton has no listings to price against: counterfactual route
+        // payments and whole-output purchase quotes would only loop over empty evidence.
+        var hasMarketEvidence = evidence.ShoppingPlans is { Count: > 0 };
+
         // Option totals are replaced only after on-hand reference values were read from the
         // estimate-based options above, so material values on the grid stay as they were.
-        var acquisitionRows = request.RoutePaymentBasis is { } paymentBasis &&
+        var acquisitionRows = hasMarketEvidence &&
+            request.RoutePaymentBasis is { } paymentBasis &&
             plan.AcquisitionLaborGilPerSynth > 0
                 ? await PriceRouteOptionsAsPaymentAsync(
                     plan,
@@ -1726,7 +1732,7 @@ public static partial class ManagedHost
                     paymentBasis)
                 : acquisition.Rows;
 
-        var outputPurchaseQuotes = request.IncludeOutputPurchaseQuotes
+        var outputPurchaseQuotes = hasMarketEvidence && request.IncludeOutputPurchaseQuotes
             ? await CaptureOutputPurchaseQuotesAsync(
                 plan,
                 evidence.ShoppingPlans ?? [],
@@ -2003,6 +2009,11 @@ public static partial class ManagedHost
             return rows;
         }
 
+        // The company supplies these, so the crafter never routes them: no counterfactuals.
+        var companyProvided = (basis.Responsibilities ?? [])
+            .Where(line => line.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Select(line => (line.ItemId, line.RequiresHq))
+            .ToHashSet();
         var payments = new Dictionary<(int ItemId, AcquisitionSource Source), RoutePayment?>();
         RoutePayment? livePayment = null;
         var livePriced = false;
@@ -2037,7 +2048,8 @@ public static partial class ManagedHost
         var priced = new List<WorkerAcquisitionRowProjection>(rows.Count);
         foreach (var row in rows)
         {
-            if (!IsPrecraftDecisionRow(plan, row))
+            if (!IsPrecraftDecisionRow(plan, row) ||
+                companyProvided.Contains((row.ItemId, row.MustBeHq)))
             {
                 priced.Add(row);
                 continue;

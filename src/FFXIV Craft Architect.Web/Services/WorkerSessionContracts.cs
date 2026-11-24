@@ -414,7 +414,10 @@ public sealed record WorkerMarketAnalysisRequest(
     string SelectedDataCenter,
     string SelectedRegion,
     MarketAcquisitionLens Lens,
-    IReadOnlyList<string>? SelectedRegions = null);
+    IReadOnlyList<string>? SelectedRegions = null,
+    // When set, only these candidate items are fetched and analyzed; the publication
+    // replaces market evidence with exactly this subset.
+    IReadOnlyCollection<int>? TargetItemIds = null);
 
 public sealed record WorkerMarketLensMutation(MarketAcquisitionLens Lens);
 

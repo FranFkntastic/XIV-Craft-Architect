@@ -60,6 +60,12 @@ public partial class TradeOrders
                 return "Add at least one requested output before publishing.";
             }
 
+            if (TradeOrderWorkflow.IsUnpricedSkeleton(order) ||
+                IsSelectedOrderUnpricedSkeleton)
+            {
+                return "Price the plan before publishing.";
+            }
+
             if (commission.CurrentTerms.Payment.Total <= 0)
             {
                 return "Finish the work package and pricing before publishing.";
@@ -164,6 +170,11 @@ public partial class TradeOrders
             if (GetOrderRootItems(_selectedOrder).Count == 0)
             {
                 return "Add at least one requested output before publishing.";
+            }
+
+            if (IsSelectedOrderUnpricedSkeleton)
+            {
+                return "Price the plan before publishing.";
             }
 
             var payment = GetSelectedOrderPaymentSummary();

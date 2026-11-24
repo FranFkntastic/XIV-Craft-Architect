@@ -729,10 +729,44 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             await GetMarketProjectionAsync(cancellationToken) ??
             throw new InvalidOperationException(
                 "The Worker did not publish the active market-analysis candidates.");
-        if (market.CandidateItems.Count == 0)
+        if (market.CandidateItems.Count == 0 && request.TargetItemIds is null)
         {
             throw new InvalidOperationException(
                 "The active plan does not contain any market-analysis candidates.");
+        }
+
+        IReadOnlyList<MaterialAggregate> candidateItems = market.CandidateItems;
+        if (request.TargetItemIds is not null)
+        {
+            var targetItemIds = request.TargetItemIds as IReadOnlySet<int> ??
+                request.TargetItemIds.ToHashSet();
+            candidateItems = market.CandidateItems
+                .Where(item => targetItemIds.Contains(item.ItemId))
+                .ToArray();
+            if (candidateItems.Count == 0)
+            {
+                // Nothing the caller prices needs listings (company supplies or holds
+                // every buyable item). Adopt the requested context when no published evidence exists.
+                if (!market.HasAnalysis &&
+                    (market.Scope != request.Scope ||
+                     !string.Equals(market.SelectedDataCenter, request.SelectedDataCenter, StringComparison.OrdinalIgnoreCase) ||
+                     !string.Equals(market.SelectedRegion, request.SelectedRegion, StringComparison.OrdinalIgnoreCase)))
+                {
+                    await MutateActiveContextAsync(
+                        new WorkerActiveContextMutation(
+                            request.SelectedDataCenter,
+                            request.SelectedRegion,
+                            request.Scope),
+                        cancellationToken,
+                        operationId);
+                }
+                return new WorkerMarketAnalysisOutcome(
+                    Published: true,
+                    0,
+                    0,
+                    0,
+                    _projections.Market ?? market);
+            }
         }
 
         var dataCenters = MarketFetchScopeResolver.GetDataCenters(
@@ -743,7 +777,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var expectedWorlds = await GetExpectedWorldsAsync(
             dataCenters,
             cancellationToken);
-        var evidenceRequests = market.CandidateItems
+        var evidenceRequests = candidateItems
             .SelectMany(item => dataCenters.Select(dataCenter => (item.ItemId, dataCenter)))
             .ToList();
         var cacheProgress = reportStatus is null
@@ -765,23 +799,23 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         // those payloads into WASM at once can exhaust the browser heap, while one
         // item per pass pays a full IndexedDB round trip per material.
         const int reconciliationBatchSize = 8;
-        var analyses = new List<MarketItemAnalysis>(market.CandidateItems.Count);
-        var shoppingPlans = new List<DetailedShoppingPlan>(market.CandidateItems.Count);
+        var analyses = new List<MarketItemAnalysis>(candidateItems.Count);
+        var shoppingPlans = new List<DetailedShoppingPlan>(candidateItems.Count);
         var unavailableItemIds = new HashSet<int>();
-        for (var offset = 0; offset < market.CandidateItems.Count; offset += reconciliationBatchSize)
+        for (var offset = 0; offset < candidateItems.Count; offset += reconciliationBatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var batch = market.CandidateItems
+            var batch = candidateItems
                 .Skip(offset)
                 .Take(reconciliationBatchSize)
                 .ToArray();
             var batchItemIds = batch
                 .Select(item => item.ItemId)
                 .ToHashSet();
-            var completed = Math.Min(offset + batch.Length, market.CandidateItems.Count);
+            var completed = Math.Min(offset + batch.Length, candidateItems.Count);
             reportStatus?.Invoke(
-                $"Comparing prices and availability ({completed:N0} of {market.CandidateItems.Count:N0} materials)...",
-                50 + (30d * completed / market.CandidateItems.Count));
+                $"Comparing prices and availability ({completed:N0} of {candidateItems.Count:N0} materials)...",
+                50 + (30d * completed / candidateItems.Count));
             var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
                 new MarketEvidenceReconciliationRequest
                 {
@@ -818,7 +852,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (shoppingPlans.Count == 0)
         {
             throw new InvalidOperationException(
-                $"The market source returned no usable evidence for {market.CandidateItems.Count:N0} items.");
+                $"The market source returned no usable evidence for {candidateItems.Count:N0} items.");
         }
 
         var publicationOperationId = Guid.NewGuid();
