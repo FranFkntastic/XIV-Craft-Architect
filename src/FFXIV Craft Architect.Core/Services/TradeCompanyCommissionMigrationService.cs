@@ -220,7 +220,7 @@ public static class TradeCompanyCommissionMigrationService
         order.CompanyCommission == null &&
         order.CommissionPublication == null &&
         order.AssignedCrafterId == null &&
-        order.Status == TradeOrderStatus.ReadyToAssign;
+        order.Status is TradeOrderStatus.ReadyToAssign or TradeOrderStatus.Draft;
 
     private static void Require(bool condition, string message)
     {

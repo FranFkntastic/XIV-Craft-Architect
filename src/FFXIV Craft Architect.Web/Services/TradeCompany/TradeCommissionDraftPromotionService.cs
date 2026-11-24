@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using Microsoft.Extensions.Logging;
 
@@ -40,9 +41,15 @@ public sealed class TradeCommissionDraftPromotionService(
     TradeCommissionOperationsService operations,
     TradeCompanyCollaborationService collaboration,
     ProfileSyncService profileSync,
+    TradeOperationsPersistenceService persistence,
     ILogger<TradeCommissionDraftPromotionService> logger)
 {
+    /// <summary>Unexplained failures retry on later triggers this many times, then stop.</summary>
+    private const int MaxUnexplainedFailures = 3;
+
     private readonly Dictionary<Guid, TradeCommissionDraftPromotionState> _states = [];
+    private readonly Dictionary<Guid, SemaphoreSlim> _gates = [];
+    private readonly Dictionary<Guid, int> _unexplainedFailures = [];
 
     public event Action<Guid>? StateChanged;
 
@@ -54,8 +61,27 @@ public sealed class TradeCommissionDraftPromotionService(
         state.Phase == TradeCommissionDraftPromotionPhase.Promoting;
 
     /// <summary>
-    /// Promotes one plain draft work package. Returns the committed canonical order, or null
-    /// when the order stays a pending or refused creation (see <see cref="GetState"/>).
+    /// Runs <paramref name="action"/> while no promotion or other save of the same order is in
+    /// flight, so a plain save can never interleave with that order becoming canonical.
+    /// </summary>
+    public async Task<T> RunExclusiveAsync<T>(Guid orderId, Func<Task<T>> action)
+    {
+        var gate = GetGate(orderId);
+        await gate.WaitAsync();
+        try
+        {
+            return await action();
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Promotes one plain draft work package. Returns the committed canonical order (or the
+    /// canonical copy another tab already stored), or null when the order stays a pending or
+    /// refused creation (see <see cref="GetState"/>).
     /// </summary>
     public async Task<TradeOrder?> PromoteAsync(
         TradeOrder workPackage,
@@ -71,6 +97,40 @@ public sealed class TradeCommissionDraftPromotionService(
         {
             return null;
         }
+
+        var gate = GetGate(workPackage.Id);
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Promote what is stored now, not the caller's copy: a save that finished while this
+            // promotion waited must be part of the draft, and a tab that already converted the
+            // order has stored the canonical copy.
+            var stored = await persistence.LoadOrderAsync(workPackage.Id);
+            if (stored?.CompanyCommission != null)
+            {
+                ClearState(workPackage.Id);
+                return stored;
+            }
+            if (stored != null && !TradeCompanyCommissionMigrationService.IsDraftWorkPackage(stored))
+            {
+                ClearState(workPackage.Id);
+                return null;
+            }
+
+            return await PromoteCoreAsync(stored ?? workPackage, payrollDraft, company, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<TradeOrder?> PromoteCoreAsync(
+        TradeOrder workPackage,
+        TradePayrollWorkflowDraft? payrollDraft,
+        TradeCompanyProfile company,
+        CancellationToken cancellationToken)
+    {
 
         if (!IsAuthorityReady(out var waitReason))
         {
@@ -89,15 +149,27 @@ public sealed class TradeCommissionDraftPromotionService(
                 return null;
             }
 
-            var brief = TradeCommissionDraftComposer.ComposeNewDraft(workPackage, payrollDraft, company);
-            var expected = await collaboration.ResolveDraftConversionBaseAsync(
+            var conversionBase = await collaboration.ResolveDraftConversionBaseAsync(
                 workPackage,
                 cancellationToken);
+            var source = workPackage;
+            if (conversionBase.CompanyWorkPackage is { } companyCopy)
+            {
+                logger.LogWarning(
+                    "Trade order {OrderId} differed from the company's open draft ({Code}); converted the company's copy at revision {Revision} and replaced this device's copy.",
+                    workPackage.Id,
+                    "company_copy_converted",
+                    conversionBase.Revision.Value);
+                source = companyCopy;
+            }
+
+            var brief = TradeCommissionDraftComposer.ComposeNewDraft(source, payrollDraft, company);
             var created = await operations.CreateDraftAsync(
-                workPackage,
+                source,
                 brief,
-                expected,
+                conversionBase.Revision,
                 cancellationToken);
+            _unexplainedFailures.Remove(workPackage.Id);
             ClearState(workPackage.Id);
             if (created.AdoptedFrom != null)
             {
@@ -130,9 +202,31 @@ public sealed class TradeCommissionDraftPromotionService(
         }
         catch (InvalidOperationException exception)
         {
-            // Browser-side failures (authority switched mid-command, generated plan not yet
-            // synchronized) are retried on the next trigger; host refusals above are final.
-            Wait(workPackage.Id, "promotion_failed", exception.Message);
+            if (!IsAuthorityReady(out var changedReason))
+            {
+                // The profile or host switched mid-command; readiness will trigger the retry.
+                Wait(workPackage.Id, "authority_changed", $"{changedReason} {exception.Message}");
+                return null;
+            }
+
+            // Anything else retries on a few later triggers and then stops for good, so an
+            // unexplained failure can never loop; the operator retries or discards the copy.
+            var failures = _unexplainedFailures.GetValueOrDefault(workPackage.Id) + 1;
+            _unexplainedFailures[workPackage.Id] = failures;
+            if (failures < MaxUnexplainedFailures)
+            {
+                Wait(
+                    workPackage.Id,
+                    "promotion_failed",
+                    $"{exception.Message} (attempt {failures} of {MaxUnexplainedFailures})");
+            }
+            else
+            {
+                Refuse(
+                    workPackage.Id,
+                    "promotion_failed",
+                    $"{exception.Message} Stopped after {failures} attempts; retry, or keep or discard this device's copy.");
+            }
             return null;
         }
     }
@@ -174,11 +268,22 @@ public sealed class TradeCommissionDraftPromotionService(
     /// <summary>Forgets a refusal so the next trigger retries the promotion.</summary>
     public void ResetRefusal(Guid orderId)
     {
+        _unexplainedFailures.Remove(orderId);
         if (_states.TryGetValue(orderId, out var state) &&
             state.Phase == TradeCommissionDraftPromotionPhase.Refused)
         {
             ClearState(orderId);
         }
+    }
+
+    private SemaphoreSlim GetGate(Guid orderId)
+    {
+        if (!_gates.TryGetValue(orderId, out var gate))
+        {
+            gate = new SemaphoreSlim(1, 1);
+            _gates[orderId] = gate;
+        }
+        return gate;
     }
 
     public void MarkPending(Guid orderId, string reason) =>

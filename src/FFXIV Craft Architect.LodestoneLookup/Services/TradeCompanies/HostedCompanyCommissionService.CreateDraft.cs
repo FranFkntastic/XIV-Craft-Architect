@@ -156,9 +156,27 @@ public sealed partial class HostedCompanyCommissionService
         {
             stored = null;
         }
-        if (stored?.CompanyCommission == null)
+        if (stored == null || stored.Id != commissionId)
         {
-            return null;
+            return RefuseDraft(
+                access,
+                commissionId,
+                "order_record_unreadable",
+                "The company's current record for this Trade order could not be read, so it was not replaced.",
+                CompanyCommissionMutationStatus.Conflict);
+        }
+        if (stored.CompanyCommission == null)
+        {
+            // Only an open, unassigned, unpublished plain draft may become a commission draft;
+            // an older client must never turn assigned or in-work orders back into drafts.
+            return TradeCompanyCommissionMigrationService.IsDraftWorkPackage(stored)
+                ? null
+                : RefuseDraft(
+                    access,
+                    commissionId,
+                    "order_not_draft",
+                    $"The company's copy of this Trade order is {stored.Status} and cannot become a commission draft.",
+                    CompanyCommissionMutationStatus.Conflict);
         }
 
         if (string.Equals(current.PayloadJson, payload, StringComparison.Ordinal) ||

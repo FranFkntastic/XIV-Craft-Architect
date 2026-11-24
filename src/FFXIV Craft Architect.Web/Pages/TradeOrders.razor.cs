@@ -661,6 +661,29 @@ public partial class TradeOrders
             return false;
         }
 
+        // Saves and promotions of one order never interleave. A promotion (here or in another
+        // tab sharing this browser's storage) may have made the order canonical since the
+        // editor loaded it; the stored copy decides, and a plain copy is never written over it.
+        return await DraftPromotions.RunExclusiveAsync(
+            order.Id,
+            () => SavePlainOrderAsync(order));
+    }
+
+    private async Task<bool> SavePlainOrderAsync(TradeOrder order)
+    {
+        var stored = await TradeOperationsPersistence.LoadOrderAsync(order.Id);
+        var canonical = stored?.CompanyCommission != null
+            ? stored
+            : _orders.FirstOrDefault(candidate =>
+                  candidate.Id == order.Id && candidate.CompanyCommission != null) ??
+              (HostedOrders.Get(order.Id)?.Order is { CompanyCommission: not null } hosted
+                  ? hosted
+                  : null);
+        if (canonical != null)
+        {
+            return await ReapplyEditToCanonicalDraftAsync(order, canonical);
+        }
+
         // A plain draft that never reached the host stays a pending creation on this device:
         // it joins the hosted workspace only as a commission draft, never as a plain order.
         var draftWorkPackage = TradeCompanyCommissionMigrationService.IsDraftWorkPackage(order);

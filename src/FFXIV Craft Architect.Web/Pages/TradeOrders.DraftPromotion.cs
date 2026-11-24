@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
+using Microsoft.Extensions.Logging;
 using MudBlazor;
 
 namespace FFXIV_Craft_Architect.Web.Pages;
@@ -207,10 +208,84 @@ public partial class TradeOrders
     }
 
     /// <summary>
+    /// An edit was made to the plain copy of an order that has since become a commission draft.
+    /// The edit is applied to the draft through the canonical update; when that is impossible it
+    /// stays in the editor, the reason is logged, and nothing plain is written or uploaded.
+    /// </summary>
+    private async Task<bool> ReapplyEditToCanonicalDraftAsync(TradeOrder edited, TradeOrder canonical)
+    {
+        if (_companyProfile is not { } company)
+        {
+            return false;
+        }
+
+        var owner = CommissionOperations.GetForOrder(canonical.Id);
+        if (owner == null)
+        {
+            try
+            {
+                owner = await CommissionOperations.RefreshOwnerAsync(canonical);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return KeepEditOverCanonical(edited.Id, "canonical_owner_unavailable", exception.Message);
+            }
+        }
+
+        var commission = owner.Order.CompanyCommission;
+        if (commission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft)
+        {
+            return KeepEditOverCanonical(
+                edited.Id,
+                "commission_not_draft",
+                "The commission was published before this edit was saved.");
+        }
+
+        var workPackage = TradeOrderWorkflow.CopyOrder(edited);
+        workPackage.CompanyCommission = null;
+        var brief = TradeCommissionDraftComposer.ComposeNewDraft(
+            workPackage,
+            GetPayrollDraftForOrder(workPackage),
+            company);
+        brief.Contact = commission.CurrentTerms.ContactInstructions;
+        brief.DeliveryInstructions = commission.CurrentTerms.DeliveryInstructions;
+        var terms = TradeCompanyCommissionMigrationService.CreateDraftTerms(
+            workPackage,
+            brief,
+            commission.CurrentTerms,
+            DateTime.UtcNow);
+        var result = await CommissionOperations.UpdateDraftAsync(owner, terms, workPackage);
+        if (!result.Success || result.Projection is not { } committed)
+        {
+            return KeepEditOverCanonical(
+                edited.Id,
+                "canonical_update_refused",
+                result.Message ?? "The commission draft update was not committed.");
+        }
+
+        ReplaceBoardOrder(committed.Order, forceSelect: true);
+        Snackbar.Add("Saved to the commission draft this order became.", Severity.Info);
+        return true;
+    }
+
+    private bool KeepEditOverCanonical(Guid orderId, string code, string message)
+    {
+        Logger.LogWarning(
+            "An edit to Trade order {OrderId} was kept in the editor instead of overwriting its commission ({Code}): {Message}",
+            orderId,
+            code,
+            message);
+        Snackbar.Add(
+            $"This order is now a commission; your edit is still in the editor and was not saved ({code}): {message}",
+            Severity.Info);
+        return false;
+    }
+
+    /// <summary>
     /// Puts the committed canonical order on the board in place of the plain work package and
     /// re-selects it unless the operator is mid-edit on that order.
     /// </summary>
-    private void ReplaceBoardOrder(TradeOrder canonical)
+    private void ReplaceBoardOrder(TradeOrder canonical, bool forceSelect = false)
     {
         var index = _orders.FindIndex(order => order.Id == canonical.Id);
         if (index >= 0)
@@ -223,8 +298,8 @@ public partial class TradeOrders
         }
 
         if (_selectedOrder?.Id == canonical.Id &&
-            _selectedOrder.CompanyCommission == null &&
-            !OwnsSelectedWorkspaceWorkingState())
+            (forceSelect ||
+             (_selectedOrder.CompanyCommission == null && !OwnsSelectedWorkspaceWorkingState())))
         {
             var tab = _activeOpsTab;
             SelectOrder(canonical);

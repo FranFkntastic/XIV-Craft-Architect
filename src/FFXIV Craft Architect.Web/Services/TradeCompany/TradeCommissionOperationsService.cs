@@ -165,6 +165,38 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
+    /// <summary>
+    /// Loads and adopts the host's committed owner projection directly, without waiting for
+    /// profile sync. Unlike <see cref="RefreshAsync"/>, failures throw to the caller, so a
+    /// command that just committed can tell whether the browser actually adopted the result.
+    /// </summary>
+    public async Task<CompanyCommissionOwnerProjection> RefreshOwnerAsync(
+        TradeOrder order,
+        CancellationToken cancellationToken = default)
+    {
+        if (order.CompanyCommission is not { } commission)
+        {
+            throw new InvalidOperationException(
+                "Only a company commission has a committed owner projection.");
+        }
+        if (!CanPerformExternalAction(order, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+
+        var authority = await CaptureOrderAuthorityAsync();
+        var projection = await client.LoadOwnerProjectionAsync(
+            authority.Connection,
+            commission.CompanyId.Value,
+            commission.CommissionId,
+            cancellationToken);
+        ValidateProjection(order, projection);
+        await ApplyProjectionAsync(authority, projection);
+        _errors.Remove(order.Id);
+        _missingCanonicalOwners.Remove(order.Id);
+        return projection;
+    }
+
     public async Task<CompanyCommissionOwnerProjection?> ResolveNotificationNavigationAsync(
         TradeOrder order,
         CancellationToken cancellationToken = default)

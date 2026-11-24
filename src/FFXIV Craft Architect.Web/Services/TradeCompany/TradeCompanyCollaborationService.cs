@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
@@ -377,7 +378,7 @@ public sealed class TradeCompanyCollaborationService(
     /// adopted from this profile. The order's exact generated plan is synchronized first so the
     /// host can adopt it with the draft. A pending creation is never uploaded as a plain order.
     /// </summary>
-    public async Task<CompanyRecordRevision> ResolveDraftConversionBaseAsync(
+    public async Task<TradeCommissionDraftConversionBase> ResolveDraftConversionBaseAsync(
         TradeOrder order,
         CancellationToken cancellationToken = default)
     {
@@ -393,20 +394,74 @@ public sealed class TradeCompanyCollaborationService(
         if (!synchronized)
         {
             await EnsureLinkedPlanIsHostedAsync(order, authority, cancellationToken);
-            return CompanyRecordRevision.None;
+            return new(CompanyRecordRevision.None, null);
         }
 
-        var revision = await ResolveCanonicalOrderRevisionAsync(
-            order,
-            authority,
-            cancellationToken);
+        long revision;
+        try
+        {
+            revision = await ResolveCanonicalOrderRevisionAsync(
+                order,
+                authority,
+                cancellationToken);
+        }
+        catch (TradeCompanyOrderConflictException conflict)
+        {
+            return ResolveCompanyDraftConflict(order, conflict);
+        }
         if (revision <= 0)
         {
             throw new CompanyCommissionDraftRefusedException(
                 "hosted_order_conflict",
                 "The hosted order differs from this browser and needs conflict review before it can become a commission draft.");
         }
-        return new CompanyRecordRevision(revision);
+        return new(new CompanyRecordRevision(revision), null);
+    }
+
+    /// <summary>
+    /// The company already holds a different record for this order. An open, unassigned,
+    /// unpublished plain draft is converted from the company's copy at its revision; a canonical
+    /// record is answered by create-draft (already_canonical, then adopted); anything else is a
+    /// final, named refusal that the operator settles by keeping or discarding this device's copy.
+    /// </summary>
+    private static TradeCommissionDraftConversionBase ResolveCompanyDraftConflict(
+        TradeOrder order,
+        TradeCompanyOrderConflictException conflict)
+    {
+        TradeOrder? company = null;
+        if (conflict.CurrentRecord is { Deleted: false } record)
+        {
+            try
+            {
+                company = JsonSerializer.Deserialize<TradeOrder>(record.PayloadJson, JsonOptions);
+            }
+            catch (JsonException)
+            {
+                company = null;
+            }
+        }
+
+        if (company == null ||
+            company.Id != order.Id ||
+            company.CompanyProfileId != order.CompanyProfileId)
+        {
+            throw new CompanyCommissionDraftRefusedException(
+                conflict.Code,
+                $"{conflict.Message} The company's copy is unavailable, so this device's copy was not converted. Keep it here or discard it.");
+        }
+
+        var revision = conflict.CurrentRecord!.RecordRevision;
+        if (company.CompanyCommission != null)
+        {
+            return new(revision, null);
+        }
+        if (!TradeCompanyCommissionMigrationService.IsDraftWorkPackage(company))
+        {
+            throw new CompanyCommissionDraftRefusedException(
+                "company_order_not_draft",
+                $"The company's copy of this order is {company.Status}, so this device's draft was not converted. Keep it here or discard it.");
+        }
+        return new(revision, company);
     }
 
     public Task<PortableCommissionLink> ResolvePortableLinkAsync(
@@ -778,3 +833,12 @@ public sealed class TradeCompanyCollaborationService(
         return order;
     }
 }
+
+/// <summary>
+/// The company revision a draft conversion starts from. When the company already held a
+/// different plain draft, <see cref="CompanyWorkPackage"/> is that authoritative copy and the
+/// conversion uses it instead of this device's copy.
+/// </summary>
+public sealed record TradeCommissionDraftConversionBase(
+    CompanyRecordRevision Revision,
+    TradeOrder? CompanyWorkPackage);

@@ -409,12 +409,26 @@ public sealed partial class ProfileHostedTradeCompanyService(
             var plan = ProfileSyncPlanPayloadCodec.Deserialize(
                 hosted.PayloadJson,
                 workPackage.CraftPlanId);
-            return plan.LinkedOrderId == workPackage.Id &&
-                   plan.SavedAt == workPackage.CraftPlanSavedAtUtc.Value
-                ? null
-                : Rejected(
+            if (plan.LinkedOrderId == workPackage.Id &&
+                plan.SavedAt == workPackage.CraftPlanSavedAtUtc.Value)
+            {
+                return null;
+            }
+            if (plan.LinkedOrderId != workPackage.Id)
+            {
+                return Rejected(
                     "canonical_plan_conflict",
                     "The company already has a different revision of this order's generated plan.");
+            }
+
+            // The same order's earlier generated plan (for example from a draft write that
+            // conflicted before the operator regenerated the plan) is replaced, not refused.
+            return await AdoptLinkedPlanDependencyAsync(
+                access,
+                hostProfileId,
+                workPackage,
+                cancellationToken,
+                expectedPlanRevision: hosted.Revision);
         }
 
         return await AdoptLinkedPlanDependencyAsync(
@@ -428,7 +442,8 @@ public sealed partial class ProfileHostedTradeCompanyService(
         TradeCompanyAccessContext access,
         string hostProfileId,
         TradeOrder sourceOrder,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long expectedPlanRevision = 0)
     {
         if (sourceOrder.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated)
         {
@@ -470,7 +485,7 @@ public sealed partial class ProfileHostedTradeCompanyService(
             ProfileSyncCollections.Plans,
             sourceOrder.CraftPlanId,
             sourcePlan.PayloadJson,
-            expectedRevision: 0,
+            expectedRevision: expectedPlanRevision,
             ct: cancellationToken);
         return adopted.Success
             ? null

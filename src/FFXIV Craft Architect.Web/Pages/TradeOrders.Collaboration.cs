@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using MudBlazor;
 
@@ -196,6 +197,7 @@ public partial class TradeOrders
         }
 
         _isPublishingCommission = true;
+        TradeOrder? publishing = null;
         try
         {
             if (HasFailedCompanyPublication)
@@ -247,6 +249,7 @@ public partial class TradeOrders
 
             var brief = BuildCanonicalCommissionBrief(owner.Order, current);
             brief.IsTestFixture = publishResult.IsTestFixture;
+            publishing = owner.Order;
             if (publishResult.Destination == TradeCommissionDestination.DiscordChannel)
             {
                 await PublishSelectedCommissionToDiscordAsync(owner.Order, brief);
@@ -255,18 +258,23 @@ public partial class TradeOrders
 
             var orderId = owner.Order.Id;
             var link = await TradeCollaboration.PublishPortableLinkAsync(owner.Order, brief);
-            await RefreshPublishedCommissionOwnerAsync(owner.Order);
-            AppState.NotifyTradeOperationsDataChanged();
-            await LoadAsync();
-            SelectOrderAfterReload(orderId, "The brief was published, but the order could not be reloaded.");
-            ActivateSharingTab();
+            var outcome = await ConfirmPublishedCommissionAsync(owner.Order);
+            await ShowPublishedCommissionAsync(orderId);
             await CopyTextToClipboardAsync(
                 link.Url,
-                "Commission published and link copied");
+                outcome.Outcome == PublishedCommissionOutcome.Published
+                    ? "Commission published and link copied"
+                    : "Commission published and link copied; status still confirming");
         }
         catch (TradeCompanyPublicationRefusedException exception)
         {
             Snackbar.Add(exception.Message, Severity.Error);
+        }
+        catch (Exception exception) when (publishing != null && exception is not OperationCanceledException)
+        {
+            // The host may have committed before this browser failed; only a commission that is
+            // still a draft on the host is reported as a failed publication.
+            await ReportPublicationExceptionAsync(publishing, exception);
         }
         catch (Exception exception)
         {
@@ -280,21 +288,93 @@ public partial class TradeOrders
         }
     }
 
-    /// <summary>
-    /// Adopts the host's committed commission after publication, so this browser never keeps
-    /// the pre-publication draft copy.
-    /// </summary>
-    private async Task RefreshPublishedCommissionOwnerAsync(TradeOrder order)
+    private enum PublishedCommissionOutcome
     {
-        try
+        Published,
+        StillDraft,
+        Unconfirmed
+    }
+
+    private static readonly TimeSpan[] PublishedCommissionConfirmDelays =
+    [
+        TimeSpan.Zero,
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(3)
+    ];
+
+    /// <summary>
+    /// Adopts the host's committed commission straight from the host after publication (no
+    /// profile sync involved), retrying briefly, so this browser never keeps showing the
+    /// pre-publication draft. Unconfirmed outcomes are logged with their last error.
+    /// </summary>
+    private async Task<(PublishedCommissionOutcome Outcome, string? Detail)> ConfirmPublishedCommissionAsync(
+        TradeOrder order)
+    {
+        string? lastError = null;
+        foreach (var delay in PublishedCommissionConfirmDelays)
         {
-            await CommissionOperations.RefreshAsync(order);
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay);
+            }
+            try
+            {
+                var projection = await CommissionOperations.RefreshOwnerAsync(order);
+                return projection.Order.CompanyCommission?.PublicMetadata.ViewState ==
+                       CompanyCommissionPublicViewState.Draft
+                    ? (PublishedCommissionOutcome.StillDraft, null)
+                    : (PublishedCommissionOutcome.Published, null);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                lastError = exception.Message;
+            }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+
+        Logger.LogWarning(
+            "The publication outcome of commission {OrderId} could not be confirmed ({Code}) after {Attempts} attempts: {Message}",
+            order.Id,
+            "publication_status_unconfirmed",
+            PublishedCommissionConfirmDelays.Length,
+            lastError);
+        return (PublishedCommissionOutcome.Unconfirmed, lastError);
+    }
+
+    private async Task ShowPublishedCommissionAsync(Guid orderId)
+    {
+        AppState.NotifyTradeOperationsDataChanged();
+        await LoadAsync();
+        SelectOrderAfterReload(orderId, "The commission was published, but the order could not be reloaded.");
+        ActivateSharingTab();
+    }
+
+    /// <summary>
+    /// A publish call failed in this browser. The host decides what happened: a published
+    /// commission is adopted and reported quietly, only a commission still in draft is a failure.
+    /// </summary>
+    private async Task ReportPublicationExceptionAsync(TradeOrder order, Exception exception)
+    {
+        var (outcome, detail) = await ConfirmPublishedCommissionAsync(order);
+        switch (outcome)
         {
-            Snackbar.Add(
-                $"The commission was published, but its committed copy could not be refreshed yet: {exception.Message}",
-                Severity.Warning);
+            case PublishedCommissionOutcome.Published:
+                Logger.LogWarning(
+                    "Commission {OrderId} was published, but this browser failed afterwards: {Message}",
+                    order.Id,
+                    exception.Message);
+                await ShowPublishedCommissionAsync(order.Id);
+                Snackbar.Add("Commission published; status still confirming.", Severity.Info);
+                break;
+            case PublishedCommissionOutcome.StillDraft:
+                Snackbar.Add(
+                    $"Commission publication failed: {exception.Message}",
+                    Severity.Error);
+                break;
+            default:
+                Snackbar.Add(
+                    $"Publication status still confirming (publication_status_unconfirmed): {exception.Message} {detail}".TrimEnd(),
+                    Severity.Info);
+                break;
         }
     }
 
@@ -345,6 +425,17 @@ public partial class TradeOrders
         var result = await TradeCollaboration.PublishToDiscordAsync(
             order,
             brief);
+        if (!result.Success &&
+            result.Publication == null &&
+            result.Disposition != TradeCompanyMutationDisposition.Conflict)
+        {
+            // The publish call failed in this browser; the host may still have committed it.
+            await ReportPublicationExceptionAsync(
+                order,
+                new InvalidOperationException(
+                    result.Message ?? "Discord publication could not be queued."));
+            return;
+        }
         if (!result.Success)
         {
             if (result.Publication != null)
@@ -366,14 +457,13 @@ public partial class TradeOrders
             return;
         }
 
-        await RefreshPublishedCommissionOwnerAsync(order);
-        await LoadAsync();
-        SelectOrderAfterReload(orderId, "The publication was accepted, but the order could not be reloaded.");
-        ActivateSharingTab();
+        var (outcome, _) = await ConfirmPublishedCommissionAsync(order);
+        await ShowPublishedCommissionAsync(orderId);
         Snackbar.Add(
-            result.Publication?.State == TradeCommissionDeliveryState.Published
+            (result.Publication?.State == TradeCommissionDeliveryState.Published
                 ? "Commission published to Discord"
-                : "Discord publication queued",
+                : "Discord publication queued") +
+            (outcome == PublishedCommissionOutcome.Published ? string.Empty : "; status still confirming"),
             Severity.Success);
     }
 

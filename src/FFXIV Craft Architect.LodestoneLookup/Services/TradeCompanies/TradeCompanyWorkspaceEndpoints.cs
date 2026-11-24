@@ -244,10 +244,15 @@ public static class TradeCompanyWorkspaceEndpoints
                         result.CompanyRevision));
                 }
 
+                // A conflicting company record is returned to the company operator, so a
+                // browser can convert an open company draft from the authoritative copy.
                 var problem = new
                 {
                     error = result.ErrorCode ?? "order_adoption_failed",
-                    message = result.ErrorMessage ?? "The synchronized draft could not be adopted."
+                    message = result.ErrorMessage ?? "The synchronized draft could not be adopted.",
+                    currentRecord = result.Status == TradeCompanyMutationStatus.Conflict
+                        ? result.CurrentRecord
+                        : null
                 };
                 return result.Status == TradeCompanyMutationStatus.Conflict
                     ? Results.Conflict(problem)

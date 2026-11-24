@@ -364,6 +364,15 @@
             return;
         }
 
+        // Never write this page's plain copy over an order that has become a commission since
+        // it was loaded; the commission keeps its own payroll link.
+        if (_linkedOrder.CompanyCommission == null &&
+            await TradeOperationsPersistence.LoadOrderAsync(_linkedOrder.Id) is { CompanyCommission: not null } canonical)
+        {
+            _linkedOrder = canonical;
+            return;
+        }
+
         var orderToSave = TradeOrderWorkflow.CopyOrder(_linkedOrder);
         orderToSave.PayrollDraftId = _workflowDraft.Id;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
