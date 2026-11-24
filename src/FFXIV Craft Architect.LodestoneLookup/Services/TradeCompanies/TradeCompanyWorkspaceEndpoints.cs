@@ -136,7 +136,7 @@ public static class TradeCompanyWorkspaceEndpoints
                     return Results.BadRequest(new { error = "invalid_company_name" });
                 }
                 if (body.MarginItems is { } items &&
-                    (items.Count > 500 || items.Any(item => item == null || item.ItemId <= 0 || item.SalePrice < 0) ||
+                    (items.Count > 500 || items.Any(item => !TradeMarginItem.IsValid(item)) ||
                      items.Select(item => item.ItemId).Distinct().Count() != items.Count))
                 {
                     return Results.BadRequest(new { error = "invalid_margin_items" });

@@ -374,7 +374,7 @@ public sealed class CompanyHubContractTests
     }
 
     [Fact]
-    public async Task MaterialSourcesSurviveSettingsSyncAndMarginItemSaves()
+    public async Task MaterialSourcesAndBatchSizesSurviveSettingsSyncAndMarginItemSaves()
     {
         await using var fixture = await HubFixture.CreateAsync();
         var owner = await fixture.CreateAccountAsync("Owner");
@@ -393,29 +393,40 @@ public sealed class CompanyHubContractTests
                 revision, company.Name, "Settings edit", null, company.PaymentPolicy,
                 MaterialSources: withSources ? sources : null, UpdateMaterialSources: withSources)));
 
+        async Task<long> SyncAsync(long revision)
+        {
+            using var synced = await client.PutAsJsonAsync(
+                $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
+                new ProfileSyncPutRequest
+                {
+                    PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
+                    ExpectedRevision = revision
+                });
+            synced.EnsureSuccessStatusCode();
+            return (await synced.Content.ReadFromJsonAsync<ProfileSyncPutResponse>())!.Object!.Revision;
+        }
+
         var revision = await PutWorkspaceAsync(1, withSources: true);
         revision = await PutWorkspaceAsync(revision, withSources: false);
-        using (var synced = await client.PutAsJsonAsync(
-                   $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
-                   new ProfileSyncPutRequest
-                   {
-                       PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
-                       ExpectedRevision = revision
-                   }))
-        {
-            synced.EnsureSuccessStatusCode();
-            revision = (await synced.Content.ReadFromJsonAsync<ProfileSyncPutResponse>())!.Object!.Revision;
-        }
+        revision = await SyncAsync(revision);
         using (var margins = await client.PutAsJsonAsync(
                    $"/trade/v1/companies/{company.Id:D}/margin-items",
-                   new CompanyMarginItemsUpdateRequest(revision, true, [new TradeMarginItem(5057, 120)])))
+                   new CompanyMarginItemsUpdateRequest(revision, true, [new TradeMarginItem(5057, 120, 25)])))
         {
             margins.EnsureSuccessStatusCode();
         }
 
+        // Batch sizes travel with the margin items and survive later Settings and sync saves.
+        revision = (await client.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(workspace))!.Revision;
+        revision = await PutWorkspaceAsync(revision, withSources: false);
+        await SyncAsync(revision);
+
         var stored = await client.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(workspace);
         Assert.Equal(sources, stored!.MaterialSources);
-        Assert.Equal([new TradeMarginItem(5057, 120)], stored.MarginItems!);
+        Assert.Equal([new TradeMarginItem(5057, 120, 25)], stored.MarginItems!);
+        // An item stored before batch sizes existed reads as a batch of one.
+        Assert.Equal(1, JsonSerializer.Deserialize<TradeMarginItem>(
+            """{"itemId":5057,"salePrice":120}""", ProfileSyncJson.CreateOptions())!.BatchSize);
     }
 
     private static async Task<long> ReadRevisionAsync(HttpResponseMessage response)

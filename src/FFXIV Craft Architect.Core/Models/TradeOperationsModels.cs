@@ -29,7 +29,18 @@ public sealed class TradeCompanyDiscordInstallationBinding
     public DateTime? HealthCheckedAtUtc { get; set; }
 }
 
-public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
+/// <summary>
+/// A Margins row. <see cref="BatchSize"/> is how many units one production run makes; an
+/// item stored without one reads as 1.
+/// </summary>
+public sealed record TradeMarginItem(int ItemId, long? SalePrice = null, int BatchSize = 1)
+{
+    public const int MaxBatchSize = 9_999;
+
+    /// <summary>Whether a stored Margins item has a usable id, sale price and batch size.</summary>
+    public static bool IsValid(TradeMarginItem? item) =>
+        item is { ItemId: > 0, SalePrice: not < 0, BatchSize: >= 1 and <= MaxBatchSize };
+}
 
 /// <summary>How the company acquires a material when Margins prices it.</summary>
 public enum TradeMaterialRoute
