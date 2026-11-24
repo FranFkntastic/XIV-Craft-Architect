@@ -224,7 +224,7 @@ public sealed class TradeMarginCalculator(
             {
                 stored[pair] = entry;
             }
-            await Task.Delay(1, ct);
+            await MainThreadYield.Async(ct);
         }
         return stored;
     }
@@ -675,7 +675,7 @@ public sealed class TradeMarginBasis
                 Items = [new MaterialAggregate { ItemId = id, Name = _tree.Data[id].Name, TotalQuantity = quantity }]
             }, ct: ct)).Single(entry => entry.ItemId == id);
             // One analysis is tens of milliseconds of listing work; let the page render between them.
-            await Task.Delay(1, ct);
+            await MainThreadYield.Async(ct);
             var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
             if (price > 0)
             {

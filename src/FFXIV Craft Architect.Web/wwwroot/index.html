@@ -205,6 +205,12 @@
     
     <!-- Plan import/export helper -->
     <script>
+        // Yields one macrotask without a timer, so it is not throttled in a background tab.
+        window.craftArchitectYield = () => new Promise(resolve => {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = () => { channel.port1.close(); resolve(); };
+            channel.port2.postMessage(0);
+        });
         window.downloadFileFromStream = async (fileName, contentStreamReference) => {
             const arrayBuffer = await contentStreamReference.arrayBuffer();
             const blob = new Blob([arrayBuffer]);
