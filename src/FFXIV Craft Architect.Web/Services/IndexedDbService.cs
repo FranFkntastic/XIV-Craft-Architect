@@ -182,6 +182,25 @@ public sealed class IndexedDbService
             "save settings",
             settings);
 
+    /// <summary>Every stored setting whose key starts with <paramref name="prefix"/>, in one read.</summary>
+    public Task<Dictionary<string, string>> LoadSettingsWithPrefixRequiredAsync(string prefix) =>
+        InvokeRequiredAsync<Dictionary<string, string>>(
+            "IndexedDB.loadSettingsWithPrefix",
+            $"load settings with prefix {prefix}",
+            prefix);
+
+    public Task<bool> SaveSettingsBatchRequiredAsync(Dictionary<string, string> settings) =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.saveSettingsBatch",
+            "save settings",
+            settings);
+
+    public Task<bool> DeleteSettingsRequiredAsync(IReadOnlyCollection<string> keys) =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.deleteSettings",
+            $"delete {keys.Count} settings",
+            keys);
+
     public Task<int> SaveSettingsWhenSettingsMatchAndRevisionNotNewerAsync(
         Dictionary<string, string> settings,
         Dictionary<string, string> expectedSettings,

@@ -11,6 +11,7 @@
 @inject ProfileSyncService Sync
 @inject IGarlandService Garland
 @inject TradeMarginCalculator Calculator
+@inject MarginFiguresStore SavedFigures
 @inject ISettingsService Settings
 @inject AppState AppState
 @inject NavigationManager Navigation
@@ -119,6 +120,11 @@
         public TradeMarginCalculator.PreparedRow? Plan { get; set; }
         /// <summary>Market data this row is priced from, by item and data center.</summary>
         public Dictionary<(int itemId, string dataCenter), CachedMarketData>? Market { get; set; }
+        /// <summary>
+        /// Cost holds the figures saved last visit: shown until real pricing lands, never priced
+        /// from, and never final.
+        /// </summary>
+        public bool Restored { get; set; }
         public string Name => Cost?.Name ?? ItemName;
     }
     // Calculator costs the whole production run; every displayed figure is per unit sold.
@@ -419,6 +425,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             _loaded = true;
             _loadedCompany = null;
             if (Company != null) { Company = null; Navigation.NavigateTo("trade/margins", replace: true); }
+            if (_rows.Any(row => row.Cost == null)) await RestoreFiguresAsync();
             await CalculateAsync(false);
             if (previous != null && (previousRate != Rate ||
                 !(previous.MaterialSources ?? []).SequenceEqual(_profile.MaterialSources ?? [])))
@@ -442,6 +449,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 Batch = batch,
                 ItemName = prior?.Name ?? _itemNames.GetValueOrDefault(item.ItemId, "Item"),
                 Cost = stale ? null : prior?.Cost,
+                Restored = !stale && prior?.Restored == true,
                 Breakdown = stale ? null : prior?.Breakdown,
                 // A plan is prepared for one batch size; market data is the same for any.
                 Plan = stale ? null : prior?.Plan,
@@ -449,8 +457,39 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             };
         }).ToList();
     }
-    private static bool NeedsPricing(MarginRow row) =>
-        row.Cost == null || row.Cost.Issue is "Pricing failed" or "Item data unavailable";
+    private static bool IsFailure(TradeMarginCost cost) => cost.Issue is "Pricing failed" or "Item data unavailable";
+    /// <summary>True until a row shows figures priced in this session.</summary>
+    private static bool Unpriced(MarginRow row) => row.Cost == null || row.Restored;
+    private static bool NeedsPricing(MarginRow row) => Unpriced(row) || IsFailure(row.Cost!);
+    private string? FiguresInputs(MarginRow row, int batchSize) =>
+        _profile?.CommissionPricingScope is { IsValid: true } scope
+            ? SavedFigures.Inputs(_profile.Id, scope, row.ItemId, batchSize, Rate, _profile.MaterialSources ?? [])
+            : null;
+    /// <summary>
+    /// Runs under _gate before any row is prepared or market data is read: shows the figures
+    /// saved last visit for every row whose inputs still match, in one read.
+    /// </summary>
+    private async Task RestoreFiguresAsync()
+    {
+        if (_profile == null || _disposed) return;
+        var company = _profile.Id;
+        var saved = await SavedFigures.LoadAsync(company, _rows.Select(row => row.ItemId).ToArray());
+        if (_disposed || _profile?.Id != company || saved.Count == 0) return;
+        var shown = 0;
+        foreach (var row in _rows)
+        {
+            if (row.Cost != null || !saved.TryGetValue(row.ItemId, out var figures) ||
+                figures.Inputs != FiguresInputs(row, row.Batch) || figures.BatchSize != row.Batch) continue;
+            row.Cost = figures.ToCost();
+            row.ItemName = row.Cost.Name;
+            row.Breakdown = null;
+            row.Restored = true;
+            shown++;
+        }
+        if (shown == 0) return;
+        StateHasChanged();
+        await MainThreadYield.Async(_lifetime.Token);
+    }
     private static TradeMarginCost Named(MarginRow row, TradeMarginCost cost) =>
         cost.Name == "Item unavailable" && row.ItemName != "Item" ? cost with { Name = row.ItemName } : cost;
     /// <summary>
@@ -470,7 +509,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             if (!NeedsPricing(row)) continue;
             try
             {
-                var plan = row.Plan != null && row.Cost == null ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
+                var plan = row.Plan != null && Unpriced(row) ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
                 row.Plan = plan;
                 row.Market = await Calculator.ReadStoredAsync(TradeMarginCalculator.Pairs(plan, scope), ct);
                 // A row with no stored data for some material waits for the update rather
@@ -520,7 +559,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 var attempted = new HashSet<(int itemId, string dataCenter)>();
                 var landed = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
                 // Rows still without a figure go first, then table order.
-                foreach (var itemId in _rows.OrderBy(row => row.Cost == null ? 0 : 1).Select(row => row.ItemId).ToArray())
+                foreach (var itemId in _rows.OrderBy(row => Unpriced(row) ? 0 : 1).Select(row => row.ItemId).ToArray())
                 {
                     ct.ThrowIfCancellationRequested();
                     var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
@@ -542,7 +581,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                         LogKeptPrices(result, stored);
                     }
                     var updated = pairs.Where(landed.ContainsKey).ToArray();
-                    if (updated.Length > 0 || (row.Cost == null && due.Length > 0))
+                    if (updated.Length > 0 || (Unpriced(row) && due.Length > 0))
                     {
                         var market = new Dictionary<(int itemId, string dataCenter), CachedMarketData>(stored);
                         foreach (var pair in updated) market[pair] = landed[pair];
@@ -613,11 +652,15 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 string.Join(", ", kept));
         }
     }
+    /// <summary>Shows a cost priced in this session and saves its figures for the next open.</summary>
     private void SetCost(MarginRow row, TradeMarginCost cost)
     {
         row.Cost = cost;
+        row.Restored = false;
         row.ItemName = cost.Name;
         if (cost.Basis == null) row.Breakdown = null;
+        if (!IsFailure(cost) && _profile != null && FiguresInputs(row, cost.BatchSize) is { } inputs)
+            SavedFigures.Save(_profile.Id, row.ItemId, inputs, cost);
         _ = DescribeSafelyAsync(row);
     }
     /// <summary>Re-describes an expanded row from its current cost; a newer cost wins.</summary>
@@ -641,6 +684,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         foreach (var row in _rows.ToArray())
         {
             if (_disposed) return;
+            // Saved figures were computed for the previous rate and sources: they no longer apply.
+            if (row.Restored) { row.Cost = null; row.Restored = false; continue; }
             if (row.Cost is not { Basis: not null } cost) continue;
             var repriced = await TradeMarginCalculator.RepriceAsync(cost, pricing, _lifetime.Token);
             if (ReferenceEquals(row.Cost, cost)) SetCost(row, repriced);
@@ -664,6 +709,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         }
         ct.ThrowIfCancellationRequested();
         row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
+        row.Restored = false;
         row.Breakdown = null;
         ReportError(error);
     }
@@ -913,9 +959,11 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     private async Task RepriceBatchAsync(MarginRow row)
     {
         if (row.Cost is not { } cost || cost.BatchSize == row.Batch) return;
-        if (cost.Basis == null)
+        // Saved figures are never repriced: the row is priced for the new batch size from scratch.
+        if (cost.Basis == null || row.Restored)
         {
             row.Cost = null;
+            row.Restored = false;
             row.Breakdown = null;
             row.Plan = null;
             await CalculateAsync(false);
@@ -944,6 +992,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             var companyId = _profile?.Id;
             var removed = new TradeMarginItem(row.ItemId, row.SavedSale, row.Batch);
             await SaveItemsAsync(items => items.Where(item => item.ItemId != row.ItemId).ToArray());
+            if (companyId is { } company) SavedFigures.Delete(company, row.ItemId);
             if (!_disposed) Snackbar.Add($"Removed {row.Name}.", Severity.Normal, options =>
             {
                 options.Action = "Undo";

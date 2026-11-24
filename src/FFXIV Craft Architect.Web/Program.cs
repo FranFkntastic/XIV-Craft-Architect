@@ -98,6 +98,7 @@ builder.Services.AddScoped(services => new CommissionBriefClient(
     services.GetRequiredService<ProfileHostClientOptions>(),
     CreateDiagnosticHttpClient(services, null, TimeSpan.FromSeconds(20))));
 builder.Services.AddScoped<CommissionBriefLocalStateService>();
+builder.Services.AddScoped<MarginFiguresStore>();
 builder.Services.AddSingleton(new ProfileHostClientOptions(
     ResolveProfileHostBaseAddress(
         builder.Configuration["ProfileHost:BaseAddress"],
