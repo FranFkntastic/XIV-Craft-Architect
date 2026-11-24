@@ -27,13 +27,27 @@ public partial class TradeOrders
             .Select(source => CreateProcurementRouteItem(
                 row,
                 source,
+                live,
                 live?.Options.FirstOrDefault(option => option.Source == source)))
             .ToArray();
     }
 
+    /// <summary>
+    /// True when a market route has no loaded shopping plan because pricing hasn't fetched it yet
+    /// (unpriced skeleton, or deliberately skipped as On Hand / company-supplied) rather than
+    /// confirmed missing or insufficient listings.
+    /// </summary>
+    private bool IsUnfetchedMarketOption(
+        WorkerAcquisitionRowProjection? liveRow,
+        WorkerAcquisitionOptionProjection? option) =>
+        IsSelectedOrderUnpricedSkeleton ||
+        (liveRow is { TotalQuantity: > 0, IsMarketUnavailable: false } &&
+         option is { IsAvailable: false, RequiredQuantity: 0 });
+
     private ListboxPickerItem CreateProcurementRouteItem(
         TradeOrderProcurementRow row,
         AcquisitionSource source,
+        WorkerAcquisitionRowProjection? liveRow,
         WorkerAcquisitionOptionProjection? option)
     {
         var value = source.ToString();
@@ -41,8 +55,9 @@ public partial class TradeOrders
         var amount = option?.TotalCost is { } total ? FormatGilShort(total) : UnavailableAmount;
         if (source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq)
         {
-            // No listings are loaded before the first pricing run; the route stays selectable.
-            if (IsSelectedOrderUnpricedSkeleton)
+            // No listings are loaded yet (skeleton or skipped On Hand/company item); stays selectable
+            // so choosing it fetches live evidence on demand.
+            if (IsUnfetchedMarketOption(liveRow, option))
             {
                 return new ListboxPickerItem(value, name, "Not priced yet", UnavailableAmount);
             }

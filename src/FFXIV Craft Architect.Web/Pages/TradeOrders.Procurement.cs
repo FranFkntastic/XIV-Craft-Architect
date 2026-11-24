@@ -1420,12 +1420,13 @@ public partial class TradeOrders
             return false;
         }
 
-        // An unpriced skeleton has no listings loaded yet, so market routes stay selectable;
-        // pricing later proves whether they fill.
+        // An unpriced skeleton or deliberately skipped On Hand/company item has no listings loaded
+        // yet; keep its market routes selectable so switching back fetches live evidence on demand.
         var isUnpricedSkeleton = IsSelectedOrderUnpricedSkeleton;
         var liveOption = liveRow.Options.FirstOrDefault(option => option.Source == source);
+        var allowUnfetchedMarketRoute = IsUnfetchedMarketOption(liveRow, liveOption);
         if (!liveRow.AvailableSources.Contains(source) ||
-            (!isUnpricedSkeleton &&
+            (!allowUnfetchedMarketRoute &&
              source != liveRow.Source &&
              source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq &&
              liveOption is { IsAvailable: false }))
