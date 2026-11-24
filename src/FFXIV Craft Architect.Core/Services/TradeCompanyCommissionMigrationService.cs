@@ -89,6 +89,147 @@ public static class TradeCompanyCommissionMigrationService
         };
     }
 
+    /// <summary>
+    /// Builds the canonical unpublished company commission for a plain Trade work package.
+    /// Every input is taken from the work package and brief (including the creation time), so the
+    /// browser and the host build byte-identical drafts and a repeated conversion replays instead
+    /// of writing twice. Terms use the stored evidence exactly as the draft-update command stores
+    /// it; nothing is repriced.
+    /// </summary>
+    public static TradeOrder CreateCanonicalDraft(
+        TradeOrder workPackage,
+        CommissionBriefDocument brief)
+    {
+        ArgumentNullException.ThrowIfNull(workPackage);
+        ArgumentNullException.ThrowIfNull(brief);
+        if (workPackage.CompanyCommission != null)
+        {
+            throw new InvalidOperationException(
+                "The Trade order is already a company commission.");
+        }
+        if (workPackage.Id == Guid.Empty || workPackage.CompanyProfileId == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "A company and order identity are required for a commission draft.");
+        }
+        if (!IsDraftWorkPackage(workPackage))
+        {
+            throw new InvalidOperationException(
+                "Only an unassigned, unpublished, open Trade order can become a commission draft.");
+        }
+
+        var companyId = new CompanyId(workPackage.CompanyProfileId);
+        var createdAtUtc = workPackage.CreatedAtUtc;
+        var actor = new CompanyCommissionActor(
+            "trade-architect",
+            CompanyCommissionActorKind.Commissioner,
+            "Trade Architect");
+        var copy = TradeOrderWorkflow.CopyOrder(workPackage);
+        var terms = CreateTerms(copy, brief, actor, createdAtUtc, companyPaymentPolicy: null) with
+        {
+            ChangeSummary = "Created as a company commission draft."
+        };
+        var draftWorkPackage = new CompanyCommissionDraftWorkPackage(
+            (copy.SourceSnapshot?.RootItems ?? [])
+                .Select(item => new TradeRequestedOrderOutput(
+                    item.ItemId,
+                    item.Name,
+                    item.Quantity,
+                    item.MustBeHq,
+                    item.EstimatedSaleValue))
+                .ToArray(),
+            copy.SourceSnapshot ?? new TradeOrderSourceSnapshot(),
+            copy.CraftPlanId,
+            copy.CraftPlanName,
+            copy.CraftPlanSavedAtUtc,
+            copy.CraftPlanLinkKind);
+        Require(
+            draftWorkPackage.RequestedOutputs.Count > 0,
+            "A commission draft requires at least one requested output.");
+        CompanyCommissionCommandWorkflow.ValidateTerms(
+            terms,
+            companyId,
+            draftWorkPackage,
+            allowUnavailableMaterialQuote: true);
+        CompanyCommissionCommandWorkflow.RequireDraftWorkPackageMatchesTerms(
+            draftWorkPackage,
+            terms);
+        copy.SourceSnapshot = TradeOrderWorkflow.CopySourceSnapshot(draftWorkPackage.SourceSnapshot);
+        CompanyCommissionCommandWorkflow.ApplyCanonicalPricingEvidence(
+            copy.SourceSnapshot,
+            terms.PricingEvidence);
+
+        copy.CompanyCommission = new TradeCompanyCommission
+        {
+            CommissionId = copy.Id,
+            CompanyId = companyId,
+            CommissionerActorId = "company-owner",
+            Reference = string.IsNullOrWhiteSpace(brief.Reference) ? copy.Title : brief.Reference,
+            CreatedAtUtc = createdAtUtc,
+            UpdatedAtUtc = createdAtUtc,
+            CurrentTermsVersion = terms.Version,
+            TermsVersions = [terms],
+            PublicMetadata = new CompanyCommissionPublicMetadata
+            {
+                PublicBriefId = CreateDraftPublicId(copy.Id),
+                ViewState = CompanyCommissionPublicViewState.Draft
+            },
+            ActiveClaimCapabilityRevision = 0,
+            Gates = new CompanyCommissionGateState(
+                new CompanyCommissionIdentityClearance(CompanyCommissionClearanceState.Pending),
+                CompanyCommissionCommandWorkflow.CreatePaymentGate(terms),
+                CompanyCommissionCommandWorkflow.CreateMaterialGate(terms)),
+            OutputProgress = terms.Outputs.Select(output =>
+                new CompanyCommissionOutputProgress(
+                    output.LineId,
+                    output.ItemId,
+                    output.RequiredQuantity,
+                    0,
+                    0,
+                    0,
+                    createdAtUtc,
+                    actor)).ToArray(),
+            DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
+            SettlementState = CompanyCommissionSettlementState.NotDue,
+            Activity =
+            [
+                new CompanyCommissionActivityEvent
+                {
+                    EventId = CreateDeterministicGuid(copy.Id, "commission-draft-created"),
+                    CommissionId = copy.Id,
+                    CommissionRevision = 1,
+                    Actor = actor,
+                    SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                    CreatedAtUtc = createdAtUtc,
+                    Kind = CompanyCommissionActivityKind.DraftCreated,
+                    Visibility = CompanyCommissionActivityVisibility.CompanyOnly,
+                    TermsVersion = terms.Version,
+                    Comment = "Created the commission draft."
+                }
+            ]
+        };
+        return copy;
+    }
+
+    /// <summary>
+    /// A plain Trade order that is still only a draft work package: open, unassigned,
+    /// unpublished and not archived. Plain orders already in legacy assignment or work are not
+    /// converted to drafts.
+    /// </summary>
+    public static bool IsDraftWorkPackage(TradeOrder order) =>
+        order.CompanyCommission == null &&
+        order.CommissionPublication == null &&
+        order.AssignedCrafterId == null &&
+        order.Status == TradeOrderStatus.ReadyToAssign;
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
+        }
+    }
+
     public static CompanyCommissionTermsVersion CreateTermsRevision(
         TradeOrder source,
         CommissionBriefDocument brief,
@@ -142,20 +283,10 @@ public static class TradeCompanyCommissionMigrationService
         ArgumentNullException.ThrowIfNull(publishedBrief);
         if (source.CompanyCommission == null)
         {
-            var converted = ConvertLegacyOrder(
-                source,
-                publishedBrief,
-                publishedBrief.Ownership?.CompanyId ??
-                    throw new InvalidOperationException(
-                        "A company-owned immutable brief is required."),
-                initialCommissionRevision: 0,
-                boundAtUtc,
-                companyPaymentPolicy: null);
-            CompanyCommissionCommandWorkflow.ValidateTerms(
-                converted.CompanyCommission!.CurrentTerms,
-                converted.CompanyCommission.CompanyId,
-                workPackage: null);
-            return converted;
+            // Trade orders are canonical commission drafts from creation; publication never
+            // converts a plain order on the side.
+            throw new InvalidOperationException(
+                "Only a canonical commission draft can be published. Wait for the order to become a company commission draft, then publish again.");
         }
 
         var canonicalCompanyId = publishedBrief.Ownership?.CompanyId ??
@@ -711,7 +842,9 @@ public static class TradeCompanyCommissionMigrationService
         var exact =
             string.Equals(brief.Title, order.Title, StringComparison.Ordinal) &&
             string.Equals(brief.Reference, commission.Reference, StringComparison.Ordinal) &&
-            brief.IsTestFixture == commission.PublicMetadata.IsTestFixture &&
+            // A draft takes its test-fixture flag from the publication that opens it.
+            (brief.IsTestFixture == commission.PublicMetadata.IsTestFixture ||
+             commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft) &&
             outputs.SequenceEqual(canonicalOutputs) &&
             crafterMaterials.SequenceEqual(canonicalCrafterMaterials) &&
             companyMaterials.SequenceEqual(canonicalCompanyMaterials) &&

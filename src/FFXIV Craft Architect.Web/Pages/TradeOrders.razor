@@ -25,6 +25,7 @@
 @inject WebSettingsService WebSettings
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionOperationsService CommissionOperations
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionDraftPromotionService DraftPromotions
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeOrderLifecycleService OrderLifecycle
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService TradeAccess
 @inject CommissionBriefClient CommissionBriefs
@@ -278,11 +279,11 @@
                                                         @key="order.Id"
                                                         class="@GetRailOrderClass(order) is-device-only"
                                                         aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
-                                                        title="Saved on this device; select to retry sync or discard the draft"
+                                                        title="@(TradeCompanyCommissionMigrationService.IsDraftWorkPackage(order) ? GetDraftPromotionTitle(order) : "Saved on this device; select to retry sync or discard the draft")"
                                                         @onclick="() => SelectOrder(order)">
                                                     <span class="trade-orders-rail-title">@order.Title</span>
                                                     <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
-                                                    <span class="trade-orders-status-chip">Saved here</span>
+                                                    <span class="trade-orders-status-chip">@(TradeCompanyCommissionMigrationService.IsDraftWorkPackage(order) ? GetDraftPromotionChip(order) : "Saved here")</span>
                                                 </button>
                                             }
                                             else
@@ -1394,7 +1395,34 @@
                                      </div>
                                  </MudAlert>
                              }
-                             @if (IsSelectedDeviceOnlyOrder)
+                             @if (IsSelectedDraftPromotionCandidate)
+                             {
+                                 var promotionState = SelectedDraftPromotionState;
+                                 var promotionRefused = promotionState?.Phase == TradeCommissionDraftPromotionPhase.Refused;
+                                 var promoting = promotionState?.Phase == TradeCommissionDraftPromotionPhase.Promoting;
+                                 <MudAlert Severity="@(promotionRefused ? Severity.Warning : Severity.Info)" Dense="true" Class="mb-3">
+                                     <div class="trade-orders-device-only-draft-state" data-promotion-code="@promotionState?.Code">
+                                         <div>
+                                             <strong>@(promotionRefused ? "Commission draft refused" : IsSelectedDeviceOnlyOrder ? "Saved on this device" : "Becoming a commission draft")</strong>
+                                             <span>@(promotionState?.Describe() ?? "Becomes a commission draft when the company host is ready.")</span>
+                                         </div>
+                                         <div class="trade-orders-inline-actions">
+                                             <MudButton Variant="Variant.Filled"
+                                                        Color="Color.Primary"
+                                                        Size="Size.Small"
+                                                        Disabled="@(promoting || HasSelectedLocalDraftEditorChanges)"
+                                                        OnClick="PromoteSelectedDraftAsync">
+                                                 @(promoting
+                                                     ? "Creating..."
+                                                     : HasSelectedLocalDraftEditorChanges
+                                                         ? "Save edits first"
+                                                         : "Create commission draft")
+                                             </MudButton>
+                                         </div>
+                                     </div>
+                                 </MudAlert>
+                             }
+                             else if (IsSelectedDeviceOnlyOrder)
                              {
                                  <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
                                      <div class="trade-orders-device-only-draft-state">
@@ -2308,14 +2336,14 @@
                                                      <MudButton Variant="Variant.Filled"
                                                                 Color="Color.Primary"
                                                                 StartIcon="@Icons.Material.Filled.Send"
-                                                                Disabled="@(!CanPublishCanonicalCommissionToDiscord)"
-                                                                OnClick="PublishCanonicalCommissionToDiscordAsync">
-                                                         @(_isPublishingCommission ? "Publishing..." : "Publish to Company Channel")
+                                                                Disabled="@(!CanPublishCanonicalCommission)"
+                                                                OnClick="PublishCanonicalCommissionAsync">
+                                                         @(_isPublishingCommission ? "Publishing..." : "Publish")
                                                      </MudButton>
-                                                     @if (!string.IsNullOrWhiteSpace(CanonicalDiscordPublishUnavailableReason))
+                                                     @if (!string.IsNullOrWhiteSpace(CanonicalPublishUnavailableReason))
                                                      {
                                                          <span class="trade-orders-collaboration-action-note">
-                                                             @CanonicalDiscordPublishUnavailableReason
+                                                             @CanonicalPublishUnavailableReason
                                                          </span>
                                                      }
                                                  }
@@ -2513,73 +2541,13 @@
                                     </div>
                                 }
                                 else if (SelectedCommissionOwner == null &&
-                                         !HasActiveCompanyPublication)
+                                         !HasActiveCompanyPublication &&
+                                         IsSelectedDraftPromotionCandidate)
                                 {
-                                    <section class="trade-orders-collaboration-state">
-                                        <div class="trade-orders-section-heading">
-                                            <div>
-                                                <MudText Typo="Typo.subtitle2">
-                                                    @(HasFailedCompanyPublication
-                                                        ? "Trade channel delivery needs attention"
-                                                        : "Private order")
-                                                </MudText>
-                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    @(HasFailedCompanyPublication
-                                                        ? "The crafter brief is fixed, but the configured channel did not accept it. Retry the same delivery without creating another commission."
-                                                        : "Publish a crafter-facing brief without sharing this workspace, internal notes, or the mutable Craft Architect plan.")
-                                                </MudText>
-                                            </div>
-                                            <span class="trade-orders-publication-chip">
-                                                @(HasFailedCompanyPublication ? "Not delivered" : "Not published")
-                                            </span>
-                                        </div>
-                                    </section>
-                                    <div class="trade-orders-visibility">
-                                        <div><strong>Requested delivery</strong><span>Item, quantity, and quality</span><b>Included</b></div>
-                                        <div><strong>Payment terms</strong><span>@FormatGil(paymentSummary.TotalPayment)</span><b>Included</b></div>
-                                        <div><strong>Material responsibility</strong><span>Crafter and company responsibility groups</span><b>Included</b></div>
-                                        <div><strong>Evidence identity</strong><span>Scope, basis, and captured time</span><b>Included</b></div>
-                                        <div class="is-private"><strong>Internal notes</strong><span>Operator-only planning notes</span><b>Private</b></div>
-                                        <div class="is-private"><strong>Full craft plan</strong><span>Never required for the crafter</span><b>Private</b></div>
-                                    </div>
-                                    @if (!HasFailedCompanyPublication)
-                                    {
-                                        <div class="trade-orders-collaboration-fields">
-                                            <MudTextField @bind-Value="_commissionContact"
-                                                          id="commission-contact"
-                                                          Label="Commission contact"
-                                                          HelperText="Discord username or reply method shown to the crafter; defaults from company settings"
-                                                          Variant="Variant.Outlined"
-                                                          Margin="Margin.Dense"
-                                                          Immediate="true"
-                                                          MaxLength="240" />
-                                            <MudTextField @bind-Value="_commissionDeliveryInstructions"
-                                                          id="commission-delivery-instructions"
-                                                          Label="Crafter-facing delivery note"
-                                                          HelperText="Internal order notes remain private"
-                                                          Variant="Variant.Outlined"
-                                                          Margin="Margin.Dense"
-                                                          Immediate="true"
-                                                          Lines="2"
-                                                          MaxLength="1000" />
-                                        </div>
-                                    }
-                                    @if (!_isPublishingCommission &&
-                                         PublishCommissionUnavailableReason is { } unavailableReason)
-                                    {
-                                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
-                                            @unavailableReason
-                                        </MudAlert>
-                                    }
-                                    <MudButton Variant="Variant.Filled"
-                                               Color="Color.Primary"
-                                               FullWidth="true"
-                                               Class="mt-3"
-                                               StartIcon="@Icons.Material.Filled.Share"
-                                               Disabled="@(!CanPublishCommission)"
-                                               OnClick="PublishSelectedCommissionAsync">
-                                        @(_isPublishingCommission ? "Publishing..." : PublishCommissionButtonLabel)
-                                    </MudButton>
+                                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                                        @(SelectedDraftPromotionState?.Describe() ??
+                                          "Publishing opens once this order is a company commission draft.")
+                                    </MudAlert>
                                 }
                             </MudTabPanel>
                         </MudTabs>

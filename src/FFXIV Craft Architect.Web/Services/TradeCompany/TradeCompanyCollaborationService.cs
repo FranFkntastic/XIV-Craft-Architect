@@ -371,6 +371,44 @@ public sealed class TradeCompanyCollaborationService(
         return published.Link;
     }
 
+    /// <summary>
+    /// The company record revision a plain work package becomes a commission draft from: none
+    /// for an order this browser never synchronized, otherwise the company record the host
+    /// adopted from this profile. The order's exact generated plan is synchronized first so the
+    /// host can adopt it with the draft. A pending creation is never uploaded as a plain order.
+    /// </summary>
+    public async Task<CompanyRecordRevision> ResolveDraftConversionBaseAsync(
+        TradeOrder order,
+        CancellationToken cancellationToken = default)
+    {
+        var authority = await CaptureOrderAuthorityAsync();
+        var profileId = authority.Connection.ProfileScopeId
+            ?? throw new InvalidOperationException(
+                "Draft conversion requires a captured profile authority.");
+        var synchronized = hostedOrders.Get(order.Id) != null ||
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")) > 0;
+        if (!synchronized)
+        {
+            await EnsureLinkedPlanIsHostedAsync(order, authority, cancellationToken);
+            return CompanyRecordRevision.None;
+        }
+
+        var revision = await ResolveCanonicalOrderRevisionAsync(
+            order,
+            authority,
+            cancellationToken);
+        if (revision <= 0)
+        {
+            throw new CompanyCommissionDraftRefusedException(
+                "hosted_order_conflict",
+                "The hosted order differs from this browser and needs conflict review before it can become a commission draft.");
+        }
+        return new CompanyRecordRevision(revision);
+    }
+
     public Task<PortableCommissionLink> ResolvePortableLinkAsync(
         string publicId,
         CancellationToken cancellationToken = default) =>

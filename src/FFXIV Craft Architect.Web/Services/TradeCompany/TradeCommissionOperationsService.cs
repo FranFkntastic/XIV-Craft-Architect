@@ -451,6 +451,77 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
+    /// <summary>
+    /// Commits the canonical draft for a plain work package and adopts the host's committed order.
+    /// When another browser or tab converted the order first (already_canonical, or a revision
+    /// conflict against an order that is now canonical), the host's commission is adopted instead
+    /// and nothing is written. Other refusals throw <see cref="CompanyCommissionDraftRefusedException"/>.
+    /// </summary>
+    public async Task<TradeCommissionDraftCreation> CreateDraftAsync(
+        TradeOrder workPackage,
+        CommissionBriefDocument brief,
+        CompanyRecordRevision expectedObjectRevision,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workPackage);
+        ArgumentNullException.ThrowIfNull(brief);
+        var authority = await CaptureOrderAuthorityAsync();
+        TradeCommissionOwnerMutationResponse response;
+        try
+        {
+            response = await client.CreateDraftAsync(
+                new CreateCompanyCommissionDraftRequest(expectedObjectRevision, workPackage, brief),
+                authority.Connection,
+                cancellationToken);
+        }
+        catch (CompanyCommissionDraftRefusedException refused)
+            when (refused.Code is "already_canonical" or "revision_conflict")
+        {
+            var hosted = await TryAdoptHostedCommissionAsync(
+                authority,
+                workPackage,
+                cancellationToken);
+            if (hosted == null)
+            {
+                throw;
+            }
+            return new TradeCommissionDraftCreation(hosted, AdoptedFrom: refused.Code);
+        }
+
+        await RequireCurrentAuthorityAsync(authority, "commission draft creation");
+        var projection = response.Projection ?? throw new InvalidOperationException(
+            "The commission draft endpoint returned no committed owner projection.");
+        ValidateProjection(workPackage.Id, projection);
+        await ApplyProjectionAsync(authority, projection);
+        return new TradeCommissionDraftCreation(projection, AdoptedFrom: null);
+    }
+
+    private async Task<CompanyCommissionOwnerProjection?> TryAdoptHostedCommissionAsync(
+        OrderCommandAuthority authority,
+        TradeOrder workPackage,
+        CancellationToken cancellationToken)
+    {
+        CompanyCommissionOwnerProjection projection;
+        try
+        {
+            projection = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
+                workPackage.CompanyProfileId,
+                workPackage.Id,
+                cancellationToken);
+            ValidateProjection(workPackage.Id, projection);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // The hosted order is still plain (or unreadable): keep the original refusal.
+            return null;
+        }
+
+        await RequireCurrentAuthorityAsync(authority, "hosted commission adoption");
+        await ApplyProjectionAsync(authority, projection);
+        return projection;
+    }
+
     private static CompanyCommissionDraftWorkPackage CreateDraftWorkPackage(
         TradeOrder workPackage) =>
         new(
@@ -1652,6 +1723,10 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 }
+
+public sealed record TradeCommissionDraftCreation(
+    CompanyCommissionOwnerProjection Projection,
+    string? AdoptedFrom);
 
 public sealed record TradeCommissionOperatorResult(
     bool Success,

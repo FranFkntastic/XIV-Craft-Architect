@@ -217,7 +217,7 @@ public partial class TradeOrders
 
         return order.Status switch
         {
-            TradeOrderStatus.ReadyToAssign => "New",
+            TradeOrderStatus.ReadyToAssign => "Draft",
             TradeOrderStatus.Assigned => "Pay",
             TradeOrderStatus.InProgress => "Work",
             TradeOrderStatus.AwaitingDelivery => "Deliver",

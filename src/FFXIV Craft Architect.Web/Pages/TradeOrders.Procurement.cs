@@ -320,6 +320,7 @@ public partial class TradeOrders
         _ = InvokeAsync(async () =>
         {
             ScheduleSelectedOrderPlanRestoration();
+            OnProfileSyncReadinessChangedForDraftPromotion();
             if (_pendingNotificationNavigation?.ActivityId != null &&
                 OrderRestoreState.ShowsCompleteProjection)
             {

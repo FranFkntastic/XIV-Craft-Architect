@@ -168,6 +168,10 @@ public partial class TradeOrders
         {
             return "Canceled";
         }
+        if (commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft)
+        {
+            return "Draft";
+        }
         if (order.Status == TradeOrderStatus.ResolutionRequired || commission.ManualResolution != null)
         {
             return "Resolution required";

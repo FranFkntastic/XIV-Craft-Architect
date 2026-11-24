@@ -160,52 +160,6 @@ public sealed class TradeOrderDraftFactory
     }
 
     /// <summary>
-    /// A fresh draft order from a company commission template. The template's supply choices
-    /// come back alongside so the caller can seed responsibilities and initialize the plan.
-    /// </summary>
-    public TradeOrderSeededDraftResult CreateFromTemplate(TradeCommissionTemplateOrderCreateRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(request.Template);
-
-        var template = TradeCommissionTemplateValidator.Normalize(request.Template);
-        var rootItems = template.Outputs
-            .Where(output => output.Quantity > 0)
-            .Select(output => new TradeOrderRootItemSnapshot(
-                output.ItemId,
-                output.Name,
-                output.Quantity,
-                output.MustBeHq,
-                0m))
-            .ToArray();
-        if (rootItems.Length == 0)
-        {
-            return TradeOrderSeededDraftResult.Unavailable(
-                $"Template \"{template.Name}\" has no outputs to commission.");
-        }
-
-        var title = FirstNonBlank(request.Title, template.DefaultOrderTitle) ??
-            CreateSuggestedTitle(rootItems);
-        var order = CreateSeededOrder(
-            request.CompanyProfileId,
-            request.AssignedCrafterId,
-            title,
-            template.Notes,
-            template.PaymentSchedule,
-            template.CustomPaymentTerms,
-            paymentPolicyOverride: null,
-            rootItems,
-            request.PricingScope,
-            world: null,
-            $"Created from template \"{template.Name}\".",
-            request.CreatedAtUtc);
-        return TradeOrderSeededDraftResult.Available(
-            order,
-            template.SupplyChoices,
-            TradeCommissionTemplateMapper.ToResponsibilityLines(template.SupplyChoices));
-    }
-
-    /// <summary>
     /// A fresh, unpublished, unassigned draft with the same request as an existing order:
     /// outputs and payment schedule (from canonical terms when a commission exists), notes,
     /// and supply choices. Claims, publication, commission, history, plan and pricing are not
@@ -531,14 +485,6 @@ public sealed record SeedPricingScope(
                 scope.Region,
                 [scope.Region]));
 }
-
-public sealed record TradeCommissionTemplateOrderCreateRequest(
-    TradeCommissionTemplate Template,
-    Guid CompanyProfileId,
-    DateTime CreatedAtUtc,
-    Guid? AssignedCrafterId = null,
-    string? Title = null,
-    SeedPricingScope? PricingScope = null);
 
 public sealed record TradeOrderDuplicateRequest(
     TradeOrder Source,

@@ -382,6 +382,48 @@ public sealed partial class ProfileHostedTradeCompanyService(
             cancellationToken);
     }
 
+    /// <summary>
+    /// Makes sure a draft's exact generated plan revision is in the company profile, adopting it
+    /// from the operator's synchronized profile when it is not there yet. Returns null when the
+    /// plan is present, or the refusal that names why it is not.
+    /// </summary>
+    public async Task<TradeCompanyMutationResult?> EnsureLinkedPlanDependencyAsync(
+        TradeCompanyAccessContext access,
+        TradeOrder workPackage,
+        CancellationToken cancellationToken = default)
+    {
+        if (workPackage.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated)
+        {
+            return null;
+        }
+
+        var hostProfileId = RequireHostProfile(access);
+        if (!string.IsNullOrWhiteSpace(workPackage.CraftPlanId) &&
+            workPackage.CraftPlanSavedAtUtc.HasValue &&
+            await profiles.LoadObjectAsync(
+                hostProfileId,
+                ProfileSyncCollections.Plans,
+                workPackage.CraftPlanId,
+                cancellationToken) is { Deleted: false } hosted)
+        {
+            var plan = ProfileSyncPlanPayloadCodec.Deserialize(
+                hosted.PayloadJson,
+                workPackage.CraftPlanId);
+            return plan.LinkedOrderId == workPackage.Id &&
+                   plan.SavedAt == workPackage.CraftPlanSavedAtUtc.Value
+                ? null
+                : Rejected(
+                    "canonical_plan_conflict",
+                    "The company already has a different revision of this order's generated plan.");
+        }
+
+        return await AdoptLinkedPlanDependencyAsync(
+            access,
+            hostProfileId,
+            workPackage,
+            cancellationToken);
+    }
+
     private async Task<TradeCompanyMutationResult?> AdoptLinkedPlanDependencyAsync(
         TradeCompanyAccessContext access,
         string hostProfileId,

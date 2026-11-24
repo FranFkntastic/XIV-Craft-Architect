@@ -105,7 +105,8 @@ public enum CompanyCommissionActivityKind
     CommissionReopened,
 
     // Stored and sent by number: new kinds go at the end, never in the middle.
-    DeliveryHandoffRecorded
+    DeliveryHandoffRecorded,
+    DraftCreated
 }
 
 public enum CompanyCommissionActivityVisibility
