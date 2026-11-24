@@ -1694,6 +1694,8 @@
         // company save never rewrites them from this dialog's snapshot.
         profile.CommissionTemplates = latest.CommissionTemplates;
         profile.DefaultCompanySuppliedItems = latest.DefaultCompanySuppliedItems;
+        // Material sources are written only from Margins.
+        profile.MaterialSources = latest.MaterialSources;
         if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
         {
             return false;

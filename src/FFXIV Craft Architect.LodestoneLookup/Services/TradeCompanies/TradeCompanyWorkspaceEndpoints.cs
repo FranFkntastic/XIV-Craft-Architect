@@ -19,7 +19,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
     bool FreelancerOpenCommissions = true,
     IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
-    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null);
+    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null,
+    IReadOnlyList<TradeMaterialSource>? MaterialSources = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -36,7 +37,9 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
     bool UpdateCommissionTemplates = false,
     IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null,
-    bool UpdateDefaultCompanySuppliedItems = false);
+    bool UpdateDefaultCompanySuppliedItems = false,
+    IReadOnlyList<TradeMaterialSource>? MaterialSources = null,
+    bool UpdateMaterialSources = false);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -98,7 +101,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Profile.MarginItems,
                         snapshot.Profile.FreelancerOpenCommissions,
                         snapshot.Profile.CommissionTemplates,
-                        snapshot.Profile.DefaultCompanySuppliedItems));
+                        snapshot.Profile.DefaultCompanySuppliedItems,
+                        snapshot.Profile.MaterialSources));
             });
 
         companies.MapPut(
@@ -153,6 +157,16 @@ public static class TradeCompanyWorkspaceEndpoints
                     });
                 }
 
+                if ((body.UpdateMaterialSources || body.MaterialSources != null) &&
+                    !TradeMaterialSourceValidator.IsValid(body.MaterialSources, out var materialSourcesError))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = TradeMaterialSourceValidator.ErrorCode,
+                        message = materialSourcesError
+                    });
+                }
+
                 var result = await companies.UpdateCompanyProfileAsync(
                     access,
                     new CompanyRecordRevision(body.ExpectedRevision),
@@ -170,7 +184,9 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.CommissionTemplates,
                     body.UpdateCommissionTemplates,
                     body.DefaultCompanySuppliedItems,
-                    body.UpdateDefaultCompanySuppliedItems);
+                    body.UpdateDefaultCompanySuppliedItems,
+                    body.MaterialSources,
+                    body.UpdateMaterialSources);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

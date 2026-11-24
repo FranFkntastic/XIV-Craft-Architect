@@ -43,6 +43,7 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.MarginItems = (sourceProfile.MarginItems ?? []).ToArray();
         importedProfile.CommissionTemplates = (sourceProfile.CommissionTemplates ?? []).ToArray();
         importedProfile.DefaultCompanySuppliedItems = (sourceProfile.DefaultCompanySuppliedItems ?? []).ToArray();
+        importedProfile.MaterialSources = (sourceProfile.MaterialSources ?? []).ToArray();
         importedProfile.FreelancerOpenCommissions = sourceProfile.FreelancerOpenCommissions;
 
         var importedCrafters = package.Crafters
@@ -96,6 +97,7 @@ public sealed class TradeCompanyProfilePackageService
             MarginItems = (profile.MarginItems ?? []).ToArray(),
             CommissionTemplates = (profile.CommissionTemplates ?? []).ToArray(),
             DefaultCompanySuppliedItems = (profile.DefaultCompanySuppliedItems ?? []).ToArray(),
+            MaterialSources = (profile.MaterialSources ?? []).ToArray(),
             FreelancerOpenCommissions = profile.FreelancerOpenCommissions,
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc
