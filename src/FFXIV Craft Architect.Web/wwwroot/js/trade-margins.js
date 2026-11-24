@@ -7,7 +7,7 @@ export function attach(wrap) {
     };
     const input = event => {
         const classes = event.target.classList;
-        if (!classes || !(classes.contains('sale-input') || classes.contains('set-price-input'))) return;
+        if (!classes || !(classes.contains('sale-input') || classes.contains('set-price-input') || classes.contains('batch-input'))) return;
         let value = event.target.value.replace(/[^0-9]/g, '');
         while (value.length && (value.length > 19 || BigInt(value) > 9223372036854775807n)) value = value.slice(0, -1);
         event.target.value = value;

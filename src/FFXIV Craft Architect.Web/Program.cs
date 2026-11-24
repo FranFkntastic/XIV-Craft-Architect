@@ -8,6 +8,7 @@ using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
+using Microsoft.JSInterop;
 using MudBlazor.Services;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
@@ -31,7 +32,6 @@ builder.Services.AddScoped<UniversalisService>();
 builder.Services.AddScoped<IUniversalisService>(sp => sp.GetRequiredService<UniversalisService>());
 builder.Services.AddScoped<RecipeCalculationService>();
 builder.Services.AddScoped<TradeMarginCalculator>();
-builder.Services.AddScoped<TradeMarginQuickPass>();
 builder.Services.AddScoped<IRecipePlanBuilder, RecipeCalculationPlanBuilder>();
 builder.Services.AddScoped<IVendorCacheService, VendorCacheService>();
 builder.Services.AddScoped<ITeamcraftRecipeService, TeamcraftRecipeService>();
@@ -135,6 +135,9 @@ builder.Services.AddScoped<IndexedDbService>();
 
 var host = builder.Build();
 BrowserConsoleErrorWriter.Install(host.Services);
+// A message-channel turn lets the page render without the timer throttling of a background tab.
+var yieldRuntime = host.Services.GetRequiredService<IJSRuntime>();
+MainThreadYield.Yielder = async ct => await yieldRuntime.InvokeVoidAsync("craftArchitectYield", ct);
 await host.RunAsync();
 
 static Uri ResolveLodestoneLookupBaseAddress(string? configuredBaseAddress, string hostBaseAddress)

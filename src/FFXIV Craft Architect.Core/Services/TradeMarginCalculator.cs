@@ -4,8 +4,10 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 namespace FFXIV_Craft_Architect.Core.Services;
 
 /// <summary>
-/// Margin figures for one full root batch. Equality compares the figures only; the
-/// <see cref="Basis"/> evidence snapshot used to reprice the row is not part of a cost's value.
+/// Margin figures for one production run of <see cref="BatchSize"/>, which makes
+/// <see cref="Units"/> units (whole crafts of the sold item). Equality compares the figures
+/// only; the <see cref="Basis"/> evidence snapshot used to reprice the row is not part of a
+/// cost's value.
 /// </summary>
 public sealed record TradeMarginCost(
     string Name, int IconId, decimal? Materials, int? Synths,
@@ -14,6 +16,9 @@ public sealed record TradeMarginCost(
 {
     /// <summary>Evidence this cost was priced from; reprices the row without fetching.</summary>
     public TradeMarginBasis? Basis { get; init; }
+
+    /// <summary>The batch size these figures were priced for.</summary>
+    public int BatchSize { get; init; } = 1;
 
     public bool Equals(TradeMarginCost? other) =>
         other is not null && Name == other.Name && IconId == other.IconId && Materials == other.Materials &&
@@ -49,8 +54,8 @@ public sealed record TradeMarginRouteOption(
 }
 
 /// <summary>
-/// One distinct item of a Margins row with demand above zero. Quantity and Cost are for one
-/// full root batch; Cost is labor for a crafted line and the purchase for a bought line.
+/// One distinct item of a Margins row with demand above zero. Quantity and Cost are for the
+/// whole production run; Cost is labor for a crafted line and the purchase for a bought line.
 /// </summary>
 public sealed record TradeMarginLine(
     int ItemId, string Name, int IconId, bool IsSoldItem, bool IsCraftable, int Quantity,
@@ -84,14 +89,12 @@ public sealed class TradeMarginCalculator(
         }
     }
 
-    public async Task<TradeMarginCost> CalculateAsync(
-        int itemId, TradeCompanyPricingScope? scope, bool refresh = false, CancellationToken ct = default,
-        TradeMarginPricing? pricing = null) =>
-        await CalculateFullAsync(await PrepareAsync(itemId, scope, ct), scope, refresh, ct, pricing);
-
+    /// <param name="batchSize">Units one production run makes; quantities and listings are evaluated for the whole run.</param>
     public async Task<PreparedRow> PrepareAsync(
-        int itemId, TradeCompanyPricingScope? scope, CancellationToken ct = default)
+        int itemId, TradeCompanyPricingScope? scope, CancellationToken ct = default, int batchSize = 1)
     {
+        var batch = MarginTree.ClampBatch(batchSize);
+        PreparedRow Issue(TradeMarginCost issue) => new(issue with { BatchSize = batch });
         // Invocation-local recipe and demand state never clears the planner's mutable cache.
         var data = new Dictionary<int, GarlandItem>();
         var edges = new Dictionary<int, MarginRecipe>();
@@ -100,12 +103,12 @@ public sealed class TradeMarginCalculator(
         var root = await garland.GetItemAsync(itemId, ct);
         if (root == null)
         {
-            return new(new TradeMarginCost("Item unavailable", 0, null, null, null, [], "Item data unavailable"));
+            return Issue(new TradeMarginCost("Item unavailable", 0, null, null, null, [], "Item data unavailable"));
         }
 
         if (root.Crafts?.Count is not > 0 && root.CompanyCrafts?.Count is not > 0)
         {
-            return new(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Not craftable"));
+            return Issue(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Not craftable"));
         }
 
         async Task Discover(int id)
@@ -150,20 +153,21 @@ public sealed class TradeMarginCalculator(
         try { await Discover(itemId); }
         catch (ItemDataUnavailableException)
         {
-            return new(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Item data unavailable"));
+            return Issue(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Item data unavailable"));
         }
         catch (InvalidOperationException)
         {
-            return new(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Recipe mismatch"));
+            return Issue(new TradeMarginCost(root.Name, root.IconId, null, null, null, [], "Recipe mismatch"));
         }
         order.Reverse();
-        // Cost one full root batch; Units lets callers report per-unit figures.
-        var units = edges.TryGetValue(itemId, out var rootRecipe) ? rootRecipe.Yield : 1;
-        var tree = new MarginTree(itemId, root, units, data, edges, order);
+        // Cost the whole production run; Units lets callers report per-unit figures.
+        var rootYield = edges.TryGetValue(itemId, out var rootRecipe) ? rootRecipe.Yield : 1;
+        var tree = new MarginTree(itemId, root, rootYield, data, edges, order);
         if (scope is not { IsValid: true })
         {
+            var units = tree.UnitsFor(batch);
             var synths = tree.Propagate(itemId, units, _ => TradeMaterialRoute.Craft).Synths;
-            return new(new TradeMarginCost(root.Name, root.IconId, null, synths, null, [], "Pricing scope missing", units));
+            return Issue(new TradeMarginCost(root.Name, root.IconId, null, synths, null, [], "Pricing scope missing", units));
         }
 
         var items = order.Where(id => id != itemId).ToArray();
@@ -178,26 +182,99 @@ public sealed class TradeMarginCalculator(
                     vendorPrices[id] = vendor;
                 }
             }
-            return await new TradeMarginBasis(tree, evidence, vendorPrices).PriceAsync(pricing, token);
+            return await new TradeMarginBasis(tree, evidence, vendorPrices, batch).PriceAsync(pricing, token);
         });
     }
 
-    public async Task<TradeMarginCost> CalculateFullAsync(PreparedRow row, TradeCompanyPricingScope? scope, bool refresh,
-        CancellationToken ct, TradeMarginPricing? pricing = null)
+    // Each stored entry holds every listing in a data center, so one read of many entries is
+    // seconds of deserialization. Small slices keep each main-thread task short.
+    private const int StoredReadSlice = 16;
+
+    /// <summary>Every item/data-center pair a row's materials are priced from.</summary>
+    public static IReadOnlyList<(int itemId, string dataCenter)> Pairs(PreparedRow row, TradeCompanyPricingScope? scope)
+    {
+        if (row.Issue != null || scope is not { IsValid: true })
+        {
+            return [];
+        }
+
+        var centers = DataCenters(scope);
+        return row.Leaves.SelectMany(id => centers.Select(dataCenter => (id, dataCenter))).ToArray();
+    }
+
+    /// <summary>True when every material of the row has stored market data in at least one data center.</summary>
+    public static bool HasMarketData(PreparedRow row, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
+    {
+        var priced = stored.Keys.Select(pair => pair.itemId).ToHashSet();
+        return row.Leaves.All(priced.Contains);
+    }
+
+    /// <summary>
+    /// Market data the browser holds for <paramref name="pairs"/>, whatever its age within retention.
+    /// Each entry keeps its fetch time; the row's price age comes from its listings' upload times.
+    /// </summary>
+    public async Task<Dictionary<(int itemId, string dataCenter), CachedMarketData>> ReadStoredAsync(
+        IEnumerable<(int itemId, string dataCenter)> pairs, CancellationToken ct = default)
+    {
+        var stored = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+        foreach (var slice in pairs.Distinct().Chunk(StoredReadSlice))
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var (pair, entry) in await market.GetManyAsync(slice, MarketEvidencePolicyDefaults.RetainedCacheMaxAge))
+            {
+                stored[pair] = entry;
+            }
+            await MainThreadYield.Async(ct);
+        }
+        return stored;
+    }
+
+    /// <summary>Refetches exactly <paramref name="pairs"/>, once each, and returns what was stored.</summary>
+    public async Task<MarketPairRefreshResult> FetchAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> pairs, CancellationToken ct = default)
+    {
+        if (market is IMarketCachePairRefresher refresher)
+        {
+            return await refresher.RefreshPairsAsync(pairs, ct);
+        }
+
+        var started = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await market.RefreshRequestedAsync(pairs.ToList(), progress: null, ct);
+        var stored = (await market.GetManyAsync(pairs, MarketEvidencePolicyDefaults.RetainedCacheMaxAge))
+            .Where(entry => entry.Value.FetchedAtUnix >= started)
+            .ToDictionary(entry => entry.Key, entry => entry.Value);
+        return new(stored, pairs.Where(pair => !stored.ContainsKey(pair)).ToArray(), new Dictionary<string, string>());
+    }
+
+    /// <summary>Prices a prepared row from <paramref name="stored"/> market data, without fetching.</summary>
+    public static Task<TradeMarginCost> PriceAsync(PreparedRow row, TradeCompanyPricingScope? scope,
+        IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored, TradeMarginPricing? pricing,
+        CancellationToken ct = default)
     {
         if (row.Issue != null)
         {
-            return row.Issue;
+            return Task.FromResult(row.Issue);
         }
+
         ArgumentNullException.ThrowIfNull(scope);
-        var evidence = await MarketEvidenceLoader.LoadAsync(market, row.Leaves, scope.MarketFetchScope,
-            scope.EffectiveDataCenter, scope.Region, forceRefreshData: refresh, ct: ct);
-        return await row.Price(evidence, pricing ?? TradeMarginPricing.None, ct);
+        var pairs = Pairs(row, scope);
+        var entries = pairs.Where(stored.ContainsKey).ToDictionary(pair => pair, pair => stored[pair]);
+        var evidence = new MarketEvidenceSet(entries, pairs, scope.MarketFetchScope, DataCenters(scope),
+            scope.EffectiveDataCenter, scope.Region, maxAge: null, fetchedCount: 0, DateTime.UtcNow);
+        return row.Price(evidence, pricing ?? TradeMarginPricing.None, ct);
     }
+
+    private static IReadOnlyList<string> DataCenters(TradeCompanyPricingScope scope) =>
+        MarketFetchScopeResolver.GetDataCenters(scope.MarketFetchScope, scope.EffectiveDataCenter, scope.Region);
 
     /// <summary>Reprices a row for new company inputs from the evidence it was priced with.</summary>
     public static Task<TradeMarginCost> RepriceAsync(TradeMarginCost cost, TradeMarginPricing pricing, CancellationToken ct = default) =>
         cost.Basis is { } basis ? basis.PriceAsync(pricing, ct) : Task.FromResult(cost);
+
+    /// <summary>Reprices a row for another batch size from the evidence it was priced with.</summary>
+    public static Task<TradeMarginCost> RepriceAsync(TradeMarginCost cost, TradeMarginPricing pricing, int batchSize,
+        CancellationToken ct = default) =>
+        cost.Basis is { } basis ? basis.ForBatch(batchSize).PriceAsync(pricing, ct) : Task.FromResult(cost);
 
     /// <summary>Per-material lines, route options and override deltas for an expanded row.</summary>
     public static async Task<TradeMarginBreakdown?> DescribeAsync(TradeMarginCost cost, TradeMarginPricing pricing, CancellationToken ct = default) =>
@@ -213,16 +290,28 @@ internal sealed record MarginPropagation(
     IReadOnlyDictionary<int, int> Demand, IReadOnlyDictionary<int, decimal?> BoughtCost);
 
 internal sealed class MarginTree(
-    int rootId, GarlandItem root, int units, IReadOnlyDictionary<int, GarlandItem> data,
+    int rootId, GarlandItem root, int rootYield, IReadOnlyDictionary<int, GarlandItem> data,
     IReadOnlyDictionary<int, MarginRecipe> edges, IReadOnlyList<int> order)
 {
     public int RootId { get; } = rootId;
     public GarlandItem Root { get; } = root;
-    public int Units { get; } = units;
+    public int RootYield { get; } = rootYield;
     public IReadOnlyDictionary<int, GarlandItem> Data { get; } = data;
     public IReadOnlyDictionary<int, MarginRecipe> Edges { get; } = edges;
     /// <summary>Topological order: every item precedes its inputs.</summary>
     public IReadOnlyList<int> Order { get; } = order;
+
+    public static int ClampBatch(int batchSize) => Math.Clamp(batchSize, 1, TradeMarginItem.MaxBatchSize);
+
+    /// <summary>
+    /// Units a run of <paramref name="batchSize"/> makes: whole crafts of the sold item, so a
+    /// batch of 1 is one craft, exactly as a row was priced before batch sizes existed.
+    /// </summary>
+    public int UnitsFor(int batchSize)
+    {
+        var batch = ClampBatch(batchSize);
+        return checked((batch + RootYield - 1) / RootYield * RootYield);
+    }
 
     /// <summary>Demand below <paramref name="start"/> when every craftable item is crafted.</summary>
     public Dictionary<int, int> FullDemand(int start, int quantity) =>
@@ -284,14 +373,31 @@ public sealed class TradeMarginBasis
     private readonly MarginTree _tree;
     private readonly MarketEvidenceSet _evidence;
     private readonly IReadOnlyDictionary<int, decimal> _vendors;
-    private readonly Dictionary<(int ItemId, int Quantity), MarketQuote> _quotes = new();
+    private readonly Dictionary<(int ItemId, int Quantity), MarketQuote> _quotes;
+    private readonly int _units;
 
-    internal TradeMarginBasis(MarginTree tree, MarketEvidenceSet evidence, IReadOnlyDictionary<int, decimal> vendors)
+    internal TradeMarginBasis(MarginTree tree, MarketEvidenceSet evidence, IReadOnlyDictionary<int, decimal> vendors, int batchSize)
+        : this(tree, evidence, vendors, batchSize, new())
+    {
+    }
+
+    private TradeMarginBasis(MarginTree tree, MarketEvidenceSet evidence, IReadOnlyDictionary<int, decimal> vendors,
+        int batchSize, Dictionary<(int ItemId, int Quantity), MarketQuote> quotes)
     {
         _tree = tree;
         _evidence = evidence;
         _vendors = vendors;
+        _quotes = quotes;
+        BatchSize = MarginTree.ClampBatch(batchSize);
+        _units = tree.UnitsFor(BatchSize);
     }
+
+    /// <summary>Units sold from one production run; every quantity is evaluated for the whole run.</summary>
+    public int BatchSize { get; }
+
+    /// <summary>The same evidence priced for another batch size; quotes already walked are shared.</summary>
+    internal TradeMarginBasis ForBatch(int batchSize) =>
+        MarginTree.ClampBatch(batchSize) == BatchSize ? this : new(_tree, _evidence, _vendors, batchSize, _quotes);
 
     private int RootId => _tree.RootId;
 
@@ -315,9 +421,10 @@ public sealed class TradeMarginBasis
             }
         }
         return new TradeMarginCost(_tree.Root.Name, _tree.Root.IconId, solved.Result.Materials, solved.Result.Synths,
-            unknownAge ? null : oldest, solved.Result.Missing, Units: _tree.Units, UnknownPriceAge: unknownAge)
+            unknownAge ? null : oldest, solved.Result.Missing, Units: _units, UnknownPriceAge: unknownAge)
         {
-            Basis = this
+            Basis = this,
+            BatchSize = BatchSize
         };
     }
 
@@ -372,7 +479,7 @@ public sealed class TradeMarginBasis
                     cost / qty, cost, 0, chosen, options, delta));
             }
         }
-        return new(_tree.Units, lines);
+        return new(_units, lines);
     }
 
     private static decimal? Total(MarginPropagation result, decimal rate) =>
@@ -398,7 +505,7 @@ public sealed class TradeMarginBasis
     /// </summary>
     private async Task<Solved> SolveAsync(IReadOnlyDictionary<int, TradeMaterialSource> sources, decimal rate, CancellationToken ct)
     {
-        var full = _tree.FullDemand(RootId, _tree.Units);
+        var full = _tree.FullDemand(RootId, _units);
         var routes = new Dictionary<int, TradeMaterialRoute> { [RootId] = TradeMaterialRoute.Craft };
         var explicitChoices = new HashSet<int>();
         var unit = new Dictionary<int, decimal?>();
@@ -453,7 +560,7 @@ public sealed class TradeMarginBasis
         }
 
         // Every bought line is priced before propagation so Propagate stays synchronous.
-        var actual = _tree.Propagate(RootId, _tree.Units, id => routes.GetValueOrDefault(id, TradeMaterialRoute.Market));
+        var actual = _tree.Propagate(RootId, _units, id => routes.GetValueOrDefault(id, TradeMaterialRoute.Market));
         var prices = new Dictionary<int, decimal?>();
         foreach (var (id, qty) in actual.Demand)
         {
@@ -462,7 +569,7 @@ public sealed class TradeMarginBasis
                 prices[id] = await BuyAsync(id, routes[id], qty, sources, ct);
             }
         }
-        var result = _tree.Propagate(RootId, _tree.Units, id => routes.GetValueOrDefault(id, TradeMaterialRoute.Market),
+        var result = _tree.Propagate(RootId, _units, id => routes.GetValueOrDefault(id, TradeMaterialRoute.Market),
             (id, _, _) => prices.GetValueOrDefault(id));
         return new(result, routes, explicitChoices);
     }
@@ -567,6 +674,8 @@ public sealed class TradeMarginBasis
                 Evidence = _evidence,
                 Items = [new MaterialAggregate { ItemId = id, Name = _tree.Data[id].Name, TotalQuantity = quantity }]
             }, ct: ct)).Single(entry => entry.ItemId == id);
+            // One analysis is tens of milliseconds of listing work; let the page render between them.
+            await MainThreadYield.Async(ct);
             var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
             if (price > 0)
             {

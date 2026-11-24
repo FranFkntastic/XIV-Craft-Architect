@@ -9,6 +9,12 @@ public static class MarketEvidencePolicyDefaults
     public static TimeSpan MaximumRecommendationAge { get; } = TimeSpan.FromHours(12);
 
     public static TimeSpan VeryOldThreshold { get; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// How long the browser keeps market data for pages that show stored prices with their age
+    /// (Margins). Reuse windows are separate: every reader still applies its own max age.
+    /// </summary>
+    public static TimeSpan RetainedCacheMaxAge { get; } = TimeSpan.FromDays(7);
 }
 
 /// <summary>

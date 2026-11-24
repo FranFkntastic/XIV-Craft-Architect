@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
@@ -10,7 +11,7 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// Uses Unix timestamps to avoid DateTime serialization issues.
 /// Implements automatic cleanup and cache size limits.
 /// </summary>
-public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiagnosticsProvider
+public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiagnosticsProvider, IMarketCachePairRefresher
 {
     private readonly IJSRuntime _jsRuntime;
     private readonly UniversalisService _universalisService;
@@ -29,6 +30,15 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
     // for it at most once per interval.
     private static readonly TimeSpan MaintenanceInterval = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan MaintenanceDeferral = TimeSpan.FromSeconds(30);
+
+    // Entries are kept for RetainedCacheMaxAge so Margins can show stored prices with their
+    // age. Before that, maintenance deleted entries older than the reuse window (1 h) within
+    // one maintenance interval, so no other reader met an older retained entry in an active
+    // session. Stale reads (appraisal fallback, world reconciliation) and the newest-world
+    // merge on store keep that horizon; readers with a max age apply their own.
+    private static readonly TimeSpan RetainedEvidenceHorizon =
+        MarketEvidencePolicyDefaults.ReusableCacheMaxAge + MaintenanceInterval;
+    private const int InteractiveFetchBatchSize = 10;
     private DateTime _lastMaintenanceScheduledUtc = DateTime.MinValue;
     private int _maintenanceScheduled;
 
@@ -193,6 +203,12 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             if (entry == null)
             {
                 _logger?.LogDebug("[IndexedDbMarketCache] NO DATA for {ItemId}@{DataCenter}", itemId, dataCenter);
+                return (null, false);
+            }
+
+            if (entry.FetchedAtUnix <= DateTimeToUnix(DateTime.UtcNow) - (long)RetainedEvidenceHorizon.TotalSeconds)
+            {
+                _logger?.LogDebug("[IndexedDbMarketCache] RETAINED BEYOND STALE-READ HORIZON for {ItemId}@{DataCenter}", itemId, dataCenter);
                 return (null, false);
             }
 
@@ -565,7 +581,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             maxAge,
             refreshRequestedPairs);
 
-        ScheduleMaintenance(effectiveMaxAge, refreshRequestedPairs);
+        ScheduleMaintenance(refreshRequestedPairs);
         return fetchedCount;
     }
 
@@ -575,7 +591,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
     /// <see cref="MaintenanceInterval"/>; it shares the populate gate so it never
     /// interleaves with a fetch/store pass.
     /// </summary>
-    private void ScheduleMaintenance(TimeSpan staleMaxAge, bool refreshRequestedPairs)
+    private void ScheduleMaintenance(bool refreshRequestedPairs)
     {
         var now = DateTime.UtcNow;
         if (now - _lastMaintenanceScheduledUtc < MaintenanceInterval ||
@@ -585,10 +601,10 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         }
 
         _lastMaintenanceScheduledUtc = now;
-        _ = RunDeferredMaintenanceAsync(staleMaxAge, refreshRequestedPairs);
+        _ = RunDeferredMaintenanceAsync(refreshRequestedPairs);
     }
 
-    private async Task RunDeferredMaintenanceAsync(TimeSpan staleMaxAge, bool refreshRequestedPairs)
+    private async Task RunDeferredMaintenanceAsync(bool refreshRequestedPairs)
     {
         try
         {
@@ -596,7 +612,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             await _populateSemaphore.WaitAsync();
             try
             {
-                await RunMaintenanceAsync(staleMaxAge, refreshRequestedPairs);
+                await RunMaintenanceAsync(refreshRequestedPairs);
             }
             finally
             {
@@ -613,11 +629,11 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         }
     }
 
-    private async Task RunMaintenanceAsync(TimeSpan staleMaxAge, bool refreshRequestedPairs)
+    private async Task RunMaintenanceAsync(bool refreshRequestedPairs)
     {
         if (!refreshRequestedPairs)
         {
-            var cleaned = await CleanupStaleAsync(staleMaxAge);
+            var cleaned = await CleanupStaleAsync(MarketEvidencePolicyDefaults.RetainedCacheMaxAge);
             if (cleaned > 0)
             {
                 _logger?.LogInformation("[IndexedDbMarketCache] Maintenance cleaned {Count} stale entries", cleaned);
@@ -652,11 +668,16 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         }
     }
 
-    private async Task<bool> SetManyAsync(IReadOnlyCollection<(int itemId, string dataCenter, CachedMarketData data)> entries)
+    private async Task<bool> SetManyAsync(IReadOnlyCollection<(int itemId, string dataCenter, CachedMarketData data)> entries) =>
+        (await StoreManyAsync(entries)).Saved;
+
+    /// <summary>Merges each entry with its retained reading and stores the batch; returns what was stored.</summary>
+    private async Task<(bool Saved, List<CachedMarketData> Data)> StoreManyAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter, CachedMarketData data)> entries)
     {
         if (entries.Count == 0)
         {
-            return true;
+            return (true, []);
         }
 
         // One bulk read fetches every retained entry up front; merging per entry
@@ -673,7 +694,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             var retainedEntries = await _jsRuntime.InvokeAsync<List<IndexedDbMarketCacheEntry>>(
                 "IndexedDB.loadMarketDataBulk",
                 requestsByKey.Keys.ToArray(),
-                long.MinValue);
+                DateTimeToUnix(DateTime.UtcNow) - (long)RetainedEvidenceHorizon.TotalSeconds);
             foreach (var retained in retainedEntries ?? new List<IndexedDbMarketCacheEntry>())
             {
                 var key = string.IsNullOrWhiteSpace(retained.Key)
@@ -688,6 +709,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         }
 
         var batchEntries = new List<IndexedDbMarketCacheBatchEntry>(entries.Count);
+        var stored = new List<CachedMarketData>(entries.Count);
         foreach (var entry in entries)
         {
             var key = GetKey(entry.itemId, entry.dataCenter);
@@ -707,6 +729,7 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
             }
 
             var data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, entry.data);
+            stored.Add(data);
             batchEntries.Add(new IndexedDbMarketCacheBatchEntry
             {
                 Key = key,
@@ -728,13 +751,100 @@ public class IndexedDbMarketCacheService : IMarketCacheService, IMarketCacheDiag
         {
             await _jsRuntime.InvokeVoidAsync("IndexedDB.saveMarketDataBatch", batchEntries);
             _logger?.LogDebug("[IndexedDbMarketCache] Stored market data batch with {Count} entries", entries.Count);
-            return true;
+            return (true, stored);
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "[IndexedDbMarketCache] Error storing market data batch with {Count} entries", entries.Count);
-            return false;
+            return (false, stored);
         }
+    }
+
+    /// <summary>
+    /// Refetches exactly <paramref name="pairs"/> through the interactive Universalis client.
+    /// Each batch of up to ten items is stored as soon as it lands, with the same merge as
+    /// <see cref="RefreshRequestedAsync"/>; the populate gate is held only while storing, so a
+    /// slow answer never holds up other cache users.
+    /// </summary>
+    public async Task<MarketPairRefreshResult> RefreshPairsAsync(
+        IReadOnlyCollection<(int itemId, string dataCenter)> pairs,
+        CancellationToken ct = default)
+    {
+        var stored = new ConcurrentDictionary<(int itemId, string dataCenter), CachedMarketData>();
+        var failed = new ConcurrentBag<(int itemId, string dataCenter)>();
+        var failures = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (pairs.Count == 0)
+        {
+            return new(stored, [], failures);
+        }
+
+        var worldData = await GetWorldDataForCachingAsync(ct);
+        var batches = pairs
+            .GroupBy(pair => pair.dataCenter, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(group => group.Select(pair => pair.itemId).Distinct().Chunk(InteractiveFetchBatchSize)
+                .Select(itemIds => (dataCenter: group.Key, itemIds)))
+            .ToArray();
+        await Task.WhenAll(batches.Select(async batch =>
+        {
+            Dictionary<int, UniversalisResponse> fetched;
+            try
+            {
+                var result = await _universalisService.GetInteractiveMarketDataAsync(batch.dataCenter, batch.itemIds, ct);
+                fetched = result.Items;
+                if (result.Failure != null)
+                {
+                    failures.AddOrUpdate(batch.dataCenter, result.Failure, (_, prior) => prior + "; " + result.Failure);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                fetched = [];
+                failures.AddOrUpdate(batch.dataCenter, ex.Message, (_, prior) => prior + "; " + ex.Message);
+            }
+
+            foreach (var itemId in batch.itemIds.Where(itemId => !fetched.ContainsKey(itemId)))
+            {
+                failed.Add((itemId, batch.dataCenter));
+            }
+
+            if (fetched.Count == 0)
+            {
+                return;
+            }
+
+            var entries = fetched
+                .Select(entry => (entry.Key, batch.dataCenter,
+                    ConvertUniversalisResponseToCachedData(entry.Key, batch.dataCenter, entry.Value, worldData)))
+                .ToList();
+            await _populateSemaphore.WaitAsync(ct);
+            try
+            {
+                var (saved, data) = await StoreManyAsync(entries);
+                foreach (var entry in data)
+                {
+                    stored[(entry.ItemId, batch.dataCenter)] = entry;
+                }
+
+                if (!saved)
+                {
+                    _logger?.LogWarning(
+                        "[IndexedDbMarketCache] Fetched {Count} items from {DataCenter} but could not store them; they price this page only",
+                        data.Count,
+                        batch.dataCenter);
+                }
+            }
+            finally
+            {
+                _populateSemaphore.Release();
+            }
+        }));
+
+        ScheduleMaintenance(refreshRequestedPairs: false);
+        return new(stored, failed.ToArray(), failures);
     }
 
     private async Task<RequestedCacheState> AnalyzeRequestedCacheAsync(

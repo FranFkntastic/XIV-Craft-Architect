@@ -11,12 +11,12 @@
 @inject ProfileSyncService Sync
 @inject IGarlandService Garland
 @inject TradeMarginCalculator Calculator
-@inject TradeMarginQuickPass QuickPass
 @inject ISettingsService Settings
 @inject AppState AppState
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+@inject ILogger<TradeMargins> Log
 @implements IAsyncDisposable
 
 <div class="margins-backdrop @(_glass ? "franthropy-glass-backdrop" : null)">
@@ -43,7 +43,7 @@
             }
         </div>
         <span class="toolbar-spacer"></span>
-        <button type="button" class="margin-button" disabled="@_busy" @onclick="RefreshAsync">@(_refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
+        <button type="button" class="margin-button" disabled="@Refreshing" @onclick="RefreshAsync">@(Refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
     </div>
     <div @ref="_tableWrap" class="margins-table-wrap @Glass("table")">
         <WebDataTable TItem="MarginRow" TColumnId="Column" Items="@SortedRows" Columns="@Columns"
@@ -70,7 +70,7 @@
     [Parameter, SupplyParameterFromQuery(Name = "company")] public string? Company { get; set; }
     private TradeCompanyProfile? _profile;
     private long? _revision;
-    private bool _hosted, _glass = true, _busy, _refreshing, _disposed;
+    private bool _hosted, _glass = true, _disposed;
     private DateTime? _lastCheckedUtc;
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _ageLoop;
@@ -93,21 +93,35 @@
     private int? _editingPrice;
     private string _priceDraft = "";
     private string? _focusPrice;
+    // The batch size being typed, kept through hosted syncs and background repricing.
+    private int? _editingBatch;
+    private string _batchDraft = "";
+    // Background price update: one job at a time. Rows in _forceFetch refetch every pair
+    // (Refresh prices); other rows refetch only pairs older than the Margins reuse window.
+    private readonly HashSet<int> _forceFetch = [];
+    private CancellationTokenSource? _priceJob;
+    private (Guid? Company, TradeCompanyPricingScope? Scope) _priceJobScope;
+    private bool _priceAgain;
+    private bool Refreshing => _forceFetch.Count > 0;
     private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
     private TradeMarginPricing Pricing => new(Rate, _profile?.MaterialSources ?? []);
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
-    private enum Column { Item, Sale, Materials, Labor, Total, Margin, Percent, Age, Commission, Remove }
+    private enum Column { Item, Sale, Batch, Materials, Labor, Total, Margin, Percent, Age, Commission, Remove }
     private sealed class MarginRow(int itemId, long? sale)
     {
         public int ItemId { get; } = itemId;
         public long? Sale { get; set; } = sale;
         public long? SavedSale { get; set; } = sale;
+        public int Batch { get; set; } = 1;
         public string ItemName { get; set; } = "Item";
         public TradeMarginCost? Cost { get; set; }
         public TradeMarginBreakdown? Breakdown { get; set; }
+        public TradeMarginCalculator.PreparedRow? Plan { get; set; }
+        /// <summary>Market data this row is priced from, by item and data center.</summary>
+        public Dictionary<(int itemId, string dataCenter), CachedMarketData>? Market { get; set; }
         public string Name => Cost?.Name ?? ItemName;
     }
-    // Calculator costs one full root batch; every displayed figure is per unit sold.
+    // Calculator costs the whole production run; every displayed figure is per unit sold.
     private static decimal? PerUnit(MarginRow row, decimal? batch) => batch / Math.Max(1, row.Cost?.Units ?? 1);
     private decimal? Materials(MarginRow row) => PerUnit(row, row.Cost?.Materials);
     private decimal? Labor(MarginRow row) => PerUnit(row, row.Cost?.Synths * Rate);
@@ -118,7 +132,7 @@
     private string Sign(MarginRow row) => MarginGil(row) < 0 ? "is-loss" : "is-gain";
     private object? SortValue(MarginRow row) => _sort.Column switch
     {
-        Column.Item => row.Name, Column.Sale => row.SavedSale, Column.Materials => Materials(row),
+        Column.Item => row.Name, Column.Sale => row.SavedSale, Column.Batch => row.Batch, Column.Materials => Materials(row),
         Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => row.SavedSale - Total(row),
         Column.Percent => row.SavedSale > 0 ? (row.SavedSale - Total(row)) / row.SavedSale * 100 : null,
         Column.Age => row.Cost?.OldestPriceUtc, _ => null
@@ -130,8 +144,9 @@
     [
         new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (row.Cost?.Basis != null) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.ItemId) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
 new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@(_editingSale == row.ItemId ? row.Sale?.ToString(CultureInfo.InvariantCulture) : row.Sale?.ToString("N0", CultureInfo.InvariantCulture))" @onfocus="() => _editingSale = row.ItemId" @onblur="() => _editingSale = null" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
+        new() { Id = Column.Batch, Header = "Batch", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="batch-input" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="@(row.Name + " batch size")" value="@(_editingBatch == row.ItemId ? _batchDraft : row.Batch.ToString(CultureInfo.InvariantCulture))" @onfocus="() => BeginBatch(row)" @oninput="e => PreviewBatch(row, e)" @onblur="() => CommitBatchAsync(row.ItemId)" @onkeydown="e => BatchKeyAsync(e, row.ItemId)" /> },
         new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
-        new() { Id = Column.Labor, Header = "Labor", Size = new(100), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Labor(row))<span class="sub">@(row.Cost?.Synths is { } synths ? row.Cost.Units > 1 ? $"{synths:N0} synths per {row.Cost.Units}" : $"{synths:N0} synths" : "")</span></span> },
+        new() { Id = Column.Labor, Header = "Labor", Size = new(160), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Labor(row))<span class="sub">@(row.Cost?.Synths is { } synths ? SynthCount(synths, row.Cost.Units) : "")</span></span> },
         WebTableColumn<MarginRow, Column>.Text(Column.Total, "Total cost", row => Number(Total(row)), 116, alignEnd: true, headerCssClass: "is-align-end"),
         new() { Id = Column.Margin, Header = "Margin", Size = new(110), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@Number(MarginGil(row))</span> },
         new() { Id = Column.Percent, Header = "Margin %", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@(Percent(row) is { } percent ? $"{percent:N1}%" : "—")</span> },
@@ -236,8 +251,10 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         _pendingSetPrice.Contains(line.ItemId) ? TradeMaterialRoute.SetPrice : line.Route;
     private static string Quantity(TradeMarginLine line, TradeMarginBreakdown breakdown) =>
         ((decimal)line.Quantity / breakdown.Units).ToString(breakdown.Units > 1 ? "#,0.##" : "N0", CultureInfo.InvariantCulture);
-    private static string Synths(TradeMarginLine line, TradeMarginBreakdown breakdown) =>
-        breakdown.Units > 1 ? $"{line.Synths:N0} synths per {breakdown.Units}" : line.Synths == 1 ? "1 synth" : $"{line.Synths:N0} synths";
+    private static string Synths(TradeMarginLine line, TradeMarginBreakdown breakdown) => SynthCount(line.Synths, breakdown.Units);
+    // Synths are counted for the whole run, so a run of several units names how many it makes.
+    private static string SynthCount(int synths, int units) =>
+        (synths == 1 ? "1 synth" : $"{synths:N0} synths") + (units > 1 ? $" per {units:N0}" : "");
     private static string Gil(decimal value) => $"{Math.Ceiling(value):N0} gil";
     private static string Signed(decimal value) => (value < 0 ? "−" : "+") + Math.Abs(value).ToString("N0");
     private static string ShortOfListings(TradeMarginRouteOption market) =>
@@ -280,7 +297,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             {
                 case TradeMaterialRoute.Craft:
                     items.Add(new(value, "Craft", option.Total is { } && option.Materials is { } materials
-                        ? $"{Gil(materials / breakdown.Units)} materials + {Gil(option.Synths * Rate / breakdown.Units)} labor ({option.Synths:N0} synths)"
+                        ? $"{Gil(materials / breakdown.Units)} materials + {Gil(option.Synths * Rate / breakdown.Units)} labor ({SynthCount(option.Synths, breakdown.Units)})"
                         : option.Missing is { Count: > 0 } missing ? $"{string.Join(", ", missing)} unpriced" : null,
                         Amount(option.Total)));
                     break;
@@ -340,7 +357,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         Snackbar.Add(ex switch
         {
             CompanyHubRequestException { ErrorCode: "invalid_margin_items" } =>
-                "Could not save margin items. Use at most 500 distinct items with non-negative sale prices.",
+                "Could not save margin items. Use at most 500 distinct items with non-negative sale prices and batch sizes from 1 to 9,999.",
             CompanyHubRequestException { ErrorCode: TradeMaterialSourceValidator.ErrorCode } =>
                 "Could not save material sources.",
             _ => $"Margins: {ex.Message}"
@@ -402,7 +419,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             _loaded = true;
             _loadedCompany = null;
             if (Company != null) { Company = null; Navigation.NavigateTo("trade/margins", replace: true); }
-            await CalculateAsync(false, onlyMissing: true);
+            await CalculateAsync(false);
             if (previous != null && (previousRate != Rate ||
                 !(previous.MaterialSources ?? []).SequenceEqual(_profile.MaterialSources ?? [])))
                 await RepriceAllAsync();
@@ -412,82 +429,189 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private void RebuildRows(Dictionary<int, MarginRow> previousRows, bool scopeChanged, bool preserveEdit = true)
     {
+        if (scopeChanged) _forceFetch.Clear();
         _rows = (_profile?.MarginItems ?? []).DistinctBy(item => item.ItemId).Select(item =>
         {
             previousRows.TryGetValue(item.ItemId, out var prior);
+            var batch = Math.Clamp(item.BatchSize, 1, TradeMarginItem.MaxBatchSize);
+            // A cost priced for another batch size (e.g. changed in another session) is recalculated.
+            var stale = scopeChanged || prior?.Cost?.BatchSize != batch;
             return new MarginRow(item.ItemId, item.SalePrice)
             {
                 Sale = preserveEdit && _editingSale == item.ItemId && prior != null ? prior.Sale : item.SalePrice,
+                Batch = batch,
                 ItemName = prior?.Name ?? _itemNames.GetValueOrDefault(item.ItemId, "Item"),
-                Cost = scopeChanged ? null : prior?.Cost,
-                Breakdown = scopeChanged ? null : prior?.Breakdown
+                Cost = stale ? null : prior?.Cost,
+                Breakdown = stale ? null : prior?.Breakdown,
+                // A plan is prepared for one batch size; market data is the same for any.
+                Plan = stale ? null : prior?.Plan,
+                Market = scopeChanged ? null : prior?.Market
             };
         }).ToList();
     }
-    private async Task CalculateAsync(bool refresh, bool onlyMissing = false)
+    private static bool NeedsPricing(MarginRow row) =>
+        row.Cost == null || row.Cost.Issue is "Pricing failed" or "Item data unavailable";
+    private static TradeMarginCost Named(MarginRow row, TradeMarginCost cost) =>
+        cost.Name == "Item unavailable" && row.ItemName != "Item" ? cost with { Name = row.ItemName } : cost;
+    /// <summary>
+    /// Runs under _gate. Rows without a figure are priced at once from the market data the
+    /// browser holds, whatever its age; the background update then refetches what is due.
+    /// </summary>
+    private async Task CalculateAsync(bool refresh)
     {
-        if (_disposed || (onlyMissing && _rows.All(row => row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")))) return;
-        _busy = true;
-        _refreshing = true;
+        if (_disposed) return;
+        var scope = _profile?.CommissionPricingScope;
+        var ct = _lifetime.Token;
+        if (refresh) foreach (var row in _rows) _forceFetch.Add(row.ItemId);
         StateHasChanged();
-        try
+        foreach (var row in _rows.ToArray())
         {
-            var plans = new Dictionary<int, TradeMarginCalculator.PreparedRow>();
-            var scope = _profile?.CommissionPricingScope;
-            var pending = new Dictionary<int, MarginRow>();
-            var ct = _lifetime.Token;
-            foreach (var row in _rows)
-            {
-                if (_disposed) return;
-                if (onlyMissing && row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")) continue;
-                try
-                {
-                    plans[row.ItemId] = await Calculator.PrepareAsync(row.ItemId, scope, ct);
-                    pending.Add(row.ItemId, row);
-                }
-                catch (Exception ex) when (!ct.IsCancellationRequested)
-                {
-                    await ShowPricingFailureAsync(row, ex, ct);
-                }
-            }
-            using var quickLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var quick = scope is { IsValid: true } ? QuickPass.RunAsync(plans, scope, refresh, (id, cost) =>
-            {
-                if (_disposed || !pending.TryGetValue(id, out var row)) return;
-                SetCost(row, cost);
-                StateHasChanged();
-            }, quickLifetime.Token, Pricing) : Task.CompletedTask;
+            if (_disposed) return;
+            if (!NeedsPricing(row)) continue;
             try
             {
-                // All row/scope replacement is serialized by _gate. Retiring the row from
-                // pending before yielding prevents a late preview from replacing its full cost.
-                foreach (var (id, plan) in plans)
+                var plan = row.Plan != null && row.Cost == null ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
+                row.Plan = plan;
+                row.Market = await Calculator.ReadStoredAsync(TradeMarginCalculator.Pairs(plan, scope), ct);
+                // A row with no stored data for some material waits for the update rather
+                // than showing that material as unpriced.
+                if (TradeMarginCalculator.HasMarketData(plan, row.Market))
                 {
-                    ct.ThrowIfCancellationRequested();
-                    var row = pending[id];
-                    try
-                    {
-                        var full = await Calculator.CalculateFullAsync(plan, scope, refresh, ct, Pricing);
-                        ct.ThrowIfCancellationRequested();
-                        SetCost(row, full.Name == "Item unavailable" && row.ItemName != "Item"
-                            ? full with { Name = row.ItemName } : full);
-                    }
-                    catch (Exception ex) when (!ct.IsCancellationRequested)
-                    {
-                        await ShowPricingFailureAsync(row, ex, ct);
-                    }
-                    pending.Remove(id);
-                    if (!_disposed) StateHasChanged();
+                    SetCost(row, Named(row, await TradeMarginCalculator.PriceAsync(plan, scope, row.Market, Pricing, ct)));
+                    StateHasChanged();
                 }
             }
-            finally
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                quickLifetime.Cancel();
-                try { await quick; } catch (OperationCanceledException) when (quickLifetime.IsCancellationRequested) { }
+                row.Plan = null;
+                await ShowPricingFailureAsync(row, ex, ct);
             }
-            if (refresh && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
         }
-        finally { _busy = false; _refreshing = false; }
+        StartPriceUpdate();
+    }
+    private void StartPriceUpdate()
+    {
+        var scope = (_profile?.Id, _profile?.CommissionPricingScope);
+        if (_priceJob != null && _priceJobScope == scope)
+        {
+            _priceAgain = true;
+            return;
+        }
+        _priceJob?.Cancel();
+        _priceJobScope = scope;
+        var job = _priceJob = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _ = RunPriceUpdateAsync(job);
+    }
+    /// <summary>
+    /// Brings stored prices up to date without holding _gate while Universalis answers. Each
+    /// item/data-center pair is fetched at most once per pass; rows reprice in place as their
+    /// data lands, keeping expanded rows and values being typed.
+    /// </summary>
+    private async Task RunPriceUpdateAsync(CancellationTokenSource job)
+    {
+        var ct = job.Token;
+        try
+        {
+            do
+            {
+                _priceAgain = false;
+                var (company, scope) = _priceJobScope;
+                var forcedPass = _forceFetch.Count > 0;
+                var attempted = new HashSet<(int itemId, string dataCenter)>();
+                var landed = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
+                // Rows still without a figure go first, then table order.
+                foreach (var itemId in _rows.OrderBy(row => row.Cost == null ? 0 : 1).Select(row => row.ItemId).ToArray())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
+                    if (row?.Plan is not { Issue: null } plan || row.Market is not { } stored)
+                    {
+                        _forceFetch.Remove(itemId);
+                        continue;
+                    }
+                    var forced = _forceFetch.Contains(itemId);
+                    var reuseCutoff = DateTime.UtcNow - MarketEvidencePolicyDefaults.AgingThreshold;
+                    var pairs = TradeMarginCalculator.Pairs(plan, scope);
+                    var due = pairs.Where(pair => !attempted.Contains(pair) &&
+                        (forced || !stored.TryGetValue(pair, out var entry) || entry.FetchedAt <= reuseCutoff)).ToArray();
+                    if (due.Length > 0)
+                    {
+                        attempted.UnionWith(due);
+                        var result = await Calculator.FetchAsync(due, ct);
+                        foreach (var (pair, entry) in result.Stored) landed[pair] = entry;
+                        LogKeptPrices(result, stored);
+                    }
+                    var updated = pairs.Where(landed.ContainsKey).ToArray();
+                    if (updated.Length > 0 || (row.Cost == null && due.Length > 0))
+                    {
+                        var market = new Dictionary<(int itemId, string dataCenter), CachedMarketData>(stored);
+                        foreach (var pair in updated) market[pair] = landed[pair];
+                        if (!await ApplyUpdateAsync(itemId, plan, market, company, scope, ct)) return;
+                    }
+                    if (forced && _forceFetch.Remove(itemId) && !_disposed) StateHasChanged();
+                }
+                if (forcedPass && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
+            } while (_priceAgain && !ct.IsCancellationRequested);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { Log.LogWarning(ex, "Margins price update stopped; stored prices kept"); }
+        finally
+        {
+            if (ReferenceEquals(_priceJob, job))
+            {
+                _priceJob = null;
+                _forceFetch.Clear();
+                if (!_disposed) StateHasChanged();
+            }
+            job.Dispose();
+        }
+    }
+    /// <summary>Reprices one row from updated market data; false when the company or scope changed.</summary>
+    private async Task<bool> ApplyUpdateAsync(int itemId, TradeMarginCalculator.PreparedRow plan,
+        Dictionary<(int itemId, string dataCenter), CachedMarketData> market, Guid? company, TradeCompanyPricingScope? scope,
+        CancellationToken ct)
+    {
+        TradeMarginCost cost;
+        var rate = Rate;
+        var sources = _profile?.MaterialSources ?? [];
+        try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, Pricing, ct); }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            Log.LogWarning(ex, "Margins could not price item {ItemId} from updated market data; stored prices kept", itemId);
+            return true;
+        }
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_disposed || _profile?.Id != company || _profile?.CommissionPricingScope != scope) return false;
+            var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
+            if (row == null) return true;
+            // Labor, material sources or the batch size may have changed while this row was priced.
+            while (cost.Basis != null && (rate != Rate || !sources.SequenceEqual(_profile?.MaterialSources ?? []) || cost.BatchSize != row.Batch))
+            {
+                rate = Rate;
+                sources = _profile?.MaterialSources ?? [];
+                cost = await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, ct);
+            }
+            row.Plan = plan;
+            row.Market = market;
+            SetCost(row, Named(row, cost));
+            StateHasChanged();
+            return true;
+        }
+        finally { _gate.Release(); }
+    }
+    /// <summary>Names every pair Universalis did not answer, per data center, and what the row keeps.</summary>
+    private void LogKeptPrices(MarketPairRefreshResult result, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
+    {
+        foreach (var group in result.Failed.GroupBy(pair => pair.dataCenter, StringComparer.OrdinalIgnoreCase))
+        {
+            var kept = group.Select(pair => stored.TryGetValue(pair, out var entry)
+                ? $"{pair.itemId} (stored {RelativeAge(entry.FetchedAt)} old)" : $"{pair.itemId} (nothing stored)");
+            Log.LogWarning("Margins price update: {DataCenter} did not answer for {Count} items ({Failure}); kept {Kept}",
+                group.Key, group.Count(), result.FailureByDataCenter.GetValueOrDefault(group.Key, "no data returned"),
+                string.Join(", ", kept));
+        }
     }
     private void SetCost(MarginRow row, TradeMarginCost cost)
     {
@@ -545,7 +669,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private async Task RefreshAsync()
     {
-        if (_busy) return;
+        if (Refreshing) return;
         await _gate.WaitAsync();
         try { if (!_disposed) await CalculateAsync(true); }
         catch (Exception ex) { ReportError(ex); }
@@ -607,7 +731,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     !(_profile.MaterialSources ?? []).SequenceEqual(current.Profile.MaterialSources ?? []);
                 _profile = current.Profile;
                 RebuildRows(_rows.ToDictionary(row => row.ItemId), scopeChanged);
-                await CalculateAsync(false, onlyMissing: true);
+                await CalculateAsync(false);
                 if (pricingChanged) await RepriceAllAsync();
                 return;
             }
@@ -733,6 +857,73 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         }
         finally { _gate.Release(); }
     }
+    private void BeginBatch(MarginRow row)
+    {
+        if (_editingBatch == row.ItemId) return;
+        _editingBatch = row.ItemId;
+        _batchDraft = row.Batch.ToString(CultureInfo.InvariantCulture);
+    }
+    // Typing (re)starts an edit even when focus never left the input, e.g. after Enter.
+    private void PreviewBatch(MarginRow row, ChangeEventArgs e)
+    {
+        _editingBatch = row.ItemId;
+        _batchDraft = new string((e.Value?.ToString() ?? "").Where(char.IsAsciiDigit).ToArray());
+    }
+    private async Task BatchKeyAsync(KeyboardEventArgs e, int itemId)
+    {
+        if (e.Key == "Enter") await CommitBatchAsync(itemId);
+    }
+    /// <summary>
+    /// Reprices the row for the new batch size from its evidence, then saves it beside the sale
+    /// price. Empty, zero or unparsable input keeps the previous batch size.
+    /// </summary>
+    private async Task CommitBatchAsync(int itemId)
+    {
+        if (_editingBatch != itemId) return;
+        var draft = _batchDraft;
+        _editingBatch = null;
+        _batchDraft = "";
+        if (!int.TryParse(draft, NumberStyles.None, CultureInfo.InvariantCulture, out var batch) || batch < 1) return;
+        batch = Math.Min(batch, TradeMarginItem.MaxBatchSize);
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed || _rows.FirstOrDefault(item => item.ItemId == itemId) is not { } row || row.Batch == batch) return;
+            var previous = row.Batch;
+            row.Batch = batch;
+            await RepriceBatchAsync(row);
+            try
+            {
+                await SaveItemsAsync(items => items.Select(item => item.ItemId == itemId ? item with { BatchSize = batch } : item).ToArray());
+            }
+            catch (Exception ex)
+            {
+                if (_rows.FirstOrDefault(item => item.ItemId == itemId) is { } displayed)
+                {
+                    displayed.Batch = previous;
+                    await RepriceBatchAsync(displayed);
+                }
+                ReportError(ex);
+            }
+        }
+        catch (Exception ex) { ReportError(ex); }
+        finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
+    }
+    /// <summary>Brings a row's cost to its batch size without fetching; a row without evidence is recalculated.</summary>
+    private async Task RepriceBatchAsync(MarginRow row)
+    {
+        if (row.Cost is not { } cost || cost.BatchSize == row.Batch) return;
+        if (cost.Basis == null)
+        {
+            row.Cost = null;
+            row.Breakdown = null;
+            row.Plan = null;
+            await CalculateAsync(false);
+            return;
+        }
+        try { SetCost(row, await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, _lifetime.Token)); }
+        catch (Exception ex) when (!_lifetime.IsCancellationRequested) { await ShowPricingFailureAsync(row, ex, _lifetime.Token); }
+    }
     // Opens Trade Orders with a New Order draft already holding this item.
     private void CreateCommission(MarginRow row)
     {
@@ -751,7 +942,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         try
         {
             var companyId = _profile?.Id;
-            var removed = new TradeMarginItem(row.ItemId, row.SavedSale);
+            var removed = new TradeMarginItem(row.ItemId, row.SavedSale, row.Batch);
             await SaveItemsAsync(items => items.Where(item => item.ItemId != row.ItemId).ToArray());
             if (!_disposed) Snackbar.Add($"Removed {row.Name}.", Severity.Normal, options =>
             {
