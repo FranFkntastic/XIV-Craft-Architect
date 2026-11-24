@@ -218,7 +218,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 else if (line.UnitCost is { } unit)
                 {
                     @unit.ToString("N0")
-                    @if (route == TradeMaterialRoute.Market && market?.ObservedAtUtc is { } observed) { <span class="sub">@RelativeAge(observed)</span> }
+                    @if (route == TradeMaterialRoute.Market && market is { IsShortOfListings: true }) { <span class="sub short-listed">@ShortOfListings(market)</span> }
+                    else if (route == TradeMaterialRoute.Market && market?.ObservedAtUtc is { } observed) { <span class="sub">@RelativeAge(observed)</span> }
                 }
                 else
                 {

@@ -436,7 +436,7 @@ public sealed class TradeMarginBasis
                 var best = AcquisitionDefaultRule.Cheapest(
                 [
                     (AcquisitionSource.Craft, craft),
-                    (AcquisitionSource.MarketBuyNq, quote.Unit * qty),
+                    (AcquisitionSource.MarketBuyNq, quote.Listed >= qty ? quote.Unit * qty : null),
                     (AcquisitionSource.VendorBuy, _vendors.TryGetValue(id, out var vendor) ? vendor * qty : (decimal?)null)
                 ]);
                 route = best switch
@@ -542,8 +542,9 @@ public sealed class TradeMarginBasis
     private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge);
 
     /// <summary>
-    /// The market route for <paramref name="quantity"/> units: priced only when listings in the
-    /// pricing scope cover the whole quantity.
+    /// The market route for <paramref name="quantity"/> units. Listings that cannot cover the
+    /// whole quantity still give a directional unit price, so a material with no other route
+    /// keeps a figure; such a route is never chosen as a default over another priced route.
     /// </summary>
     private async Task<MarketQuote> QuoteAsync(int id, int quantity, CancellationToken ct)
     {
@@ -559,7 +560,7 @@ public sealed class TradeMarginBasis
         decimal? unit = null;
         DateTime? oldest = null;
         var unknownAge = false;
-        if (listed >= quantity)
+        if (listings.Length > 0)
         {
             var analysis = (await new MarketPriceLadderAnalysisService().AnalyzeAsync(new MarketAnalysisRequest
             {
@@ -573,9 +574,22 @@ public sealed class TradeMarginBasis
                 var worlds = entries.SelectMany(entry => entry.Worlds.Select(world => (entry, world)));
                 if (analysis.CostToCoverUnitPrice > 0)
                 {
-                    var selected = analysis.Worlds.Where(world => world.ActionableCostToCoverTotalGil > 0 && world.ActionableCostToCoverUnitPrice > 0)
-                        .OrderBy(world => world.ActionableCostToCoverTotalGil).ThenBy(world => world.ActionableCostToCoverMaxUnitPrice)
-                        .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase).ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase).First();
+                    // Margins is per unit sold across repeated production, so a purchase costs what
+                    // each unit in the bought listings costs. Charging the whole listing to the
+                    // units used makes a 999-stack of shards the price of five.
+                    var selected = analysis.Worlds.Where(world => world.ActionableCostToCoverTotalGil > 0 && world.ActionableAverageUnitPrice > 0)
+                        .OrderBy(world => world.ActionableAverageUnitPrice).ThenBy(world => world.ActionableCostToCoverMaxUnitPrice)
+                        .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase).ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+                    if (selected == null)
+                    {
+                        selected = analysis.Worlds.Where(world => world.ActionableCostToCoverTotalGil > 0 && world.ActionableCostToCoverUnitPrice > 0)
+                            .OrderBy(world => world.ActionableCostToCoverTotalGil).ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+                            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase).First();
+                    }
+                    else
+                    {
+                        unit = selected.ActionableAverageUnitPrice;
+                    }
                     worlds = worlds.Where(pair => pair.entry.DataCenter == selected.DataCenter && pair.world.WorldName == selected.WorldName);
                 }
                 var contributing = worlds.Where(pair => pair.world.Listings.Count > 0).ToArray();
