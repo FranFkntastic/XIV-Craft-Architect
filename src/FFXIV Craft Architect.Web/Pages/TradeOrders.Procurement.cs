@@ -1278,6 +1278,63 @@ public partial class TradeOrders
             return;
         }
 
+        await ChangeProcurementRowResponsibilityAsync(row, responsibility);
+    }
+
+    private async Task<bool> ChangeProcurementRowResponsibilityAsync(
+        TradeOrderProcurementRow row,
+        CommissionMaterialResponsibility responsibility)
+    {
+        if (row.Responsibility == responsibility)
+        {
+            return true;
+        }
+
+        if (CanRequoteSelectedOrderSupply && !IsRequestedOutputRow(row))
+        {
+            // One re-quote carries both the responsibility and, for a precraft, the acquisition
+            // change that goes with it: company-supplied precrafts become on-hand handoffs, and
+            // handing one back to the crafter crafts it again.
+            WorkerAcquisitionMutation? mutation = null;
+            if (IsSupplyPrecraftRow(row) &&
+                responsibility == CommissionMaterialResponsibility.Provided &&
+                row.Source == AcquisitionSource.Craft)
+            {
+                if (!TradeProcurementSourceMutationPolicy.CanChangeSource(row))
+                {
+                    Snackbar.Add("Open Acquisition Evaluation to change suppressed or reference rows.", Severity.Warning);
+                    return false;
+                }
+
+                mutation = new WorkerAcquisitionMutation(row.ItemId, AcquisitionSource.OnHand, MustBeHq: null);
+            }
+            else if (IsSupplyPrecraftRow(row) &&
+                responsibility == CommissionMaterialResponsibility.Crafter &&
+                row.Source == AcquisitionSource.OnHand &&
+                row.AvailableSources.Contains(AcquisitionSource.Craft) &&
+                TradeProcurementSourceMutationPolicy.CanChangeSource(row))
+            {
+                mutation = new WorkerAcquisitionMutation(row.ItemId, AcquisitionSource.Craft, MustBeHq: null);
+            }
+
+            var requoted = await RequoteSelectedOrderSupplyAsync(
+                row.ItemId,
+                row.RequiresHq,
+                row.ItemName,
+                responsibility,
+                mutation);
+            if (requoted &&
+                responsibility == CommissionMaterialResponsibility.Provided &&
+                row.HasChildren &&
+                !IsSelectedOrderUnpricedSkeleton)
+            {
+                Snackbar.Add(
+                    $"{row.ItemName} is now a company-provided handoff; its recipe subtree is excluded from crafter payment.",
+                    Severity.Success);
+            }
+            return requoted;
+        }
+
         if (responsibility == CommissionMaterialResponsibility.Provided &&
             IsSupplyPrecraftRow(row) &&
             row.Source == AcquisitionSource.Craft)
@@ -1288,7 +1345,7 @@ public partial class TradeOrders
                 showSuccess: false);
             if (!sourceChanged)
             {
-                return;
+                return false;
             }
 
             row = GetSelectedOrderProcurementRows().FirstOrDefault(candidate =>
@@ -1302,7 +1359,7 @@ public partial class TradeOrders
         if (material == null)
         {
             Snackbar.Add("This material is missing from the order payment basis.", Severity.Warning);
-            return;
+            return false;
         }
 
         var saved = await SetOrderMaterialResponsibilityAsync(material, responsibility);
@@ -1314,6 +1371,7 @@ public partial class TradeOrders
                 $"{row.ItemName} is now a company-provided handoff; its recipe subtree is excluded from crafter payment.",
                 Severity.Success);
         }
+        return saved;
     }
 
     private Task OnProcurementSortChanged(WebTableSortState<TradeOrderProcurementColumn> sortState)

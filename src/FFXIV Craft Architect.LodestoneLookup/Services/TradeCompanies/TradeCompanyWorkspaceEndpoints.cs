@@ -18,7 +18,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     TradeCompanyPricingScope? CommissionPricingScope = null,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
     bool FreelancerOpenCommissions = true,
-    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null);
+    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
+    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -33,7 +34,9 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     bool UpdateMarginItems = false,
     bool? FreelancerOpenCommissions = null,
     IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
-    bool UpdateCommissionTemplates = false);
+    bool UpdateCommissionTemplates = false,
+    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null,
+    bool UpdateDefaultCompanySuppliedItems = false);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -94,7 +97,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Profile.CommissionPricingScope,
                         snapshot.Profile.MarginItems,
                         snapshot.Profile.FreelancerOpenCommissions,
-                        snapshot.Profile.CommissionTemplates));
+                        snapshot.Profile.CommissionTemplates,
+                        snapshot.Profile.DefaultCompanySuppliedItems));
             });
 
         companies.MapPut(
@@ -138,6 +142,16 @@ public static class TradeCompanyWorkspaceEndpoints
                 {
                     return Results.BadRequest(new { error = "invalid_commission_templates", message = templateError });
                 }
+                if ((body.UpdateDefaultCompanySuppliedItems || body.DefaultCompanySuppliedItems != null) &&
+                    !TradeCompanySupplyDefaultValidator.IsValid(
+                        body.DefaultCompanySuppliedItems, out var supplyDefaultsError))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_default_company_supplied_items",
+                        message = supplyDefaultsError
+                    });
+                }
 
                 var result = await companies.UpdateCompanyProfileAsync(
                     access,
@@ -154,7 +168,9 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.UpdateMarginItems,
                     body.FreelancerOpenCommissions,
                     body.CommissionTemplates,
-                    body.UpdateCommissionTemplates);
+                    body.UpdateCommissionTemplates,
+                    body.DefaultCompanySuppliedItems,
+                    body.UpdateDefaultCompanySuppliedItems);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

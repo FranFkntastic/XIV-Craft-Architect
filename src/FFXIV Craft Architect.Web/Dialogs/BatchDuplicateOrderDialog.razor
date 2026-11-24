@@ -1,0 +1,82 @@
+<MudDialog>
+    <DialogContent>
+        <div class="batch-duplicate-dialog">
+            <div class="batch-duplicate-fields">
+                <MudNumericField T="int"
+                                 id="batch-duplicate-count"
+                                 Value="@_count"
+                                 ValueChanged="OnCountChanged"
+                                 Label="Copies"
+                                 Min="@MinCopies"
+                                 Max="@MaxCopies"
+                                 Immediate="true"
+                                 HideSpinButtons="true"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 AutoFocus="true"
+                                 Class="batch-duplicate-count" />
+                <MudTextField @bind-Value="_baseTitle"
+                              id="batch-duplicate-title"
+                              Label="Base title"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true" />
+            </div>
+            <div class="batch-duplicate-preview" aria-label="Resulting titles">
+                <span class="batch-duplicate-preview-label">Titles</span>
+                <span class="batch-duplicate-preview-value">@FormatTitle(1)</span>
+                <span class="batch-duplicate-preview-sep" aria-hidden="true">…</span>
+                <span class="batch-duplicate-preview-value">@FormatTitle(_count)</span>
+            </div>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.AccountTree"
+                   OnClick="() => Confirm(price: false)">
+            Initialize @_count.ToString("N0") Plans
+        </MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Payments"
+                   OnClick="() => Confirm(price: true)">
+            Create &amp; Price @_count.ToString("N0") Plans
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private const int MinCopies = 2;
+    private const int MaxCopies = FFXIV_Craft_Architect.Web.Services.TradeOrderBatchDuplicateRequest.MaxCount;
+
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter] public string SourceTitle { get; set; } = string.Empty;
+
+    private int _count = MinCopies;
+    private string _baseTitle = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        _baseTitle = SourceTitle?.Trim() ?? string.Empty;
+    }
+
+    private void OnCountChanged(int count) => _count = Math.Clamp(count, MinCopies, MaxCopies);
+
+    private string EffectiveBaseTitle =>
+        string.IsNullOrWhiteSpace(_baseTitle) ? SourceTitle.Trim() : _baseTitle.Trim();
+
+    private string FormatTitle(int index) => $"{EffectiveBaseTitle} ({index:N0}/{_count:N0})";
+
+    private void Confirm(bool price)
+    {
+        MudDialog.Close(DialogResult.Ok(new BatchDuplicateOrderRequest(
+            Math.Clamp(_count, MinCopies, MaxCopies),
+            string.IsNullOrWhiteSpace(_baseTitle) ? null : _baseTitle.Trim(),
+            price)));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

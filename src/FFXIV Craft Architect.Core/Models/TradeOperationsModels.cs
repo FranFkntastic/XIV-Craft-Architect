@@ -44,6 +44,9 @@ public sealed record TradeCommissionTemplateSupplyChoice(
     CommissionMaterialResponsibility Responsibility = CommissionMaterialResponsibility.Provided,
     AcquisitionSource? AcquisitionSource = null);
 
+/// <summary>A material the company always supplies on new commissions unless a template or order overrides it.</summary>
+public sealed record TradeCompanySupplyDefault(int ItemId, string Name, bool RequiresHq = false);
+
 public sealed record TradeCommissionTemplate
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -81,6 +84,7 @@ public sealed class TradeCompanyProfile
     public bool FreelancerOpenCommissions { get; set; } = true;
     public IReadOnlyList<TradeMarginItem> MarginItems { get; set; } = [];
     public IReadOnlyList<TradeCommissionTemplate> CommissionTemplates { get; set; } = [];
+    public IReadOnlyList<TradeCompanySupplyDefault> DefaultCompanySuppliedItems { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 

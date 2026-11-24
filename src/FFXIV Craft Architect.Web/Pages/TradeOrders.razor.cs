@@ -510,12 +510,22 @@ public partial class TradeOrders
                 NavigationManager.NavigateTo("trade/orders", replace: true);
             }
             var resolvedCompany = requestedWorkspace ?? await ResolveSelectedWorkspaceProfileAsync();
-            if (_companyProfile?.Id != resolvedCompany.Id)
+            var companyChanged = _companyProfile?.Id != resolvedCompany.Id;
+            if (companyChanged)
             {
                 _selectedOrder = null;
                 _selectedOrderProjectionRevision = null;
+                _isTemplateLauncherOpen = false;
+                _newOrderSupplyDefaultsSeeded = false;
+                _newOrderTemplateSupplyKeys = [];
+                _newRequestedOrderSupplyChoices = [];
+                _appliedTemplateName = null;
             }
             _companyProfile = resolvedCompany;
+            if (companyChanged && _showNewOrderPanel)
+            {
+                SeedNewOrderCompanySupplyDefaults();
+            }
             _loadedCompanyQuery = Company;
             _companyMembers = await CompanyHubs.LoadAssignmentMembersAsync(_companyProfile.Id);
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
@@ -740,6 +750,7 @@ public partial class TradeOrders
         _showNewOrderPanel = true;
         _activeOpsTab = 0;
         AppState.SelectTradeOrder(null);
+        SeedNewOrderCompanySupplyDefaults();
         if (string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
         {
             RefreshRequestedOrderSuggestedTitle(force: true);
@@ -769,6 +780,14 @@ public partial class TradeOrders
         _newRequestedOrderPaymentSchedule = CompanyCommissionPaymentSchedule.Advance;
         _newRequestedOrderCustomPaymentTerms = null;
         _appliedTemplateName = null;
+        _newOrderSupplyDefaultsSeeded = false;
+        _newOrderTemplateSupplyKeys = [];
+        ResetNewOrderScale();
+        if (_showNewOrderPanel)
+        {
+            // Clear returns the open editor to a fresh draft, company defaults included.
+            SeedNewOrderCompanySupplyDefaults();
+        }
     }
 
 }

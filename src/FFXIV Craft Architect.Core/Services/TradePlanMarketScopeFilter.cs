@@ -9,7 +9,8 @@ public sealed record TradePlanMarketScopeOccurrence(
     int ItemId,
     bool MustBeHq,
     AcquisitionSource Source,
-    bool IsSuppressed);
+    bool IsSuppressed,
+    AcquisitionSourceReason SourceReason = AcquisitionSourceReason.SystemDefault);
 
 /// <summary>
 /// Decides which market items Trade pricing actually needs. Anything the company supplies
@@ -49,7 +50,8 @@ public static class TradePlanMarketScopeFilter
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
 
         // Suppressed occurrences (under a bought parent) are still walked: labor-aware
-        // craft-vs-buy needs their prices. Only company/on-hand subtrees are pruned.
+        // craft-vs-buy needs their prices. Company/on-hand subtrees and subtrees under a
+        // precraft explicitly locked to a non-craft source are pruned.
         var stack = new Stack<string>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var knownNodeIds = occurrences
@@ -86,6 +88,15 @@ public static class TradePlanMarketScopeFilter
                 if (canBuyFromMarket.Contains(node.ItemId))
                 {
                     required.Add(node.ItemId);
+                }
+
+                // A precraft the user explicitly locked to a non-craft source (Buy NQ/HQ,
+                // vendor, ...) is never crafted, so its ingredients need no listings.
+                // Unlocked precrafts still descend so labor-aware craft-vs-buy keeps working.
+                if (node.SourceReason == AcquisitionSourceReason.UserSelected &&
+                    node.Source != AcquisitionSource.Craft)
+                {
+                    continue;
                 }
 
                 if (visited.Add(node.NodeId))

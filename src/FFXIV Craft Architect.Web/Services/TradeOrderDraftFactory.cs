@@ -216,7 +216,93 @@ public sealed class TradeOrderDraftFactory
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Source);
 
-        var source = request.Source;
+        var order = CreateDuplicateOrder(
+            request.Source,
+            request.CreatedAtUtc,
+            source => FirstNonBlank(request.Title) ??
+                (string.IsNullOrWhiteSpace(source.Title)
+                    ? null
+                    : $"{source.Title.Trim()} (Copy)"));
+        if (order is null)
+        {
+            return TradeOrderSeededDraftResult.Unavailable("The order has no outputs to duplicate.");
+        }
+
+        var supplyChoices = TradeCommissionTemplateMapper.ExtractTemplateSupplyChoices(
+            request.Source,
+            request.Responsibilities,
+            request.LinkedPlan);
+        return TradeOrderSeededDraftResult.Available(
+            order,
+            supplyChoices,
+            TradeCommissionTemplateMapper.ToResponsibilityLines(supplyChoices));
+    }
+
+    /// <summary>
+    /// Count independent drafts of one source order ("Duplicate xN"). Each copy gets its own
+    /// id and a "Title (i/N)" title; all copies share the supply choices and responsibilities
+    /// extracted once from the source, so the caller can build and price the plan once and
+    /// stamp it onto every copy.
+    /// </summary>
+    public TradeOrderBatchSeededDraftResult CreateBatchDuplicates(TradeOrderBatchDuplicateRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Source);
+
+        var count = Math.Clamp(
+            request.Count,
+            TradeOrderBatchDuplicateRequest.MinCount,
+            TradeOrderBatchDuplicateRequest.MaxCount);
+        if (count == 1)
+        {
+            var single = CreateDuplicate(new TradeOrderDuplicateRequest(
+                request.Source,
+                request.CreatedAtUtc,
+                request.BaseTitle,
+                request.Responsibilities,
+                request.LinkedPlan));
+            return single is { CanCreate: true, Order: { } singleOrder }
+                ? TradeOrderBatchSeededDraftResult.Available(
+                    [singleOrder],
+                    single.SupplyChoices,
+                    single.Responsibilities)
+                : TradeOrderBatchSeededDraftResult.Unavailable(
+                    single.Draft.UnavailableReason ?? "The order has no outputs to duplicate.");
+        }
+
+        var orders = new List<TradeOrder>(count);
+        for (var index = 1; index <= count; index++)
+        {
+            var copyIndex = index;
+            var order = CreateDuplicateOrder(
+                request.Source,
+                request.CreatedAtUtc,
+                source => FirstNonBlank(request.BaseTitle, source.Title) is { } baseTitle
+                    ? $"{baseTitle} ({copyIndex}/{count})"
+                    : null);
+            if (order is null)
+            {
+                return TradeOrderBatchSeededDraftResult.Unavailable("The order has no outputs to duplicate.");
+            }
+
+            orders.Add(order);
+        }
+
+        var supplyChoices = TradeCommissionTemplateMapper.ExtractTemplateSupplyChoices(
+            request.Source,
+            request.Responsibilities,
+            request.LinkedPlan);
+        return TradeOrderBatchSeededDraftResult.Available(
+            orders,
+            supplyChoices,
+            TradeCommissionTemplateMapper.ToResponsibilityLines(supplyChoices));
+    }
+
+    private static TradeOrder? CreateDuplicateOrder(
+        TradeOrder source,
+        DateTime createdAtUtc,
+        Func<TradeOrder, string?> resolveTitle)
+    {
         var estimatedValues = (source.SourceSnapshot?.RootItems ?? [])
             .GroupBy(item => (item.ItemId, item.MustBeHq))
             .ToDictionary(group => group.Key, group => group.First());
@@ -237,14 +323,11 @@ public sealed class TradeOrderDraftFactory
             .ToArray();
         if (rootItems.Length == 0)
         {
-            return TradeOrderSeededDraftResult.Unavailable("The order has no outputs to duplicate.");
+            return null;
         }
 
         var (schedule, customTerms) = TradeCommissionTemplateMapper.ResolvePaymentSchedule(source);
-        var title = FirstNonBlank(request.Title) ??
-            (string.IsNullOrWhiteSpace(source.Title)
-                ? CreateSuggestedTitle(rootItems)
-                : $"{source.Title.Trim()} (Copy)");
+        var title = resolveTitle(source) ?? CreateSuggestedTitle(rootItems);
         var snapshot = source.SourceSnapshot;
         var pricingScope = snapshot is { MarketFetchScope: { } scope } &&
             !string.IsNullOrWhiteSpace(snapshot.Region)
@@ -254,7 +337,7 @@ public sealed class TradeOrderDraftFactory
                     snapshot.DataCenter,
                     snapshot.RequestedDataCenters)
                 : null;
-        var order = CreateSeededOrder(
+        return CreateSeededOrder(
             source.CompanyProfileId,
             assignedCrafterId: null,
             title,
@@ -266,15 +349,7 @@ public sealed class TradeOrderDraftFactory
             pricingScope,
             snapshot?.World,
             $"Duplicated from \"{source.Title}\".",
-            request.CreatedAtUtc);
-        var supplyChoices = TradeCommissionTemplateMapper.ExtractTemplateSupplyChoices(
-            source,
-            request.Responsibilities,
-            request.LinkedPlan);
-        return TradeOrderSeededDraftResult.Available(
-            order,
-            supplyChoices,
-            TradeCommissionTemplateMapper.ToResponsibilityLines(supplyChoices));
+            createdAtUtc);
     }
 
     private static TradeOrder CreateSeededOrder(
@@ -472,6 +547,39 @@ public sealed record TradeOrderDuplicateRequest(
     // The source order's payroll draft and linked plan, when loaded, carry its supply choices.
     TradePayrollWorkflowDraft? Responsibilities = null,
     StoredPlan? LinkedPlan = null);
+
+public sealed record TradeOrderBatchDuplicateRequest(
+    TradeOrder Source,
+    int Count,
+    DateTime CreatedAtUtc,
+    string? BaseTitle = null,
+    TradePayrollWorkflowDraft? Responsibilities = null,
+    StoredPlan? LinkedPlan = null)
+{
+    public const int MinCount = 1;
+    public const int MaxCount = 20;
+}
+
+/// <summary>
+/// Independent draft copies plus the supply choices and responsibilities they share, so the
+/// caller can build and price one plan and stamp it onto every copy.
+/// </summary>
+public sealed record TradeOrderBatchSeededDraftResult(
+    bool CanCreate,
+    IReadOnlyList<TradeOrder> Orders,
+    IReadOnlyList<TradeCommissionTemplateSupplyChoice> SupplyChoices,
+    IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities,
+    string? UnavailableReason = null)
+{
+    public static TradeOrderBatchSeededDraftResult Available(
+        IReadOnlyList<TradeOrder> orders,
+        IReadOnlyList<TradeCommissionTemplateSupplyChoice> supplyChoices,
+        IReadOnlyList<TradePayrollResponsibilityLine> responsibilities) =>
+        new(true, orders, supplyChoices, responsibilities);
+
+    public static TradeOrderBatchSeededDraftResult Unavailable(string reason) =>
+        new(false, [], [], [], reason);
+}
 
 /// <summary>A new draft plus the supply choices to apply when its plan is initialized.</summary>
 public sealed record TradeOrderSeededDraftResult(

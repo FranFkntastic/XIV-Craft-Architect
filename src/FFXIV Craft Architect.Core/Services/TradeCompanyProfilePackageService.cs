@@ -42,6 +42,7 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.CommissionPricingScope = sourceProfile.CommissionPricingScope;
         importedProfile.MarginItems = (sourceProfile.MarginItems ?? []).ToArray();
         importedProfile.CommissionTemplates = (sourceProfile.CommissionTemplates ?? []).ToArray();
+        importedProfile.DefaultCompanySuppliedItems = (sourceProfile.DefaultCompanySuppliedItems ?? []).ToArray();
         importedProfile.FreelancerOpenCommissions = sourceProfile.FreelancerOpenCommissions;
 
         var importedCrafters = package.Crafters
@@ -94,6 +95,7 @@ public sealed class TradeCompanyProfilePackageService
             CommissionPricingScope = profile.CommissionPricingScope,
             MarginItems = (profile.MarginItems ?? []).ToArray(),
             CommissionTemplates = (profile.CommissionTemplates ?? []).ToArray(),
+            DefaultCompanySuppliedItems = (profile.DefaultCompanySuppliedItems ?? []).ToArray(),
             FreelancerOpenCommissions = profile.FreelancerOpenCommissions,
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc

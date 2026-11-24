@@ -72,6 +72,7 @@ public partial class TradeOrders
                 Quantity = 1
             });
         }
+        SnapshotNewOrderScaleBase();
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle ||
             string.IsNullOrWhiteSpace(_newRequestedOrderTitle));
     }
@@ -218,6 +219,7 @@ public partial class TradeOrders
         _requestedOrderSearchResults = [];
         _isSearchingRequestedOrderItems = false;
         _requestedOrderAddQuantity = 1;
+        SnapshotNewOrderScaleBase();
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
     }
 
@@ -231,17 +233,20 @@ public partial class TradeOrders
     private void UpdateRequestedOrderOutputQuantity(RequestedOrderOutputEditor output, int quantity)
     {
         output.Quantity = Math.Clamp(quantity, 1, 9999);
+        SnapshotNewOrderScaleBase();
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
     }
 
     private void UpdateRequestedOrderOutputHq(RequestedOrderOutputEditor output, bool mustBeHq)
     {
         output.MustBeHq = mustBeHq;
+        UpdateNewOrderScaleBaseHq(_requestedOrderOutputs.IndexOf(output), mustBeHq);
     }
 
     private void RemoveRequestedOrderOutput(RequestedOrderOutputEditor output)
     {
         _requestedOrderOutputs.Remove(output);
+        SnapshotNewOrderScaleBase();
         RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
     }
 
@@ -501,41 +506,34 @@ public partial class TradeOrders
             return;
         }
 
+        // Company defaults apply to the plan's materials, never to its requested outputs.
+        var companyDefaults = GetCompanyDefaultSupplyChoicesFor(
+            (orderToSave.SourceSnapshot?.RootItems ?? []).Select(item => item.ItemId));
         var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
             orderToSave,
             new TradeOrderPricingWorkflowOptions(
                 ForceRefreshMarketData: false,
                 MaterialPricingPolicy: companyProfile.MaterialPricingPolicy,
-                ReuseMatchingActivePlan: true));
-        if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
-        {
-            if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
-            {
-                ShowCompanyPricingRequired(pricingResult);
-            }
-            else
-            {
-                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
-            }
-            return;
-        }
+                ReuseMatchingActivePlan: true,
+                InitialSupplyChoices: companyDefaults.Count > 0 ? companyDefaults : null));
 
-        pricingResult.UpdatedOrder.PaymentPolicyOverride =
-            TradeOrderWorkflow.ResolvePaymentPolicy(
-                pricingResult.UpdatedOrder,
-                companyProfile.PaymentPolicy);
-
-        var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
-        if (!saved)
+        // Only defaults that matched a material in this plan become the draft's responsibilities.
+        var planMaterials = (pricingResult.UpdatedOrder?.SourceSnapshot?.Materials ?? [])
+            .Select(material => (material.ItemId, material.RequiresHq))
+            .ToHashSet();
+        var responsibilities = TradeCommissionTemplateMapper.ToResponsibilityLines(
+            companyDefaults
+                .Where(choice => planMaterials.Contains((choice.ItemId, choice.RequiresHq)))
+                .ToArray());
+        if (await SaveSeededOrderAsync(pricingResult, responsibilities, companyProfile) is not { } created)
         {
-            Snackbar.Add("Failed to save Trade order.", Severity.Error);
             return;
         }
 
         _pendingImport = null;
         _newOrderTitle = string.Empty;
         _newOrderCrafterId = null;
-        if (!await SelectCreatedOrderAsync(pricingResult.UpdatedOrder.Id))
+        if (!await SelectCreatedOrderAsync(created.Id))
         {
             return;
         }
