@@ -122,7 +122,8 @@ public sealed partial class CompanyHubClient(
         long expectedRevision,
         CancellationToken cancellationToken = default,
         bool updateMarginItems = false,
-        bool updateCommissionTemplates = false)
+        bool updateCommissionTemplates = false,
+        bool updateDefaultCompanySuppliedItems = false)
     {
         using var response = await SendAsync(
             HttpMethod.Put,
@@ -141,7 +142,11 @@ public sealed partial class CompanyHubClient(
                 UpdateMarginItems = updateMarginItems,
                 profile.FreelancerOpenCommissions,
                 CommissionTemplates = updateCommissionTemplates ? profile.CommissionTemplates : null,
-                UpdateCommissionTemplates = updateCommissionTemplates
+                UpdateCommissionTemplates = updateCommissionTemplates,
+                DefaultCompanySuppliedItems = updateDefaultCompanySuppliedItems
+                    ? profile.DefaultCompanySuppliedItems
+                    : null,
+                UpdateDefaultCompanySuppliedItems = updateDefaultCompanySuppliedItems
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
@@ -686,7 +691,8 @@ public sealed record TradeCompanyWorkspaceProfile(
     TradeCompanyPricingScope? CommissionPricingScope = null,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
     bool FreelancerOpenCommissions = true,
-    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null)
+    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
+    IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -699,6 +705,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         CommissionPricingScope = CommissionPricingScope,
         MarginItems = MarginItems ?? [],
         CommissionTemplates = CommissionTemplates ?? [],
+        DefaultCompanySuppliedItems = DefaultCompanySuppliedItems ?? [],
         FreelancerOpenCommissions = FreelancerOpenCommissions,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,

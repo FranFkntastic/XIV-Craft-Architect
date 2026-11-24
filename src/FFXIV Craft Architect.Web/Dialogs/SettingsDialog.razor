@@ -25,6 +25,7 @@
 @inject IMarketCacheService MarketCache
 @inject GitHubIssueReportService GitHubIssueReportService
 @inject IJSRuntime JSRuntime
+@inject GarlandService GarlandService
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -442,6 +443,82 @@
                     <MudNumericField T="decimal" @bind-Value="_materialMaximumAllowanceGil" Label="Maximum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="int" @bind-Value="_materialQuoteLifetimeMinutes" Label="Open quote lifetime" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="int" @bind-Value="_materialMaximumEvidenceAgeMinutes" Label="Stale listing warning threshold" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Default company-supplied materials</MudText>
+                    <div class="company-supply-defaults">
+                        @if (CompanySupplyDefaultItems.Count > 0)
+                        {
+                            <div class="company-supply-default-chips" aria-label="Default company-supplied materials">
+                                @foreach (var item in CompanySupplyDefaultItems)
+                                {
+                                    var displayName = FormatSupplyDefaultName(item);
+                                    var removeLabel = $"Remove {displayName}{(item.RequiresHq ? " (HQ)" : string.Empty)} from company defaults";
+                                    <span class="company-supply-default-chip" @key="(item.ItemId, item.RequiresHq)">
+                                        <span class="company-supply-default-name" title="@displayName">@displayName</span>
+                                        @if (item.RequiresHq)
+                                        {
+                                            <span class="company-supply-default-hq">HQ</span>
+                                        }
+                                        <button type="button"
+                                                class="company-supply-default-remove"
+                                                title="@removeLabel"
+                                                aria-label="@removeLabel"
+                                                disabled="@(!CanEditSupplyDefaults)"
+                                                @onclick="() => RemoveSupplyDefaultAsync(item)">×</button>
+                                    </span>
+                                }
+                            </div>
+                        }
+                        <div class="company-supply-default-search">
+                            <MudTextField T="string"
+                                          id="company-supply-default-search"
+                                          Value="@_supplyDefaultSearch"
+                                          ValueChanged="OnSupplyDefaultSearchChangedAsync"
+                                          OnKeyDown="OnSupplyDefaultSearchKeyDown"
+                                          Label="Add material"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Immediate="true"
+                                          Disabled="@(!CanEditSupplyDefaults)"
+                                          Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.Search" />
+                            <button type="button"
+                                    class="@($"company-supply-default-hq-toggle{(_supplyDefaultRequiresHq ? " is-active" : string.Empty)}")"
+                                    title="@(_supplyDefaultRequiresHq ? "Adding as HQ" : "Adding as NQ")"
+                                    aria-label="Require HQ"
+                                    aria-pressed="@(_supplyDefaultRequiresHq ? "true" : "false")"
+                                    disabled="@(!CanEditSupplyDefaults)"
+                                    @onclick="ToggleSupplyDefaultHq">HQ</button>
+                        </div>
+                        @if (_isSearchingSupplyDefaults)
+                        {
+                            <MudProgressLinear Indeterminate="true" Class="company-supply-default-progress" />
+                        }
+                        @if (_supplyDefaultResults.Count > 0)
+                        {
+                            <div class="company-supply-default-results" role="listbox" aria-label="Material search results">
+                                @foreach (var result in _supplyDefaultResults)
+                                {
+                                    var resultName = FormatSupplyDefaultResultName(result);
+                                    var alreadyAdded = IsCompanySupplyDefault(result.Id, _supplyDefaultRequiresHq);
+                                    <button type="button"
+                                            class="company-supply-default-result"
+                                            role="option"
+                                            aria-selected="false"
+                                            title="@(alreadyAdded ? $"{resultName} is already a default" : $"Add {resultName}{(_supplyDefaultRequiresHq ? " (HQ)" : string.Empty)}")"
+                                            disabled="@(alreadyAdded || !CanEditSupplyDefaults)"
+                                            @key="result.Id"
+                                            @onclick="() => AddSupplyDefaultAsync(result)">
+                                        <span class="company-supply-default-name">@resultName</span>
+                                        @if (alreadyAdded)
+                                        {
+                                            <span class="company-supply-default-result-state">Added</span>
+                                        }
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </div>
 
                     @if (!_companyProfileIsHosted)
                     {
@@ -1613,6 +1690,10 @@
         var latest = (await TradeOperationsPersistence.LoadCompanyProfilesAsync()).SingleOrDefault(item => item.Id == profile.Id)
             ?? throw new InvalidOperationException("The company is no longer available.");
         profile.MarginItems = latest.MarginItems;
+        // Templates and supply defaults have their own rebase-and-retry saves; a regular
+        // company save never rewrites them from this dialog's snapshot.
+        profile.CommissionTemplates = latest.CommissionTemplates;
+        profile.DefaultCompanySuppliedItems = latest.DefaultCompanySuppliedItems;
         if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
         {
             return false;
@@ -1622,6 +1703,219 @@
             ProfileSyncCollections.TradeCompanyProfiles,
             profile.Id.ToString("D"));
         return true;
+    }
+
+    private const int SupplyDefaultSearchMinimumLength = 2;
+    private const int SupplyDefaultSearchDebounceMilliseconds = 250;
+
+    private string _supplyDefaultSearch = string.Empty;
+    private int _supplyDefaultSearchGeneration;
+    private bool _isSearchingSupplyDefaults;
+    private bool _supplyDefaultRequiresHq;
+    private bool _isSavingSupplyDefaults;
+    private IReadOnlyList<GarlandSearchResult> _supplyDefaultResults = [];
+
+    private IReadOnlyList<TradeCompanySupplyDefault> CompanySupplyDefaultItems =>
+        _companyProfile?.DefaultCompanySuppliedItems ?? [];
+
+    private bool CanEditSupplyDefaults =>
+        _companyProfile != null && _canAdministerCompany && !_companyIsBusy && !_isSavingSupplyDefaults;
+
+    private bool IsCompanySupplyDefault(int itemId, bool requiresHq) =>
+        CompanySupplyDefaultItems.Any(item => item.ItemId == itemId && item.RequiresHq == requiresHq);
+
+    // Name-first; the item id is appended only when two different items share a name.
+    private string FormatSupplyDefaultName(TradeCompanySupplyDefault item) =>
+        CompanySupplyDefaultItems.Any(other =>
+            other.ItemId != item.ItemId &&
+            string.Equals(other.Name, item.Name, StringComparison.OrdinalIgnoreCase))
+            ? $"{item.Name} · #{item.ItemId}"
+            : item.Name;
+
+    private string FormatSupplyDefaultResultName(GarlandSearchResult result) =>
+        _supplyDefaultResults.Any(other =>
+            other.Id != result.Id &&
+            string.Equals(other.Object.Name, result.Object.Name, StringComparison.OrdinalIgnoreCase))
+            ? $"{result.Object.Name} · #{result.Id}"
+            : result.Object.Name;
+
+    private async Task OnSupplyDefaultSearchChangedAsync(string? value)
+    {
+        _supplyDefaultSearch = value ?? string.Empty;
+        var generation = ++_supplyDefaultSearchGeneration;
+        var query = _supplyDefaultSearch.Trim();
+        if (query.Length < SupplyDefaultSearchMinimumLength)
+        {
+            _supplyDefaultResults = [];
+            _isSearchingSupplyDefaults = false;
+            return;
+        }
+
+        await Task.Delay(SupplyDefaultSearchDebounceMilliseconds);
+        if (generation != _supplyDefaultSearchGeneration)
+        {
+            return;
+        }
+
+        _isSearchingSupplyDefaults = true;
+        StateHasChanged();
+        try
+        {
+            var results = (await GarlandService.SearchAsync(query))
+                .Where(result => result.Id > 0 && !string.IsNullOrWhiteSpace(result.Object.Name))
+                .Take(8)
+                .ToArray();
+            if (generation == _supplyDefaultSearchGeneration)
+            {
+                _supplyDefaultResults = results;
+            }
+        }
+        catch (Exception ex)
+        {
+            if (generation == _supplyDefaultSearchGeneration)
+            {
+                _supplyDefaultResults = [];
+                Snackbar.Add($"Item search failed: {ex.Message}", Severity.Error);
+            }
+        }
+        finally
+        {
+            if (generation == _supplyDefaultSearchGeneration)
+            {
+                _isSearchingSupplyDefaults = false;
+            }
+        }
+    }
+
+    private void OnSupplyDefaultSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            ++_supplyDefaultSearchGeneration;
+            _supplyDefaultSearch = string.Empty;
+            _supplyDefaultResults = [];
+            _isSearchingSupplyDefaults = false;
+        }
+    }
+
+    private void ToggleSupplyDefaultHq() => _supplyDefaultRequiresHq = !_supplyDefaultRequiresHq;
+
+    private async Task AddSupplyDefaultAsync(GarlandSearchResult result)
+    {
+        var requiresHq = _supplyDefaultRequiresHq;
+        if (IsCompanySupplyDefault(result.Id, requiresHq))
+        {
+            return;
+        }
+
+        var item = TradeCompanySupplyDefaultValidator.Normalize(
+            new TradeCompanySupplyDefault(result.Id, result.Object.Name, requiresHq));
+        if (await SaveSupplyDefaultsAsync(defaults => defaults
+                .Where(existing => existing.ItemId != item.ItemId || existing.RequiresHq != item.RequiresHq)
+                .Append(item)
+                .ToArray()))
+        {
+            ++_supplyDefaultSearchGeneration;
+            _supplyDefaultSearch = string.Empty;
+            _supplyDefaultResults = [];
+            _isSearchingSupplyDefaults = false;
+        }
+    }
+
+    private Task RemoveSupplyDefaultAsync(TradeCompanySupplyDefault item) =>
+        SaveSupplyDefaultsAsync(defaults => defaults
+            .Where(existing => existing.ItemId != item.ItemId || existing.RequiresHq != item.RequiresHq)
+            .ToArray());
+
+    /// <summary>
+    /// Applies one edit to the latest stored defaults and saves only that collection,
+    /// rebasing and retrying once on a concurrent hosted write.
+    /// </summary>
+    private async Task<bool> SaveSupplyDefaultsAsync(
+        Func<IReadOnlyList<TradeCompanySupplyDefault>, IReadOnlyList<TradeCompanySupplyDefault>> edit)
+    {
+        if (!CanEditSupplyDefaults || _companyProfile == null)
+        {
+            return false;
+        }
+
+        _isSavingSupplyDefaults = true;
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var current = await WorkspaceProfiles.ResolveAsync(_companyProfile.Id);
+                var defaults = edit(current.Profile.DefaultCompanySuppliedItems ?? [])
+                    .Select(TradeCompanySupplyDefaultValidator.Normalize)
+                    .ToArray();
+                if (!TradeCompanySupplyDefaultValidator.IsValid(defaults, out var error))
+                {
+                    Snackbar.Add(error ?? "The company defaults are invalid.", Severity.Warning);
+                    return false;
+                }
+
+                current.Profile.DefaultCompanySuppliedItems = defaults;
+                try
+                {
+                    if (current.IsHosted)
+                    {
+                        var resolvedRevision = current.HostedRevision
+                            ?? throw new InvalidOperationException("The hosted company policy revision is unavailable.");
+                        var revision = await CompanyHubClient.UpdateWorkspaceProfileAsync(
+                            current.Profile,
+                            resolvedRevision,
+                            updateDefaultCompanySuppliedItems: true);
+                        // Advance only when this dialog was already current; otherwise the regular
+                        // save must still detect the other writer's change.
+                        if (_companyProfileRevision == resolvedRevision)
+                        {
+                            _companyProfileRevision = revision;
+                        }
+                    }
+                    else
+                    {
+                        if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(current.Profile))
+                        {
+                            Snackbar.Add("Could not save the company defaults.", Severity.Error);
+                            return false;
+                        }
+
+                        try
+                        {
+                            await ProfileSync.QueueLocalSaveAsync(
+                                ProfileSyncCollections.TradeCompanyProfiles,
+                                current.Profile.Id.ToString("D"));
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"Company supply defaults sync queue failed: {ex.Message}");
+                        }
+                    }
+
+                    if (_companyProfile?.Id == current.Profile.Id)
+                    {
+                        _companyProfile.DefaultCompanySuppliedItems = defaults;
+                    }
+                    return true;
+                }
+                catch (FFXIV_Craft_Architect.Web.Services.TradeCompany.CompanyHubRequestException ex)
+                    when (ex.StatusCode == System.Net.HttpStatusCode.Conflict && attempt == 0)
+                {
+                }
+            }
+
+            Snackbar.Add("Company defaults changed elsewhere; try again.", Severity.Warning);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to update company defaults: {ex.Message}", Severity.Error);
+            return false;
+        }
+        finally
+        {
+            _isSavingSupplyDefaults = false;
+        }
     }
 
     private void ApplyCompanyProfileFields(TradeCompanyProfile profile)

@@ -162,6 +162,72 @@ public static class TradeCommissionTemplateMapper
             .ToArray();
     }
 
+    public const int MinScaleMultiplier = 1;
+    public const int MaxScaleMultiplier = 99;
+
+    /// <summary>
+    /// Company-wide "always company-supplied" defaults with explicit template/order choices
+    /// layered on top. An explicit choice for the same (item, HQ) key always wins.
+    /// </summary>
+    public static IReadOnlyList<TradeCommissionTemplateSupplyChoice> MergeCompanySupplyDefaults(
+        IReadOnlyList<TradeCompanySupplyDefault>? companyDefaults,
+        IReadOnlyList<TradeCommissionTemplateSupplyChoice>? explicitChoices)
+    {
+        var merged = new Dictionary<(int ItemId, bool RequiresHq), TradeCommissionTemplateSupplyChoice>();
+        foreach (var item in companyDefaults ?? [])
+        {
+            if (item is null || item.ItemId <= 0)
+            {
+                continue;
+            }
+
+            merged[(item.ItemId, item.RequiresHq)] = new TradeCommissionTemplateSupplyChoice(
+                item.ItemId,
+                item.Name?.Trim() ?? string.Empty,
+                item.RequiresHq,
+                CommissionMaterialResponsibility.Provided,
+                AcquisitionSource: null);
+        }
+
+        foreach (var choice in explicitChoices ?? [])
+        {
+            if (choice is null)
+            {
+                continue;
+            }
+
+            merged[(choice.ItemId, choice.RequiresHq)] = choice;
+        }
+
+        return merged.Values
+            .OrderBy(choice => choice.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(choice => choice.ItemId)
+            .ThenBy(choice => choice.RequiresHq)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Multiplies every output quantity by <paramref name="multiplier"/> (clamped to
+    /// 1..99), keeping each quantity inside the template's 1..9999 bounds.
+    /// </summary>
+    public static IReadOnlyList<TradeCommissionTemplateOutput> ScaleOutputs(
+        IReadOnlyList<TradeCommissionTemplateOutput> outputs,
+        int multiplier)
+    {
+        ArgumentNullException.ThrowIfNull(outputs);
+
+        var clampedMultiplier = Math.Clamp(multiplier, MinScaleMultiplier, MaxScaleMultiplier);
+        return outputs
+            .Select(output => output with
+            {
+                Quantity = (int)Math.Clamp(
+                    (long)output.Quantity * clampedMultiplier,
+                    1,
+                    TradeCommissionTemplateValidator.MaxOutputQuantity)
+            })
+            .ToArray();
+    }
+
     /// <summary>Template supply choices as payroll responsibility lines.</summary>
     public static IReadOnlyList<TradePayrollResponsibilityLine> ToResponsibilityLines(
         IReadOnlyList<TradeCommissionTemplateSupplyChoice>? supplyChoices) =>

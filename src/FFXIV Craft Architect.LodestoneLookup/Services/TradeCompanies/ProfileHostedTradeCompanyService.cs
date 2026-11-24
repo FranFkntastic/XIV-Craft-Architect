@@ -631,7 +631,9 @@ public sealed partial class ProfileHostedTradeCompanyService(
         bool updateMarginItems = false,
         bool? freelancerOpenCommissions = null,
         IReadOnlyList<TradeCommissionTemplate>? commissionTemplates = null,
-        bool updateCommissionTemplates = false)
+        bool updateCommissionTemplates = false,
+        IReadOnlyList<TradeCompanySupplyDefault>? defaultCompanySuppliedItems = null,
+        bool updateDefaultCompanySuppliedItems = false)
     {
         var snapshot = await LoadCompanyProfileSnapshotAsync(access, cancellationToken);
         if (snapshot == null)
@@ -676,6 +678,12 @@ public sealed partial class ProfileHostedTradeCompanyService(
                 .Select(TradeCommissionTemplateValidator.Normalize)
                 .ToArray();
         }
+        if (updateDefaultCompanySuppliedItems)
+        {
+            updated.DefaultCompanySuppliedItems = (defaultCompanySuppliedItems ?? [])
+                .Select(TradeCompanySupplyDefaultValidator.Normalize)
+                .ToArray();
+        }
         updated.UpdatedAtUtc = DateTime.UtcNow;
         updated.SyncState = TradeSyncState.Synced;
 
@@ -689,7 +697,8 @@ public sealed partial class ProfileHostedTradeCompanyService(
             allowCompanyCollection: true,
             updateMarginItems: updateMarginItems,
             updateFreelancerOpenCommissions: freelancerOpenCommissions.HasValue,
-            updateCommissionTemplates: updateCommissionTemplates);
+            updateCommissionTemplates: updateCommissionTemplates,
+            updateDefaultCompanySuppliedItems: updateDefaultCompanySuppliedItems);
         var appliedRevision = put.Object?.Revision ?? put.RemoteObject?.Revision;
         return put.Success && appliedRevision.HasValue
             ? new CompanyHubMutationResult(

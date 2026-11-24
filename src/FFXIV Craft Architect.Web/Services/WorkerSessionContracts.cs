@@ -217,7 +217,8 @@ public sealed record WorkerPlanOccurrence(
     int Quantity,
     AcquisitionSource Source,
     bool IsActiveProcurement,
-    bool IsSuppressed);
+    bool IsSuppressed,
+    AcquisitionSourceReason SourceReason = AcquisitionSourceReason.SystemDefault);
 
 public sealed record WorkerSessionMutationProjection(
     WorkerSessionShellProjection Shell,

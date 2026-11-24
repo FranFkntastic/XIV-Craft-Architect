@@ -33,6 +33,16 @@ public partial class TradeOrders
             return false;
         }
 
+        if (material.Responsibility != responsibility && CanRequoteSelectedOrderSupply)
+        {
+            return await RequoteSelectedOrderSupplyAsync(
+                material.ItemId,
+                material.RequiresHq,
+                material.Name,
+                responsibility,
+                acquisitionMutation: null);
+        }
+
         var orderId = _selectedOrder.Id;
         var activeOpsTab = _activeOpsTab;
         var currentDraft = _selectedOrder.CompanyCommission != null
@@ -118,6 +128,200 @@ public partial class TradeOrders
             }
         }
         return true;
+    }
+
+    /// <summary>
+    /// Whether a Crafter/Company toggle re-quotes the selected order in place against its linked
+    /// plan (one workflow call, no plan rebuild, no market fetch when the live session already
+    /// holds the evidence) instead of saving responsibility and repricing separately.
+    /// </summary>
+    private bool CanRequoteSelectedOrderSupply =>
+        _selectedOrder != null &&
+        _companyProfile != null &&
+        HasLinkedCraftPlan(_selectedOrder) &&
+        CanEditSelectedOrderPlan &&
+        (IsSelectedOrderUnpricedSkeleton ||
+         _selectedOrder.SourceSnapshot?.CostBasis == CommissionCostBasis.ProcurementRoute);
+
+    /// <summary>
+    /// Moves one material between crafter and company supply and re-quotes the order in a single
+    /// <see cref="TradeOrderPricingWorkflowService.RequoteActivePlanAsync"/> pass, optionally with
+    /// the acquisition change that goes with it (a precraft becoming a company on-hand handoff, or
+    /// going back to being crafted). Nothing is saved unless the re-quote succeeds; a failed save
+    /// restores the previous linked plan revision.
+    /// </summary>
+    private async Task<bool> RequoteSelectedOrderSupplyAsync(
+        int itemId,
+        bool requiresHq,
+        string itemName,
+        CommissionMaterialResponsibility responsibility,
+        WorkerAcquisitionMutation? acquisitionMutation)
+    {
+        var order = _selectedOrder;
+        var companyProfile = _companyProfile;
+        if (order == null || companyProfile == null || _isChangingProcurementSource)
+        {
+            return false;
+        }
+
+        _isChangingProcurementSource = true;
+        var orderId = order.Id;
+        var activeOpsTab = _activeOpsTab;
+        var isCanonical = order.CompanyCommission != null;
+        var isUnpricedSkeleton = IsSelectedOrderUnpricedSkeleton;
+        StoredPlan? rollbackPlan = null;
+        TradeOrderPricingWorkflowResult? result = null;
+        FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionOperatorResult? commissionResult = null;
+        try
+        {
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Changing material supply",
+                order.CraftPlanId))
+            {
+                return false;
+            }
+
+            var currentDraft = isCanonical
+                ? GetSelectedOrderResponsibilityProjection() ?? new TradePayrollWorkflowDraft
+                {
+                    CompanyProfileId = order.CompanyProfileId,
+                    OrderId = order.Id
+                }
+                : await GetOrCreatePayrollDraftForOrderAsync(order);
+            var draftToSave = TradeOrderWorkflow.WithMaterialResponsibility(
+                currentDraft,
+                itemId,
+                requiresHq,
+                responsibility);
+
+            rollbackPlan = await PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId!);
+            if (acquisitionMutation != null &&
+                rollbackPlan != null &&
+                IsEditingCommissionTermsRevision &&
+                _commissionTermsRevisionRollbackPlan == null)
+            {
+                _commissionTermsRevisionRollbackPlan = rollbackPlan;
+            }
+
+            result = await TradeOrderPricingWorkflow.RequoteActivePlanAsync(
+                TradeOrderWorkflow.CopyOrder(order),
+                new TradeOrderRequoteOptions(
+                    companyProfile.MaterialPricingPolicy,
+                    draftToSave.Responsibilities,
+                    acquisitionMutation));
+            if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
+            {
+                await RollbackSupplyRequoteAsync(rollbackPlan, result.ActivePlanFence);
+                if (result.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+                {
+                    ShowCompanyPricingRequired(result);
+                }
+                else if (result.Status != TradeOrderPricingWorkflowStatus.Canceled)
+                {
+                    Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+                }
+                return false;
+            }
+
+            var updated = result.UpdatedOrder;
+            if (isCanonical)
+            {
+                var savedCanonical = await UpdateCanonicalDraftAsync(
+                    updated,
+                    BuildCommissionBrief(
+                        updated,
+                        TradeCommissionPaymentSummary.FromOrder(
+                            updated,
+                            draftToSave,
+                            GetSelectedOrderEffectivePaymentPolicy())),
+                    $"{itemName} responsibility saved to the commission draft",
+                    observed => commissionResult = observed);
+                if (!savedCanonical)
+                {
+                    if (commissionResult?.HostCommitted != true)
+                    {
+                        await RollbackSupplyRequoteAsync(rollbackPlan, result.ActivePlanFence);
+                    }
+                    return false;
+                }
+            }
+            else
+            {
+                if (!await TradePayrollPersistence.SaveDraftAsync(draftToSave))
+                {
+                    await RollbackSupplyRequoteAsync(rollbackPlan, result.ActivePlanFence);
+                    Snackbar.Add("Failed to save payment responsibility.", Severity.Error);
+                    return false;
+                }
+
+                ReplaceCachedPayrollDraft(draftToSave);
+                if (!string.Equals(updated.PayrollDraftId, draftToSave.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    updated.PayrollDraftId = draftToSave.Id;
+                    TradeOrderWorkflow.AppendPayrollLinkedHistory(updated, DateTime.UtcNow);
+                }
+
+                if (!await SaveOrderAndNotifyAsync(updated))
+                {
+                    // Keep the responsibility draft and the linked plan in step with the order
+                    // that is still saved.
+                    if (await TradePayrollPersistence.SaveDraftAsync(currentDraft))
+                    {
+                        ReplaceCachedPayrollDraft(currentDraft);
+                    }
+                    await RollbackSupplyRequoteAsync(rollbackPlan, result.ActivePlanFence);
+                    Snackbar.Add("The supply change was not committed.", Severity.Error);
+                    return false;
+                }
+
+                if (await SelectCreatedOrderAsync(orderId))
+                {
+                    _activeOpsTab = activeOpsTab;
+                }
+            }
+
+            ClearLiveProcurementSnapshot();
+            await EnsureLiveProcurementSnapshotAsync();
+
+            // Skeleton edits are visible in the grid itself; only priced edits report a result.
+            if (!isUnpricedSkeleton && !isCanonical)
+            {
+                Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (commissionResult?.HostCommitted != true && result != null)
+            {
+                await RollbackSupplyRequoteAsync(rollbackPlan, result.ActivePlanFence);
+            }
+            Snackbar.Add($"Failed to change material supply: {ex.Message}", Severity.Error);
+            return false;
+        }
+        finally
+        {
+            _isChangingProcurementSource = false;
+            ScheduleSelectedOrderPlanRestoration();
+        }
+    }
+
+    private async Task RollbackSupplyRequoteAsync(
+        StoredPlan? rollbackPlan,
+        WorkerPlanOwnershipFence? fence)
+    {
+        if (rollbackPlan != null && fence is { } stagedFence)
+        {
+            await RestoreStagedProcurementPlanAsync(rollbackPlan, stagedFence);
+        }
+    }
+
+    private void ReplaceCachedPayrollDraft(TradePayrollWorkflowDraft draft)
+    {
+        _payrollDrafts = _payrollDrafts
+            .Where(existing => existing.Id != draft.Id)
+            .Append(draft)
+            .ToList();
     }
 
     private async Task<TradePayrollWorkflowDraft> GetOrCreatePayrollDraftForOrderAsync(TradeOrder order)

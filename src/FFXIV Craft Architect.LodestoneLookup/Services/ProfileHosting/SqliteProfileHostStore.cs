@@ -1827,7 +1827,8 @@ public sealed partial class SqliteProfileHostStore
         long? expectedServerRevision = null,
         bool updateMarginItems = false,
         bool updateFreelancerOpenCommissions = false,
-        bool updateCommissionTemplates = false)
+        bool updateCommissionTemplates = false,
+        bool updateDefaultCompanySuppliedItems = false)
     {
         if (!allowCompanyCollection)
         {
@@ -1927,6 +1928,18 @@ public sealed partial class SqliteProfileHostStore
                         new System.Text.Json.Nodes.JsonArray();
                     payloadJson = templatesObject.ToJsonString();
                 }
+                // Only the explicit company-supplied-defaults command owns this field.
+                // Generic profile sync and older clients carry the stored defaults forward.
+                if (!updateDefaultCompanySuppliedItems && existing != null &&
+                    incoming is System.Text.Json.Nodes.JsonObject supplyDefaultsObject)
+                {
+                    var previousSupplyDefaults =
+                        System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions)?["defaultCompanySuppliedItems"];
+                    supplyDefaultsObject.Remove("defaultCompanySuppliedItems");
+                    supplyDefaultsObject["defaultCompanySuppliedItems"] = previousSupplyDefaults?.DeepClone() ??
+                        new System.Text.Json.Nodes.JsonArray();
+                    payloadJson = supplyDefaultsObject.ToJsonString();
+                }
                 // Only the explicit company settings commands own the freelancer
                 // visibility switch. Whole-profile sync, including older clients that
                 // never knew the field, carries the stored value forward.
@@ -1992,6 +2005,17 @@ public sealed partial class SqliteProfileHostStore
                         Success = false,
                         ErrorCode = "invalid_commission_templates",
                         ErrorMessage = templateError
+                    };
+                }
+                if (!TradeCompanySupplyDefaultValidator.IsValid(
+                        company?.DefaultCompanySuppliedItems, out var supplyDefaultsError))
+                {
+                    await transaction.RollbackAsync(ct);
+                    return new ProfileSyncPutResponse
+                    {
+                        Success = false,
+                        ErrorCode = "invalid_default_company_supplied_items",
+                        ErrorMessage = supplyDefaultsError
                     };
                 }
                 if (company?.CommissionPricingScope is { IsValid: false })

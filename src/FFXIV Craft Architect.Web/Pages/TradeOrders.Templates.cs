@@ -8,6 +8,9 @@ using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+
 using MudBlazor;
 
 namespace FFXIV_Craft_Architect.Web.Pages;
@@ -104,7 +107,10 @@ public partial class TradeOrders
                 ? RecipePlanDisplayHelpers.GetSourceDisplayName(source)
                 : "Crafter";
 
-    private void ApplyCommissionTemplateToNewOrder(TradeCommissionTemplate template)
+    private void ApplyCommissionTemplateToNewOrder(TradeCommissionTemplate template) =>
+        ApplyCommissionTemplateToNewOrder(template, scale: 1);
+
+    private void ApplyCommissionTemplateToNewOrder(TradeCommissionTemplate template, int scale)
     {
         ++_requestedOrderSearchGeneration;
         _requestedOrderSearchQuery = string.Empty;
@@ -116,22 +122,90 @@ public partial class TradeOrders
         _newRequestedOrderTitle = template.DefaultOrderTitle ?? template.Name;
         _usingSuggestedRequestedOrderTitle = false;
         _newRequestedOrderNotes = template.Notes;
-        _requestedOrderOutputs = template.Outputs
+        _newOrderBaseOutputs = template.Outputs
             .Where(output => output.Quantity > 0)
+            .Select(output => output with
+            {
+                Quantity = Math.Clamp(output.Quantity, 1, TradeCommissionTemplateValidator.MaxOutputQuantity)
+            })
+            .ToArray();
+        ApplyNewOrderScale(scale);
+        _newRequestedOrderPaymentSchedule = template.PaymentSchedule;
+        _newRequestedOrderCustomPaymentTerms = template.CustomPaymentTerms;
+        SetNewOrderSupplyChoicesFromTemplate(template);
+        _appliedTemplateName = template.Name;
+    }
+
+    // New Order scale: _newOrderBaseOutputs is the 1x snapshot and every multiplier applies to
+    // it, so switching between multipliers never drifts. A manual row edit makes the edited
+    // rows the new 1x base.
+    private static readonly int[] NewOrderScalePresets = [1, 2, 3, 4];
+    private IReadOnlyList<TradeCommissionTemplateOutput> _newOrderBaseOutputs = [];
+    private int _newOrderScaleMultiplier = 1;
+
+    private void SnapshotNewOrderScaleBase()
+    {
+        _newOrderBaseOutputs = _requestedOrderOutputs
+            .Select(output => new TradeCommissionTemplateOutput(
+                output.ItemId,
+                output.Name,
+                output.Quantity,
+                output.MustBeHq))
+            .ToArray();
+        _newOrderScaleMultiplier = 1;
+    }
+
+    private void ResetNewOrderScale()
+    {
+        _newOrderBaseOutputs = [];
+        _newOrderScaleMultiplier = 1;
+    }
+
+    private void UpdateNewOrderScaleBaseHq(int index, bool mustBeHq)
+    {
+        if (index < 0 ||
+            index >= _newOrderBaseOutputs.Count ||
+            _newOrderBaseOutputs.Count != _requestedOrderOutputs.Count)
+        {
+            SnapshotNewOrderScaleBase();
+            return;
+        }
+
+        _newOrderBaseOutputs = _newOrderBaseOutputs
+            .Select((output, position) => position == index ? output with { MustBeHq = mustBeHq } : output)
+            .ToArray();
+    }
+
+    private void SetNewOrderScaleMultiplier(int multiplier)
+    {
+        if (_newOrderBaseOutputs.Count != _requestedOrderOutputs.Count)
+        {
+            SnapshotNewOrderScaleBase();
+        }
+
+        ApplyNewOrderScale(multiplier);
+        RefreshRequestedOrderSuggestedTitle(force: _usingSuggestedRequestedOrderTitle);
+    }
+
+    private void ApplyNewOrderScale(int multiplier)
+    {
+        _newOrderScaleMultiplier = Math.Clamp(
+            multiplier,
+            TradeCommissionTemplateMapper.MinScaleMultiplier,
+            TradeCommissionTemplateMapper.MaxScaleMultiplier);
+        _requestedOrderOutputs = TradeCommissionTemplateMapper
+            .ScaleOutputs(_newOrderBaseOutputs, _newOrderScaleMultiplier)
             .Select(output => new RequestedOrderOutputEditor
             {
                 ItemId = output.ItemId,
                 Name = output.Name,
-                Quantity = Math.Clamp(output.Quantity, 1, 9999),
+                Quantity = output.Quantity,
                 MustBeHq = output.MustBeHq
             })
             .ToList();
-        _newRequestedOrderPaymentSchedule = template.PaymentSchedule;
-        _newRequestedOrderCustomPaymentTerms = template.CustomPaymentTerms;
-        _newRequestedOrderSupplyChoices = template.SupplyChoices.ToList();
-        _appliedTemplateName = template.Name;
     }
 
+    // Drops the choice from this order only; company defaults stay as they are.
     private void RemoveStagedNewOrderSupplyChoice(TradeCommissionTemplateSupplyChoice choice)
     {
         _newRequestedOrderSupplyChoices.Remove(choice);
@@ -407,60 +481,198 @@ public partial class TradeOrders
         _isCreatingRequestedOrder = true;
         try
         {
-            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
-                "Creating this Trade order",
-                targetPlanId: null))
+            var created = await CreateSeededRequestedOrderAsync(
+                companyProfile,
+                new NewOrderDraftSpec(
+                    _newRequestedOrderTitle,
+                    ToRequestedOrderOutputs(),
+                    _newRequestedOrderNotes,
+                    _newRequestedOrderCrafterId,
+                    _newRequestedOrderPaymentSchedule,
+                    _newRequestedOrderCustomPaymentTerms,
+                    _newRequestedOrderSupplyChoices.ToArray()),
+                price);
+            if (created == null)
             {
                 return;
             }
 
-            var draftResult = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
-                companyProfile.Id,
-                _newRequestedOrderCrafterId,
-                _newRequestedOrderTitle,
-                ToRequestedOrderOutputs(),
+            // Close first so the reset does not re-seed a draft nobody is editing.
+            _showNewOrderPanel = false;
+            ResetNewOrderDraft();
+            if (!await SelectCreatedOrderAsync(created.Id))
+            {
+                return;
+            }
+
+            await SetActiveOpsTabAsync(PlanTabIndex);
+            Snackbar.Add(
+                price ? "Trade order created and priced" : "Trade order created · plan ready to price",
+                Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to create Trade order: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isCreatingRequestedOrder = false;
+        }
+    }
+
+    private sealed record NewOrderDraftSpec(
+        string Title,
+        IReadOnlyList<TradeRequestedOrderOutput> Outputs,
+        string? Notes,
+        Guid? AssignedCrafterId,
+        CompanyCommissionPaymentSchedule PaymentSchedule,
+        string? CustomPaymentTerms,
+        IReadOnlyList<TradeCommissionTemplateSupplyChoice> SupplyChoices);
+
+    /// <summary>
+    /// Builds, optionally prices, and saves one new draft from requested outputs. Returns the
+    /// saved order, or null after reporting why it was not created.
+    /// </summary>
+    private async Task<TradeOrder?> CreateSeededRequestedOrderAsync(
+        TradeCompanyProfile companyProfile,
+        NewOrderDraftSpec spec,
+        bool price)
+    {
+        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+            "Creating this Trade order",
+            targetPlanId: null))
+        {
+            return null;
+        }
+
+        var draftResult = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
+            companyProfile.Id,
+            spec.AssignedCrafterId,
+            spec.Title,
+            spec.Outputs,
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion,
+            AppState.DefaultMarketFetchScope,
+            MarketFetchScopeResolver.GetDataCenters(
+                AppState.DefaultMarketFetchScope,
                 AppState.SelectedDataCenter,
                 AppState.SelectedRegion,
-                AppState.DefaultMarketFetchScope,
-                MarketFetchScopeResolver.GetDataCenters(
-                    AppState.DefaultMarketFetchScope,
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    AppState.AnalysisRegions),
-                World: null,
-                _newRequestedOrderNotes,
-                DateTime.UtcNow));
-            if (!draftResult.CanCreate || draftResult.Order == null)
+                AppState.AnalysisRegions),
+            World: null,
+            spec.Notes,
+            DateTime.UtcNow));
+        if (!draftResult.CanCreate || draftResult.Order == null)
+        {
+            Snackbar.Add(draftResult.UnavailableReason ?? "Could not create Trade order.", Severity.Warning);
+            return null;
+        }
+
+        var order = draftResult.Order;
+        order.PaymentSchedule = spec.PaymentSchedule;
+        order.CustomPaymentTerms = spec.PaymentSchedule == CompanyCommissionPaymentSchedule.Custom &&
+            !string.IsNullOrWhiteSpace(spec.CustomPaymentTerms)
+                ? spec.CustomPaymentTerms.Trim()
+                : null;
+        var supplyChoices = ExcludeOutputSupplyChoices(spec.SupplyChoices, spec.Outputs);
+        var responsibilities = TradeCommissionTemplateMapper.ToResponsibilityLines(supplyChoices);
+        var result = price
+            ? await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+                order,
+                new TradeOrderPricingWorkflowOptions(
+                    ForceRefreshMarketData: false,
+                    MaterialPricingPolicy: companyProfile.MaterialPricingPolicy,
+                    MaterialResponsibilities: responsibilities,
+                    InitialSupplyChoices: supplyChoices))
+            : await TradeOrderPricingWorkflow.InitializePlanAsync(
+                order,
+                new TradeOrderInitializePlanOptions(supplyChoices, responsibilities));
+        return await SaveSeededOrderAsync(result, responsibilities, companyProfile);
+    }
+
+    // Orders rail template launcher.
+    private static readonly int[] TemplateLauncherScalePresets = [1, 2, 4];
+    private bool _isTemplateLauncherOpen;
+    private int _templateLauncherScale = 1;
+
+    private void ToggleTemplateLauncher() => _isTemplateLauncherOpen = !_isTemplateLauncherOpen;
+
+    private void CloseTemplateLauncher() => _isTemplateLauncherOpen = false;
+
+    private void OnTemplateLauncherKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            _isTemplateLauncherOpen = false;
+        }
+    }
+
+    private void OnNewOrderScaleInputChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var multiplier))
+        {
+            SetNewOrderScaleMultiplier(multiplier);
+        }
+    }
+
+    private void OpenTemplateInNewOrderEditor(TradeCommissionTemplate template)
+    {
+        _isTemplateLauncherOpen = false;
+        StartNewOrderWorkspace();
+        ApplyCommissionTemplateToNewOrder(template, _templateLauncherScale);
+    }
+
+    /// <summary>
+    /// One-click template order from the Orders rail: scaled outputs, company defaults with the
+    /// template's supply choices on top, then Initialize Plan or Save &amp; Price. The New Order
+    /// editor's own draft is left untouched.
+    /// </summary>
+    private async Task LaunchTemplateOrderAsync(TradeCommissionTemplate template, bool price)
+    {
+        _isTemplateLauncherOpen = false;
+        var companyProfile = _companyProfile;
+        if (companyProfile == null || _isCreatingRequestedOrder || IsPlanMutationTransactionRunning)
+        {
+            return;
+        }
+
+        var outputs = TradeCommissionTemplateMapper
+            .ScaleOutputs(
+                template.Outputs.Where(output => output.Quantity > 0).ToArray(),
+                _templateLauncherScale)
+            .Select(output => new TradeRequestedOrderOutput(
+                output.ItemId,
+                output.Name,
+                output.Quantity,
+                output.MustBeHq,
+                EstimatedSaleValue: 0m))
+            .ToArray();
+        if (outputs.Length == 0)
+        {
+            Snackbar.Add($"Template '{template.Name}' has no outputs.", Severity.Warning);
+            return;
+        }
+
+        _isCreatingRequestedOrder = true;
+        try
+        {
+            var created = await CreateSeededRequestedOrderAsync(
+                companyProfile,
+                new NewOrderDraftSpec(
+                    string.IsNullOrWhiteSpace(template.DefaultOrderTitle) ? template.Name : template.DefaultOrderTitle,
+                    outputs,
+                    template.Notes,
+                    AssignedCrafterId: null,
+                    template.PaymentSchedule,
+                    template.CustomPaymentTerms,
+                    TradeCommissionTemplateMapper.MergeCompanySupplyDefaults(
+                        CompanySupplyDefaults,
+                        template.SupplyChoices)),
+                price);
+            if (created == null)
             {
-                Snackbar.Add(draftResult.UnavailableReason ?? "Could not create Trade order.", Severity.Warning);
                 return;
             }
 
-            var order = draftResult.Order;
-            order.PaymentSchedule = _newRequestedOrderPaymentSchedule;
-            order.CustomPaymentTerms = _newRequestedOrderPaymentSchedule == CompanyCommissionPaymentSchedule.Custom &&
-                !string.IsNullOrWhiteSpace(_newRequestedOrderCustomPaymentTerms)
-                    ? _newRequestedOrderCustomPaymentTerms.Trim()
-                    : null;
-            var supplyChoices = _newRequestedOrderSupplyChoices.ToArray();
-            var responsibilities = TradeCommissionTemplateMapper.ToResponsibilityLines(supplyChoices);
-            var result = price
-                ? await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
-                    order,
-                    new TradeOrderPricingWorkflowOptions(
-                        ForceRefreshMarketData: false,
-                        MaterialPricingPolicy: companyProfile.MaterialPricingPolicy,
-                        MaterialResponsibilities: responsibilities,
-                        InitialSupplyChoices: supplyChoices))
-                : await TradeOrderPricingWorkflow.InitializePlanAsync(
-                    order,
-                    new TradeOrderInitializePlanOptions(supplyChoices, responsibilities));
-            if (await SaveSeededOrderAsync(result, responsibilities, companyProfile) is not { } created)
-            {
-                return;
-            }
-
-            ResetNewOrderDraft();
             _showNewOrderPanel = false;
             if (!await SelectCreatedOrderAsync(created.Id))
             {
@@ -479,6 +691,141 @@ public partial class TradeOrders
         finally
         {
             _isCreatingRequestedOrder = false;
+        }
+    }
+
+    /// <summary>
+    /// "Duplicate ×N": N independent drafts of the selected order sharing one plan build (and
+    /// one pricing run when requested), each saved with its own linked plan revision and
+    /// responsibility draft through the same path as a single new draft.
+    /// </summary>
+    private async Task BatchDuplicateSelectedOrderAsync()
+    {
+        var source = _selectedOrder;
+        var companyProfile = _companyProfile;
+        if (source == null || companyProfile == null || !CanDuplicateOrTemplateSelectedOrder)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters<BatchDuplicateOrderDialog>
+        {
+            { dialog => dialog.SourceTitle, source.Title }
+        };
+        var dialog = await DialogService.ShowAsync<BatchDuplicateOrderDialog>(
+            "Duplicate ×N",
+            parameters,
+            new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        var dialogResult = await dialog.Result;
+        if (dialogResult is not { Canceled: false, Data: BatchDuplicateOrderRequest request } ||
+            _selectedOrder?.Id != source.Id)
+        {
+            return;
+        }
+
+        _isDuplicatingSelectedOrder = true;
+        try
+        {
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                "Duplicating this order",
+                targetPlanId: null))
+            {
+                return;
+            }
+
+            var linkedPlan = await TryLoadLinkedPlanAsync(source);
+            var batch = TradeOrderDraftFactory.CreateBatchDuplicates(new TradeOrderBatchDuplicateRequest(
+                source,
+                request.Count,
+                DateTime.UtcNow,
+                request.BaseTitle,
+                GetSelectedOrderResponsibilityProjection(),
+                linkedPlan));
+            if (!batch.CanCreate || batch.Orders.Count == 0)
+            {
+                Snackbar.Add(batch.UnavailableReason ?? "Could not duplicate the order.", Severity.Warning);
+                return;
+            }
+
+            var result = await TradeOrderPricingWorkflow.MaterializeBatchAsync(
+                batch.Orders,
+                new TradeOrderBatchMaterializeOptions(
+                    request.Price,
+                    companyProfile.MaterialPricingPolicy,
+                    batch.SupplyChoices,
+                    batch.Responsibilities));
+            if (!result.HasUpdatedOrders)
+            {
+                // New drafts have no earlier plan revision to restore, so a failed build only
+                // reports why.
+                if (result.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+                {
+                    ShowCompanyPricingRequired(TradeOrderPricingWorkflowResult.Noop(
+                        result.Status,
+                        result.Message,
+                        result.MessageLevel,
+                        result.ActivePlanFence));
+                }
+                else if (result.Status != TradeOrderPricingWorkflowStatus.Canceled)
+                {
+                    Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+                }
+                return;
+            }
+
+            var created = new List<TradeOrder>(result.UpdatedOrders.Count);
+            foreach (var order in result.UpdatedOrders)
+            {
+                if (await PersistSeededOrderAsync(order, batch.Responsibilities, companyProfile) is not { } saved)
+                {
+                    break;
+                }
+                created.Add(saved);
+            }
+            if (created.Count == 0)
+            {
+                return;
+            }
+
+            // The other copies join the board in place; the first is selected because its
+            // sealed plan revision is the one left live in the Worker.
+            foreach (var order in created.Skip(1))
+            {
+                var stored = await TradeOperationsPersistence.LoadOrderAsync(order.Id) ?? order;
+                var index = _orders.FindIndex(existing => existing.Id == stored.Id);
+                if (index >= 0)
+                {
+                    _orders[index] = stored;
+                }
+                else
+                {
+                    _orders.Add(stored);
+                }
+            }
+
+            if (await SelectCreatedOrderAsync(created[0].Id))
+            {
+                await SetActiveOpsTabAsync(PlanTabIndex);
+            }
+
+            if (created.Count == result.UpdatedOrders.Count)
+            {
+                Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+            }
+            else
+            {
+                Snackbar.Add(
+                    $"{created.Count:N0} of {result.UpdatedOrders.Count:N0} duplicate orders were saved.",
+                    Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to duplicate the order: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isDuplicatingSelectedOrder = false;
         }
     }
 
@@ -505,7 +852,18 @@ public partial class TradeOrders
             return null;
         }
 
-        var order = result.UpdatedOrder;
+        return await PersistSeededOrderAsync(result.UpdatedOrder, responsibilities, companyProfile);
+    }
+
+    /// <summary>
+    /// Persists one built draft order and, when it carries seeded responsibilities, its own
+    /// linked payroll draft. Returns the saved order, or null after reporting the failure.
+    /// </summary>
+    private async Task<TradeOrder?> PersistSeededOrderAsync(
+        TradeOrder order,
+        IReadOnlyList<TradePayrollResponsibilityLine> responsibilities,
+        TradeCompanyProfile companyProfile)
+    {
         order.PaymentPolicyOverride = TradeOrderWorkflow.ResolvePaymentPolicy(
             order,
             companyProfile.PaymentPolicy);

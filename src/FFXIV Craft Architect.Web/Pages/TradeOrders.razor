@@ -59,11 +59,88 @@
                 <aside class="trade-orders-rail">
                     <div class="trade-orders-rail-header">
                         <MudText Typo="Typo.subtitle1">Orders</MudText>
-                        <MudIconButton Icon="@Icons.Material.Filled.Add"
-                                       Color="Color.Primary"
-                                       Size="Size.Small"
-                                       OnClick="StartNewOrderWorkspace"
-                                       aria-label="New order" />
+                        <div class="trade-orders-rail-header-actions">
+                            @if (CommissionTemplates is { Count: > 0 } launcherTemplates)
+                            {
+                                <div class="trade-orders-template-launcher-anchor">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Bookmarks"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   OnClick="ToggleTemplateLauncher"
+                                                   Disabled="@_isCreatingRequestedOrder"
+                                                   title="New order from template"
+                                                   aria-label="New from template"
+                                                   aria-haspopup="menu"
+                                                   aria-expanded="@(_isTemplateLauncherOpen ? "true" : "false")"
+                                                   aria-controls="trade-orders-template-launcher" />
+                                    <MudPopover Open="@_isTemplateLauncherOpen"
+                                                AnchorOrigin="Origin.BottomRight"
+                                                TransformOrigin="Origin.TopRight"
+                                                OverflowBehavior="OverflowBehavior.FlipOnOpen"
+                                                Paper="true">
+                                        <section id="trade-orders-template-launcher"
+                                                 class="trade-orders-template-launcher"
+                                                 role="menu"
+                                                 aria-label="New order from template"
+                                                 @onkeydown="OnTemplateLauncherKeyDown">
+                                            <div class="trade-orders-template-launcher-scale" role="group" aria-label="Template scale">
+                                                <span class="trade-orders-template-strip-label">Scale</span>
+                                                @foreach (var preset in TemplateLauncherScalePresets)
+                                                {
+                                                    <button type="button"
+                                                            class="@($"trade-orders-scale-button{(preset == _templateLauncherScale ? " is-active" : string.Empty)}")"
+                                                            aria-pressed="@(preset == _templateLauncherScale ? "true" : "false")"
+                                                            @onclick="() => _templateLauncherScale = preset">
+                                                        ×@preset
+                                                    </button>
+                                                }
+                                            </div>
+                                            <div class="trade-orders-template-launcher-list">
+                                                @foreach (var template in launcherTemplates)
+                                                {
+                                                    <div class="trade-orders-template-launcher-row" @key="template.Id">
+                                                        <button type="button"
+                                                                class="trade-orders-template-launcher-name"
+                                                                role="menuitem"
+                                                                title="@FormatTemplateTooltip(template)"
+                                                                @onclick="() => OpenTemplateInNewOrderEditor(template)">
+                                                            <strong>@template.Name</strong>
+                                                            <span>@FormatTemplateOutputSummary(template)</span>
+                                                        </button>
+                                                        <button type="button"
+                                                                class="trade-orders-template-launcher-action"
+                                                                role="menuitem"
+                                                                title="@($"Create and initialize the plan for {template.Name} ×{_templateLauncherScale}")"
+                                                                aria-label="@($"Initialize {template.Name} ×{_templateLauncherScale}")"
+                                                                disabled="@(_isCreatingRequestedOrder || IsPlanMutationTransactionRunning)"
+                                                                @onclick="() => LaunchTemplateOrderAsync(template, price: false)">
+                                                            Init
+                                                        </button>
+                                                        <button type="button"
+                                                                class="trade-orders-template-launcher-action is-primary"
+                                                                role="menuitem"
+                                                                title="@($"Create and price {template.Name} ×{_templateLauncherScale}")"
+                                                                aria-label="@($"Price {template.Name} ×{_templateLauncherScale}")"
+                                                                disabled="@(_isCreatingRequestedOrder || IsPlanMutationTransactionRunning)"
+                                                                @onclick="() => LaunchTemplateOrderAsync(template, price: true)">
+                                                            Price
+                                                        </button>
+                                                    </div>
+                                                }
+                                            </div>
+                                        </section>
+                                    </MudPopover>
+                                    <MudOverlay Visible="@_isTemplateLauncherOpen"
+                                                OnClick="CloseTemplateLauncher"
+                                                LockScroll="false" />
+                                </div>
+                            }
+                            <MudIconButton Icon="@Icons.Material.Filled.Add"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           OnClick="StartNewOrderWorkspace"
+                                           aria-label="New order" />
+                        </div>
                     </div>
                     <MudTextField T="string"
                                   Value="@_orderSearchText"
@@ -276,7 +353,37 @@
                             <div class="trade-orders-workspace-header">
                                 <div>
                                     <MudText Typo="Typo.overline">New Order</MudText>
-                                    <MudText Typo="Typo.h6">Requested Outputs</MudText>
+                                    <div class="trade-orders-new-order-heading">
+                                        <MudText Typo="Typo.h6">Requested Outputs</MudText>
+                                        @if (_requestedOrderOutputs.Count > 0)
+                                        {
+                                            <div class="trade-orders-scale-group" role="group" aria-label="Scale requested outputs">
+                                                @foreach (var preset in NewOrderScalePresets)
+                                                {
+                                                    <button type="button"
+                                                            class="@($"trade-orders-scale-button{(preset == _newOrderScaleMultiplier ? " is-active" : string.Empty)}")"
+                                                            title="@($"Scale requested outputs ×{preset}")"
+                                                            aria-pressed="@(preset == _newOrderScaleMultiplier ? "true" : "false")"
+                                                            disabled="@_isCreatingRequestedOrder"
+                                                            @onclick="() => SetNewOrderScaleMultiplier(preset)">
+                                                        ×@preset
+                                                    </button>
+                                                }
+                                                <label class="trade-orders-scale-input" title="Custom scale (1–99)">
+                                                    <span aria-hidden="true">×</span>
+                                                    <input type="number"
+                                                           min="@TradeCommissionTemplateMapper.MinScaleMultiplier"
+                                                           max="@TradeCommissionTemplateMapper.MaxScaleMultiplier"
+                                                           step="1"
+                                                           inputmode="numeric"
+                                                           aria-label="Scale multiplier"
+                                                           value="@_newOrderScaleMultiplier"
+                                                           disabled="@_isCreatingRequestedOrder"
+                                                           @onchange="OnNewOrderScaleInputChanged" />
+                                                </label>
+                                            </div>
+                                        }
+                                    </div>
                                 </div>
                                 <div class="trade-orders-workspace-actions">
                                     <MudButton Variant="Variant.Outlined"
@@ -459,8 +566,17 @@
                                         <div class="trade-orders-supply-choice-list">
                                             @foreach (var choice in _newRequestedOrderSupplyChoices.ToArray())
                                             {
-                                                <span class="trade-orders-supply-choice-chip" @key="@($"{choice.ItemId}:{choice.RequiresHq}")">
-                                                    <span>@choice.Name</span>
+                                                var isCompanyDefault = IsStagedCompanyDefaultChoice(choice);
+                                                <span class="@($"trade-orders-supply-choice-chip{(isCompanyDefault ? " is-company-default" : string.Empty)}")"
+                                                      title="@FormatStagedSupplyChoiceTitle(choice)"
+                                                      @key="@($"{choice.ItemId}:{choice.RequiresHq}")">
+                                                    @if (isCompanyDefault)
+                                                    {
+                                                        <MudIcon Icon="@Icons.Material.Filled.PushPin"
+                                                                 Class="trade-orders-supply-choice-pin"
+                                                                 aria-label="Company default" />
+                                                    }
+                                                    <span class="trade-orders-supply-choice-name">@choice.Name</span>
                                                     @if (choice.RequiresHq)
                                                     {
                                                         <span class="trade-orders-hq">HQ</span>
@@ -468,8 +584,8 @@
                                                     <span class="trade-orders-supply-choice-route">· @FormatStagedSupplyChoice(choice)</span>
                                                     <button type="button"
                                                             class="trade-orders-chip-remove"
-                                                            title="@($"Remove supply choice for {choice.Name}")"
-                                                            aria-label="@($"Remove supply choice for {choice.Name}")"
+                                                            title="@($"Remove {choice.Name} from this order")"
+                                                            aria-label="@($"Remove {choice.Name} from this order")"
                                                             @onclick="() => RemoveStagedNewOrderSupplyChoice(choice)">
                                                         ×
                                                     </button>
@@ -2548,6 +2664,13 @@
         </MudButton>
         <MudButton Variant="Variant.Outlined"
                    Color="Color.Secondary"
+                   StartIcon="@Icons.Material.Filled.LibraryAdd"
+                   OnClick="BatchDuplicateSelectedOrderAsync"
+                   Disabled="@(!CanDuplicateOrTemplateSelectedOrder)">
+            Duplicate ×N
+        </MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Secondary"
                    StartIcon="@Icons.Material.Filled.BookmarkAdd"
                    OnClick="SaveSelectedOrderAsTemplateAsync"
                    Disabled="@(!CanDuplicateOrTemplateSelectedOrder)">
@@ -2602,6 +2725,22 @@
                 <option value="@CommissionMaterialResponsibility.Provided.ToString()"
                         selected="@(row.Responsibility == CommissionMaterialResponsibility.Provided)">Company supplies</option>
             </select>
+            @if (CanPinCompanySupplyDefault(row))
+            {
+                var isPinned = IsCompanySupplyDefault(row.ItemId, row.RequiresHq);
+                var pinLabel = isPinned
+                    ? $"Remove {row.ItemName} from company defaults"
+                    : $"Always company-supplied: {row.ItemName}";
+                <button type="button"
+                        class="@($"trade-orders-supply-pin{(isPinned ? " is-pinned" : string.Empty)}")"
+                        title="@pinLabel"
+                        aria-label="@pinLabel"
+                        aria-pressed="@(isPinned ? "true" : "false")"
+                        disabled="@(_isSavingCompanySupplyDefaults || _isCommissionCommandRunning || IsPlanMutationTransactionRunning)"
+                        @onclick="() => ToggleCompanySupplyDefaultAsync(row)">
+                    <MudIcon Icon="@Icons.Material.Filled.PushPin" Size="Size.Small" />
+                </button>
+            }
         }
     </div>;
 }

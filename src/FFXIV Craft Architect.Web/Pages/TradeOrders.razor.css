@@ -2559,7 +2559,7 @@ button.trade-orders-rail-order.is-device-only:hover {
   font-size: 0.74rem;
 }
 
-.trade-orders-supply-choice-chip > span:first-child {
+.trade-orders-supply-choice-chip > .trade-orders-supply-choice-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2609,4 +2609,267 @@ button.trade-orders-rail-order.is-device-only:hover {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+/* Company default supply chips (New Order) */
+.trade-orders-supply-choice-chip.is-company-default {
+  border-color: #33425a;
+}
+
+.trade-orders-supply-choice-chip ::deep .trade-orders-supply-choice-pin {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-left: -2px;
+  color: #71a5ec;
+}
+
+/* Requested-output scale (New Order) and template launcher scale */
+.trade-orders-new-order-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.trade-orders-scale-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.trade-orders-scale-button {
+  min-width: 30px;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  background: #242424;
+  color: #c9c9c9;
+  cursor: pointer;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.trade-orders-scale-button:hover:not(:disabled) {
+  border-color: #4d4d4d;
+  color: #f0f0f0;
+}
+
+.trade-orders-scale-button.is-active {
+  border-color: #719363;
+  background: #2a3527;
+  color: #e6e6e6;
+}
+
+.trade-orders-scale-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.trade-orders-scale-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 4px;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  background: #1e1e1e;
+  padding: 0 4px;
+  color: #9a9a9a;
+  font-size: 0.74rem;
+}
+
+.trade-orders-scale-input input {
+  width: 30px;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.trade-orders-scale-input input::-webkit-outer-spin-button,
+.trade-orders-scale-input input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.trade-orders-scale-input input:focus {
+  outline: none;
+}
+
+.trade-orders-scale-input:focus-within,
+.trade-orders-scale-button:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 1px;
+}
+
+/* Orders rail template launcher */
+.trade-orders-rail-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.trade-orders-template-launcher-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.trade-orders-template-launcher {
+  display: grid;
+  gap: 6px;
+  width: min(340px, 86vw);
+  max-height: min(420px, 70vh);
+  background: #1e1e1e;
+  padding: 8px;
+}
+
+.trade-orders-template-launcher-scale {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.trade-orders-template-launcher-scale .trade-orders-template-strip-label {
+  margin-right: 6px;
+  padding-top: 0;
+}
+
+.trade-orders-template-launcher-list {
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.trade-orders-template-launcher-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.trade-orders-template-launcher-row:hover {
+  background: #242424;
+}
+
+.trade-orders-template-launcher-name {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  cursor: pointer;
+  padding: 3px 6px;
+  font: inherit;
+  text-align: left;
+}
+
+.trade-orders-template-launcher-name strong,
+.trade-orders-template-launcher-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-orders-template-launcher-name strong {
+  font-size: 0.78rem;
+}
+
+.trade-orders-template-launcher-name span {
+  color: #b8b8b8;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-orders-template-launcher-action {
+  border: 1px solid #3c4937;
+  border-radius: 4px;
+  background: transparent;
+  color: #8fbf7f;
+  cursor: pointer;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.trade-orders-template-launcher-action.is-primary {
+  border-color: #719363;
+  background: #2a3527;
+  color: #e6e6e6;
+}
+
+.trade-orders-template-launcher-action:hover:not(:disabled) {
+  border-color: #8fbf7f;
+}
+
+.trade-orders-template-launcher-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.trade-orders-template-launcher-name:focus-visible,
+.trade-orders-template-launcher-action:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 1px;
+}
+
+/* Plan supply grid: company default pin beside the responsibility select */
+::deep .trade-orders-procurement-responsibility-cell:has(.trade-orders-supply-pin) {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+::deep .trade-orders-procurement-responsibility-cell:has(.trade-orders-supply-pin) .trade-orders-procurement-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+::deep .trade-orders-supply-pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #5f5f5f;
+  cursor: pointer;
+  padding: 0;
+}
+
+::deep .trade-orders-supply-pin .mud-icon-root {
+  font-size: 0.95rem;
+}
+
+::deep .trade-orders-supply-pin:hover:not(:disabled) {
+  background: #343434;
+  color: #b8b8b8;
+}
+
+::deep .trade-orders-supply-pin.is-pinned {
+  color: #71a5ec;
+}
+
+::deep .trade-orders-supply-pin:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+::deep .trade-orders-supply-pin:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 1px;
 }
