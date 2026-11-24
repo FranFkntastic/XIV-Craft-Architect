@@ -700,14 +700,11 @@ public static class AcquisitionPlanningService
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId,
         AcquisitionCostContext? context)
     {
-        var candidates = GetAcquisitionCostCandidates(node, planByItemId, context)
-            .OrderBy(candidate => candidate.Cost)
-            .ThenBy(candidate => GetSourceTieBreak(candidate.Source))
-            .ToList();
-
-        if (candidates.Count > 0)
+        var cheapest = AcquisitionDefaultRule.Cheapest(GetAcquisitionCostCandidates(node, planByItemId, context)
+            .Select(candidate => (candidate.Source, (decimal?)candidate.Cost)));
+        if (cheapest.HasValue)
         {
-            return candidates[0].Source;
+            return cheapest;
         }
 
         return node.CanCraft && node.Children.Count > 0
@@ -899,18 +896,6 @@ public static class AcquisitionPlanningService
             : wideSplit.ExactNeededCost * quantity / shoppingPlan.QuantityNeeded;
     }
 
-    private static int GetSourceTieBreak(AcquisitionSource source)
-    {
-        return source switch
-        {
-            AcquisitionSource.VendorBuy => 0,
-            AcquisitionSource.MarketBuyNq => 1,
-            AcquisitionSource.MarketBuyHq => 2,
-            AcquisitionSource.Craft => 3,
-            _ => 4
-        };
-    }
-
     private static decimal CalculateCraftCost(
         PlanNode node,
         IReadOnlyDictionary<int, DetailedShoppingPlan> planByItemId)
@@ -959,7 +944,8 @@ public static class AcquisitionPlanningService
         // craft would look like it costs labor alone and beat a real purchase.
         if (context.LaborGilPerSynth > 0 && cost > 0)
         {
-            cost += context.LaborGilPerSynth * RecipeResolutionService.GetPlannedSynthCount(node);
+            cost = AcquisitionDefaultRule.CraftCost(
+                cost, RecipeResolutionService.GetPlannedSynthCount(node), context.LaborGilPerSynth)!.Value;
         }
 
         context.SetCachedCost(node, AcquisitionSource.Craft, cost);

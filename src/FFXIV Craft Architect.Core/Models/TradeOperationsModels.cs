@@ -31,6 +31,22 @@ public sealed class TradeCompanyDiscordInstallationBinding
 
 public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
 
+/// <summary>How the company acquires a material when Margins prices it.</summary>
+public enum TradeMaterialRoute
+{
+    Craft = 0,
+    Market = 1,
+    Vendor = 2,
+    SetPrice = 3
+}
+
+/// <summary>
+/// A company-wide acquisition choice for one material. Margins applies it to every row that
+/// uses the material; <see cref="UnitPrice"/> is the operator's typed cost for
+/// <see cref="TradeMaterialRoute.SetPrice"/> and is absent for every other route.
+/// </summary>
+public sealed record TradeMaterialSource(int ItemId, TradeMaterialRoute Route, long? UnitPrice = null);
+
 public sealed record TradeCommissionTemplateOutput(
     int ItemId,
     string Name,
@@ -85,6 +101,9 @@ public sealed class TradeCompanyProfile
     public IReadOnlyList<TradeMarginItem> MarginItems { get; set; } = [];
     public IReadOnlyList<TradeCommissionTemplate> CommissionTemplates { get; set; } = [];
     public IReadOnlyList<TradeCompanySupplyDefault> DefaultCompanySuppliedItems { get; set; } = [];
+    // What each material costs the company in Margins. Independent of
+    // DefaultCompanySuppliedItems, which decides who supplies a material on a commission.
+    public IReadOnlyList<TradeMaterialSource> MaterialSources { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
