@@ -1501,7 +1501,7 @@ public static class CompanyCommissionCommandWorkflow
                 companyMaterials));
     }
 
-    private static CompanyCommissionPaymentClearance CreatePaymentGate(
+    internal static CompanyCommissionPaymentClearance CreatePaymentGate(
         CompanyCommissionTermsVersion terms) =>
         terms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
         terms.Payment.Total > 0
@@ -1512,7 +1512,7 @@ public static class CompanyCommissionCommandWorkflow
                 CompanyCommissionClearanceState.NotRequired,
                 TermsVersion: terms.Version);
 
-    private static CompanyCommissionMaterialClearance CreateMaterialGate(
+    internal static CompanyCommissionMaterialClearance CreateMaterialGate(
         CompanyCommissionTermsVersion terms)
     {
         var quantities = terms.Materials
@@ -1565,7 +1565,7 @@ public static class CompanyCommissionCommandWorkflow
         return GetPromise(currentTerms).SequenceEqual(GetPromise(nextTerms));
     }
 
-    private static void RequireDraftWorkPackageMatchesTerms(
+    internal static void RequireDraftWorkPackageMatchesTerms(
         CompanyCommissionDraftWorkPackage workPackage,
         CompanyCommissionTermsVersion terms)
     {
@@ -1691,14 +1691,25 @@ public static class CompanyCommissionCommandWorkflow
             .ToArray();
         if (crafterMaterials.Length > 0)
         {
-            Require(
-                string.Equals(
-                    terms.PricingEvidence.CostBasis,
-                    CommissionCostBasis.ProcurementRoute.ToString(),
-                    StringComparison.Ordinal),
-                "Crafter-supplied materials require procurement-route pricing evidence.");
             var quote = terms.PricingEvidence.MaterialQuote;
-            if (quote == null && allowUnavailableMaterialQuote)
+            var routePriced = string.Equals(
+                terms.PricingEvidence.CostBasis,
+                CommissionCostBasis.ProcurementRoute.ToString(),
+                StringComparison.Ordinal);
+            // An unpriced draft (an initialized plan skeleton, or a draft kept from before route
+            // pricing) has no material agreement yet. Publication validates without this
+            // allowance, so it still requires a complete procurement-route quote.
+            var unpricedDraft = allowUnavailableMaterialQuote && quote == null && !routePriced;
+            Require(
+                routePriced || unpricedDraft,
+                "Crafter-supplied materials require procurement-route pricing evidence.");
+            if (unpricedDraft)
+            {
+                Require(
+                    terms.Payment.MaterialReimbursement == 0,
+                    "An unpriced draft cannot reimburse materials.");
+            }
+            else if (quote == null && allowUnavailableMaterialQuote)
             {
                 Require(
                     !string.IsNullOrWhiteSpace(
@@ -1820,7 +1831,7 @@ public static class CompanyCommissionCommandWorkflow
     private static TradeOrder Copy(TradeOrder source) =>
         TradeOrderWorkflow.CopyOrder(source);
 
-    private static void ApplyCanonicalPricingEvidence(
+    internal static void ApplyCanonicalPricingEvidence(
         TradeOrderSourceSnapshot snapshot,
         CompanyCommissionPricingEvidence evidence)
     {

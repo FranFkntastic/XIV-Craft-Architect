@@ -1074,6 +1074,7 @@ public partial class TradeOrders
         CompanyCommissionActivityKind kind) =>
         kind switch
         {
+            CompanyCommissionActivityKind.DraftCreated => "Draft created",
             CompanyCommissionActivityKind.DraftUpdated => "Draft updated",
             CompanyCommissionActivityKind.CommissionOpened => "Commission opened",
             CompanyCommissionActivityKind.ClaimAccepted => "Claim reserved",

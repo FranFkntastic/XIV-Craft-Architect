@@ -9,7 +9,6 @@
 @inject WorkerSessionCoordinator WorkerSession
 @inject NavigationManager NavigationManager
 @inject TradePayrollDraftFactory DraftFactory
-@inject TradeOrderDraftFactory TradeOrderDraftFactory
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject CommissionPayrollService PayrollService
@@ -104,32 +103,15 @@
             <aside class="trade-side">
                 <section class="trade-panel">
                     <MudText Typo="Typo.subtitle1" Class="mb-3">Payroll Details</MudText>
-                    <CompactSelectField Id="payroll-assigned-crafter"
-                                        Label="Assigned crafter"
-                                        Value="@(_assignedCrafterId?.ToString() ?? string.Empty)"
-                                        ValueChanged="SetAssignedCrafterValueAsync"
-                                        Options="GetCrafterOptions()"
-                                        Class="trade-assigned-crafter-select" />
                     <div class="trade-assignment-actions">
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   StartIcon="@Icons.Material.Filled.AssignmentTurnedIn"
-                                   OnClick="AssignCraftJobAsync"
-                                   Disabled="@(!_assignedCrafterId.HasValue)"
-                                   Class="trade-assign-button">
-                            Assign Craft Job
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Secondary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.ViewList"
+                                   OnClick="OpenOrdersBoard"
+                                   Class="trade-open-orders-button">
+                            Open Orders
                         </MudButton>
-                        @if (_linkedOrder != null)
-                        {
-                            <MudButton Variant="Variant.Text"
-                                       Color="Color.Secondary"
-                                       Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.ViewList"
-                                       OnClick="OpenOrdersBoard"
-                                       Class="trade-open-orders-button">
-                                Open Orders
-                            </MudButton>
-                        }
                     </div>
                     <div class="trade-meta-list">
                         <div>
@@ -217,12 +199,6 @@
     [
         new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
         new(nameof(CommissionMaterialResponsibility.Provided), "Provided")
-    ];
-
-    private IReadOnlyList<CompactSelectOption> GetCrafterOptions() =>
-    [
-        new(string.Empty, "Unassigned"),
-        .. _crafters.Select(crafter => new CompactSelectOption(crafter.Id.ToString(), crafter.DisplayName))
     ];
 
     protected override async Task OnInitializedAsync()
@@ -342,107 +318,6 @@
             .FirstOrDefault();
     }
 
-    private async Task SetAssignedCrafterAsync(Guid? crafterId)
-    {
-        _assignedCrafterId = crafterId;
-        if (_workflowDraft == null)
-        {
-            return;
-        }
-
-        _workflowDraft.AssignedCrafterId = crafterId;
-        _workflowDraft.AssignedCrafterDisplayName = crafterId.HasValue
-            ? GetCrafterDisplayName(crafterId.Value)
-            : null;
-        await SaveWorkflowDraftAsync();
-    }
-
-    private Task SetAssignedCrafterValueAsync(string value) =>
-        SetAssignedCrafterAsync(Guid.TryParse(value, out var crafterId) ? crafterId : null);
-
-    private async Task AssignCraftJobAsync()
-    {
-        if (_source == null || _companyProfile == null || _workflowDraft == null)
-        {
-            Snackbar.Add("Create a payroll calculation before assigning a craft job.", Severity.Warning);
-            return;
-        }
-
-        if (!_assignedCrafterId.HasValue)
-        {
-            Snackbar.Add("Choose an assigned crafter before assigning the craft job.", Severity.Warning);
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        var isNewOrder = _linkedOrder == null;
-        var orderToSave = isNewOrder
-            ? CreateAssignedOrderFromCurrentPlan(now)
-            : TradeOrderWorkflow.CopyOrder(_linkedOrder!);
-        if (orderToSave == null)
-        {
-            return;
-        }
-
-        var previousCrafterId = orderToSave.AssignedCrafterId;
-        var previousStatus = orderToSave.Status;
-        orderToSave.AssignedCrafterId = _assignedCrafterId;
-        orderToSave.Status = GetAssignedOrderStatus(orderToSave.Status);
-        orderToSave.PayrollDraftId = _workflowDraft.Id;
-        orderToSave.UpdatedAtUtc = now;
-        AddAssignmentHistoryIfChanged(orderToSave, previousCrafterId, _assignedCrafterId, now);
-        AddStatusHistoryIfChanged(orderToSave, previousStatus, orderToSave.Status, "Assigned from payroll.", now);
-        AddPayrollLinkedHistoryIfMissing(orderToSave, now);
-
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(orderToSave);
-        if (!saved)
-        {
-            Snackbar.Add("Failed to save Trade order assignment.", Severity.Error);
-            return;
-        }
-
-        _workflowDraft.OrderId = orderToSave.Id;
-        _workflowDraft.AssignedCrafterId = _assignedCrafterId;
-        _workflowDraft.AssignedCrafterDisplayName = GetCrafterDisplayName(_assignedCrafterId.Value);
-        var draftSaved = await TradePayrollPersistence.SaveDraftAsync(_workflowDraft);
-        if (!draftSaved)
-        {
-            Snackbar.Add("Order assigned, but failed to update payroll workflow state.", Severity.Warning);
-            return;
-        }
-
-        await LoadTradeWorkflowAsync();
-        Snackbar.Add("Craft job assigned to Trade order.", Severity.Success);
-    }
-
-    private TradeOrder? CreateAssignedOrderFromCurrentPlan(DateTime createdAtUtc)
-    {
-        if (_companyProfile == null)
-        {
-            return null;
-        }
-
-        if (_activePlan == null)
-        {
-            Snackbar.Add("The active Worker plan is unavailable.", Severity.Warning);
-            return null;
-        }
-
-        var result = TradeOrderDraftFactory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
-            _activePlan,
-            _companyProfile.Id,
-            _assignedCrafterId,
-            null,
-            createdAtUtc));
-        if (!result.CanCreate || result.Order == null)
-        {
-            Snackbar.Add(result.UnavailableReason ?? "Could not create order from the active plan.", Severity.Warning);
-            return null;
-        }
-
-        return result.Order;
-    }
-
     private async Task SetResponsibilityAsync(TradePayrollLineEditor line, CommissionMaterialResponsibility responsibility)
     {
         line.Responsibility = responsibility;
@@ -486,6 +361,15 @@
             _linkedOrder.History.Any(history => history.Kind == TradeOrderHistoryEventKind.PayrollLinked);
         if (alreadyLinked)
         {
+            return;
+        }
+
+        // Never write this page's plain copy over an order that has become a commission since
+        // it was loaded; the commission keeps its own payroll link.
+        if (_linkedOrder.CompanyCommission == null &&
+            await TradeOperationsPersistence.LoadOrderAsync(_linkedOrder.Id) is { CompanyCommission: not null } canonical)
+        {
+            _linkedOrder = canonical;
             return;
         }
 
@@ -705,65 +589,6 @@
     private static string FormatGil(decimal value)
     {
         return $"{value:N0}g";
-    }
-
-    private static TradeOrderStatus GetAssignedOrderStatus(TradeOrderStatus status)
-    {
-        return status is TradeOrderStatus.Draft or TradeOrderStatus.ReadyToAssign
-            ? TradeOrderStatus.Assigned
-            : status;
-    }
-
-    private string FormatCrafterForHistory(Guid? crafterId)
-    {
-        return crafterId.HasValue
-            ? GetCrafterDisplayName(crafterId.Value) ?? "unknown crafter"
-            : "unassigned";
-    }
-
-    private void AddAssignmentHistoryIfChanged(TradeOrder order, Guid? previousCrafterId, Guid? newCrafterId, DateTime createdAtUtc)
-    {
-        if (previousCrafterId == newCrafterId)
-        {
-            return;
-        }
-
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.Assigned,
-            Note = newCrafterId.HasValue
-                ? $"Assigned to {FormatCrafterForHistory(newCrafterId)} from payroll."
-                : "Assignment cleared from payroll.",
-            CrafterId = newCrafterId,
-            CreatedAtUtc = createdAtUtc
-        });
-        order.History = history;
-    }
-
-    private static void AddStatusHistoryIfChanged(TradeOrder order, TradeOrderStatus previousStatus, TradeOrderStatus newStatus, string note, DateTime createdAtUtc)
-    {
-        if (previousStatus == newStatus)
-        {
-            return;
-        }
-
-        var history = order.History.ToList();
-        history.Add(new TradeOrderHistoryEvent
-        {
-            Id = Guid.NewGuid(),
-            CompanyProfileId = order.CompanyProfileId,
-            OrderId = order.Id,
-            Kind = TradeOrderHistoryEventKind.StatusChanged,
-            Note = note,
-            FromStatus = previousStatus,
-            ToStatus = newStatus,
-            CreatedAtUtc = createdAtUtc
-        });
-        order.History = history;
     }
 
     private static void AddPayrollLinkedHistoryIfMissing(TradeOrder order, DateTime createdAtUtc)

@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using MudBlazor;
 
@@ -25,7 +26,11 @@ public partial class TradeOrders
             ? null
             : TradeCollaboration.GetPublication(_selectedOrder.Id);
 
-    private string? CanonicalDiscordPublishUnavailableReason
+    /// <summary>
+    /// Why the canonical draft cannot be published yet. Channel availability is chosen in the
+    /// delivery dialog, where a portable link remains available without a trade channel.
+    /// </summary>
+    private string? CanonicalPublishUnavailableReason
     {
         get
         {
@@ -78,15 +83,13 @@ public partial class TradeOrders
                 return "Define the custom payment timing before publishing.";
             }
 
-            return CanPublishToConfiguredTradeChannel(order, out var reason)
-                ? null
-                : reason;
+            return null;
         }
     }
 
-    private bool CanPublishCanonicalCommissionToDiscord =>
+    private bool CanPublishCanonicalCommission =>
         !_isPublishingCommission &&
-        CanonicalDiscordPublishUnavailableReason == null;
+        CanonicalPublishUnavailableReason == null;
 
     private ProfileSyncConflict? SelectedOrderConflict =>
         _selectedOrder == null ? null : FindOrderConflict(_selectedOrder.Id);
@@ -123,73 +126,6 @@ public partial class TradeOrders
 
     private bool HasFailedCompanyPublication =>
         SelectedCompanyPublication?.State == TradeCommissionDeliveryState.Failed;
-
-    private string PublishCommissionButtonLabel =>
-        HasFailedCompanyPublication
-            ? "Retry Trade Channel"
-            : "Choose Delivery";
-
-    private string? PublishCommissionUnavailableReason
-    {
-        get
-        {
-            if (_selectedOrder == null)
-            {
-                return "Choose a commission first.";
-            }
-
-            if (HasLiveCommissionPublication && !HasFailedCompanyPublication)
-            {
-                return "This commission already has a live crafter brief.";
-            }
-
-            if (_selectedOrderPaymentTermsDirty)
-            {
-                return "Save the payment timing before publishing.";
-            }
-
-            if (HasActiveCompanyPublication)
-            {
-                return "Trade channel delivery is already in progress.";
-            }
-
-            if (HasFailedCompanyPublication)
-            {
-                if (string.IsNullOrWhiteSpace(SelectedCompanyPublication?.PublicId))
-                {
-                    return "The failed trade channel publication identity is unavailable.";
-                }
-
-                return CanPublishToConfiguredTradeChannel(
-                    _selectedOrder,
-                    out var retryReason)
-                        ? null
-                        : retryReason;
-            }
-
-            if (GetOrderRootItems(_selectedOrder).Count == 0)
-            {
-                return "Add at least one requested output before publishing.";
-            }
-
-            if (IsSelectedOrderUnpricedSkeleton)
-            {
-                return "Price the plan before publishing.";
-            }
-
-            var payment = GetSelectedOrderPaymentSummary();
-            if (payment.TotalPayment <= 0 || !payment.Active.IsAvailable)
-            {
-                return "Resolve the current payment evidence before publishing.";
-            }
-
-            return null;
-        }
-    }
-
-    private bool CanPublishCommission =>
-        !_isPublishingCommission &&
-        PublishCommissionUnavailableReason == null;
 
     private bool HasCanonicalDraftDetailChanges =>
         _selectedOrder?.CompanyCommission is { } commission &&
@@ -248,177 +184,28 @@ public partial class TradeOrders
         }
     }
 
-    private async Task PublishSelectedCommissionAsync()
+    /// <summary>
+    /// Publishes the canonical commission draft. The delivery dialog chooses the company trade
+    /// channel or a portable crafter link, and can mark the brief as a test fixture. Both
+    /// destinations commit through the host and the browser adopts the committed order.
+    /// </summary>
+    private async Task PublishCanonicalCommissionAsync()
     {
-        if (_selectedOrder == null || _companyProfile == null || !CanPublishCommission)
-        {
-            return;
-        }
-
-        if (HasFailedCompanyPublication)
-        {
-            _isPublishingCommission = true;
-            try
-            {
-                await RetrySelectedCommissionToDiscordAsync();
-            }
-            finally
-            {
-                _isPublishingCommission = false;
-            }
-
-            return;
-        }
-
-        var payment = GetSelectedOrderPaymentSummary();
-        var discordAvailable = CanPublishToConfiguredTradeChannel(
-            _selectedOrder,
-            out var discordUnavailableReason);
-        var parameters = new DialogParameters
-        {
-            [nameof(TradeCommissionPublishDialog.DiscordAvailable)] = discordAvailable,
-            [nameof(TradeCommissionPublishDialog.DiscordUnavailableReason)] =
-                discordUnavailableReason
-        };
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<TradeCommissionPublishDialog>(
-            "Publish Commission",
-            parameters,
-            options);
-        var result = await dialog.Result;
-        if (result?.Canceled != false ||
-            result.Data is not TradeCommissionPublishDialogResult publishResult)
+        if (!CanPublishCanonicalCommission || _companyProfile == null)
         {
             return;
         }
 
         _isPublishingCommission = true;
-        var publicationOrderId = _selectedOrder.Id;
-        TradeCompanyPublicationOwnership? ownership = null;
-        PortableCommissionLink? localLink = null;
-        var localOrderAttached = false;
+        TradeOrder? publishing = null;
         try
         {
-            if (publishResult.Destination == TradeCommissionDestination.DiscordChannel)
+            if (HasFailedCompanyPublication)
             {
-                await PublishSelectedCommissionToDiscordAsync(
-                    _selectedOrder,
-                    BuildCommissionBrief(
-                        _selectedOrder,
-                        payment,
-                        publishResult.IsTestFixture));
+                await RetrySelectedCommissionToDiscordAsync();
                 return;
             }
 
-            var orderId = publicationOrderId;
-            ownership = await TradeCollaboration.GetPublicationOwnershipAsync(_selectedOrder);
-            var brief = BuildCommissionBrief(
-                _selectedOrder,
-                payment,
-                publishResult.IsTestFixture);
-            var link = ownership == null
-                ? await CommissionBriefs.PublishPortableLinkAsync(brief)
-                : await TradeCollaboration.PublishPortableLinkAsync(
-                    _selectedOrder,
-                    brief);
-            if (ownership == null)
-            {
-                localLink = link;
-                var editorToken = link.EditorToken ??
-                    throw new InvalidOperationException(
-                        "The local brief did not return its revoke capability.");
-                if (!await CommissionBriefLocalState.SaveEditorTokenAsync(
-                        orderId,
-                        editorToken))
-                {
-                    await RollBackLocalPortableLinkAsync(
-                        _selectedOrder,
-                        link);
-                    return;
-                }
-
-                var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
-                orderToSave.CommissionPublication = new TradeCommissionPublication
-                {
-                    PublicId = link.PublicId,
-                    PublicUrl = link.PublicUrl,
-                    Version = link.Version,
-                    PublishedAtUtc = link.PublishedAtUtc,
-                    IsTestFixture = brief.IsTestFixture
-                };
-                AppendCommissionHistory(
-                    orderToSave,
-                    TradeOrderHistoryEventKind.CommissionPublished,
-                    $"Published crafter brief v{link.Version}.",
-                    link.PublishedAtUtc);
-                if (!await TradeOperationsPersistence.SaveOrderAsync(orderToSave))
-                {
-                    await RollBackLocalPortableLinkAsync(
-                        _selectedOrder,
-                        link);
-                    return;
-                }
-
-                localOrderAttached = true;
-                await ProfileSync.QueueLocalSaveAsync(
-                    ProfileSyncCollections.TradeOrders,
-                    orderId.ToString("D"));
-            }
-
-            AppState.NotifyTradeOperationsDataChanged();
-            await LoadAsync();
-            SelectOrderAfterReload(orderId, "The brief was published, but the order could not be reloaded.");
-            ActivateSharingTab();
-            await CopyTextToClipboardAsync(
-                link.Url,
-                "Commission published and link copied");
-        }
-        catch (TradeCompanyPublicationRefusedException exception)
-        {
-            Snackbar.Add(exception.Message, Severity.Error);
-        }
-        catch (Exception exception)
-        {
-            if (localLink != null && !localOrderAttached)
-            {
-                await RollBackLocalPortableLinkAsync(
-                    _selectedOrder,
-                    localLink);
-            }
-
-            if (localOrderAttached || ownership != null)
-            {
-                await LoadAsync();
-                SelectOrderAfterReload(
-                    publicationOrderId,
-                    "The publication may be attached remotely, but the order could not be reloaded.");
-                ActivateSharingTab();
-            }
-
-            Snackbar.Add(
-                localOrderAttached || ownership != null
-                    ? $"The commission publication status could not be confirmed: {exception.Message}"
-                    : $"Commission publication failed: {exception.Message}",
-                localOrderAttached || ownership != null
-                    ? Severity.Warning
-                    : Severity.Error);
-        }
-        finally
-        {
-            _isPublishingCommission = false;
-        }
-    }
-
-    private async Task PublishCanonicalCommissionToDiscordAsync()
-    {
-        if (!CanPublishCanonicalCommissionToDiscord)
-        {
-            return;
-        }
-
-        _isPublishingCommission = true;
-        try
-        {
             if (HasCanonicalDraftDetailChanges &&
                 !await TrySaveCanonicalCommissionDraftDetailsAsync(showSuccess: false))
             {
@@ -431,9 +218,63 @@ public partial class TradeOrders
                 throw new InvalidOperationException(
                     "The canonical commission changed before publication.");
             }
-            await PublishSelectedCommissionToDiscordAsync(
+
+            var discordAvailable = CanPublishToConfiguredTradeChannel(
                 owner.Order,
-                BuildCanonicalCommissionBrief(owner.Order, commission));
+                out var discordUnavailableReason);
+            var parameters = new DialogParameters
+            {
+                [nameof(TradeCommissionPublishDialog.DiscordAvailable)] = discordAvailable,
+                [nameof(TradeCommissionPublishDialog.DiscordUnavailableReason)] =
+                    discordUnavailableReason
+            };
+            var dialog = await DialogService.ShowAsync<TradeCommissionPublishDialog>(
+                "Publish Commission",
+                parameters,
+                new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result?.Canceled != false ||
+                result.Data is not TradeCommissionPublishDialogResult publishResult)
+            {
+                return;
+            }
+
+            owner = SelectedCommissionOwner;
+            if (owner?.Order.CompanyCommission is not { } current ||
+                current.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft)
+            {
+                throw new InvalidOperationException(
+                    "The canonical commission changed before publication.");
+            }
+
+            var brief = BuildCanonicalCommissionBrief(owner.Order, current);
+            brief.IsTestFixture = publishResult.IsTestFixture;
+            publishing = owner.Order;
+            if (publishResult.Destination == TradeCommissionDestination.DiscordChannel)
+            {
+                await PublishSelectedCommissionToDiscordAsync(owner.Order, brief);
+                return;
+            }
+
+            var orderId = owner.Order.Id;
+            var link = await TradeCollaboration.PublishPortableLinkAsync(owner.Order, brief);
+            var outcome = await ConfirmPublishedCommissionAsync(owner.Order);
+            await ShowPublishedCommissionAsync(orderId);
+            await CopyTextToClipboardAsync(
+                link.Url,
+                outcome.Outcome == PublishedCommissionOutcome.Published
+                    ? "Commission published and link copied"
+                    : "Commission published and link copied; status still confirming");
+        }
+        catch (TradeCompanyPublicationRefusedException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+        catch (Exception exception) when (publishing != null && exception is not OperationCanceledException)
+        {
+            // The host may have committed before this browser failed; only a commission that is
+            // still a draft on the host is reported as a failed publication.
+            await ReportPublicationExceptionAsync(publishing, exception);
         }
         catch (Exception exception)
         {
@@ -444,6 +285,96 @@ public partial class TradeOrders
         finally
         {
             _isPublishingCommission = false;
+        }
+    }
+
+    private enum PublishedCommissionOutcome
+    {
+        Published,
+        StillDraft,
+        Unconfirmed
+    }
+
+    private static readonly TimeSpan[] PublishedCommissionConfirmDelays =
+    [
+        TimeSpan.Zero,
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(3)
+    ];
+
+    /// <summary>
+    /// Adopts the host's committed commission straight from the host after publication (no
+    /// profile sync involved), retrying briefly, so this browser never keeps showing the
+    /// pre-publication draft. Unconfirmed outcomes are logged with their last error.
+    /// </summary>
+    private async Task<(PublishedCommissionOutcome Outcome, string? Detail)> ConfirmPublishedCommissionAsync(
+        TradeOrder order)
+    {
+        string? lastError = null;
+        foreach (var delay in PublishedCommissionConfirmDelays)
+        {
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay);
+            }
+            try
+            {
+                var projection = await CommissionOperations.RefreshOwnerAsync(order);
+                return projection.Order.CompanyCommission?.PublicMetadata.ViewState ==
+                       CompanyCommissionPublicViewState.Draft
+                    ? (PublishedCommissionOutcome.StillDraft, null)
+                    : (PublishedCommissionOutcome.Published, null);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                lastError = exception.Message;
+            }
+        }
+
+        Logger.LogWarning(
+            "The publication outcome of commission {OrderId} could not be confirmed ({Code}) after {Attempts} attempts: {Message}",
+            order.Id,
+            "publication_status_unconfirmed",
+            PublishedCommissionConfirmDelays.Length,
+            lastError);
+        return (PublishedCommissionOutcome.Unconfirmed, lastError);
+    }
+
+    private async Task ShowPublishedCommissionAsync(Guid orderId)
+    {
+        AppState.NotifyTradeOperationsDataChanged();
+        await LoadAsync();
+        SelectOrderAfterReload(orderId, "The commission was published, but the order could not be reloaded.");
+        ActivateSharingTab();
+    }
+
+    /// <summary>
+    /// A publish call failed in this browser. The host decides what happened: a published
+    /// commission is adopted and reported quietly, only a commission still in draft is a failure.
+    /// </summary>
+    private async Task ReportPublicationExceptionAsync(TradeOrder order, Exception exception)
+    {
+        var (outcome, detail) = await ConfirmPublishedCommissionAsync(order);
+        switch (outcome)
+        {
+            case PublishedCommissionOutcome.Published:
+                Logger.LogWarning(
+                    "Commission {OrderId} was published, but this browser failed afterwards: {Message}",
+                    order.Id,
+                    exception.Message);
+                await ShowPublishedCommissionAsync(order.Id);
+                Snackbar.Add("Commission published; status still confirming.", Severity.Info);
+                break;
+            case PublishedCommissionOutcome.StillDraft:
+                Snackbar.Add(
+                    $"Commission publication failed: {exception.Message}",
+                    Severity.Error);
+                break;
+            default:
+                Snackbar.Add(
+                    $"Publication status still confirming (publication_status_unconfirmed): {exception.Message} {detail}".TrimEnd(),
+                    Severity.Info);
+                break;
         }
     }
 
@@ -494,6 +425,17 @@ public partial class TradeOrders
         var result = await TradeCollaboration.PublishToDiscordAsync(
             order,
             brief);
+        if (!result.Success &&
+            result.Publication == null &&
+            result.Disposition != TradeCompanyMutationDisposition.Conflict)
+        {
+            // The publish call failed in this browser; the host may still have committed it.
+            await ReportPublicationExceptionAsync(
+                order,
+                new InvalidOperationException(
+                    result.Message ?? "Discord publication could not be queued."));
+            return;
+        }
         if (!result.Success)
         {
             if (result.Publication != null)
@@ -515,13 +457,13 @@ public partial class TradeOrders
             return;
         }
 
-        await LoadAsync();
-        SelectOrderAfterReload(orderId, "The publication was accepted, but the order could not be reloaded.");
-        ActivateSharingTab();
+        var (outcome, _) = await ConfirmPublishedCommissionAsync(order);
+        await ShowPublishedCommissionAsync(orderId);
         Snackbar.Add(
-            result.Publication?.State == TradeCommissionDeliveryState.Published
+            (result.Publication?.State == TradeCommissionDeliveryState.Published
                 ? "Commission published to Discord"
-                : "Discord publication queued",
+                : "Discord publication queued") +
+            (outcome == PublishedCommissionOutcome.Published ? string.Empty : "; status still confirming"),
             Severity.Success);
     }
 
@@ -601,43 +543,6 @@ public partial class TradeOrders
         TradeOrder order,
         out string reason) =>
         TradeCollaboration.CanPerformExternalAction(order, out reason);
-
-    private async Task RollBackLocalPortableLinkAsync(
-        TradeOrder order,
-        PortableCommissionLink link)
-    {
-        try
-        {
-            var editorToken = link.EditorToken ??
-                throw new InvalidOperationException(
-                    "The local brief revoke capability was unavailable.");
-            await CommissionBriefs.RevokeAsync(
-                link.PublicId,
-                editorToken);
-        }
-        catch (Exception exception)
-        {
-            Snackbar.Add(
-                $"The order could not retain the new link, and the orphaned brief could not be revoked: {exception.Message}",
-                Severity.Error);
-            return;
-        }
-
-        try
-        {
-            await CommissionBriefLocalState.ForgetEditorTokenAsync(order.Id);
-        }
-        catch (Exception exception)
-        {
-            Snackbar.Add(
-                $"The unpublished revoke capability could not be cleared from browser storage: {exception.Message}",
-                Severity.Warning);
-        }
-
-        Snackbar.Add(
-            "The order could not retain the new link, so the brief was revoked.",
-            Severity.Warning);
-    }
 
     private async Task UseHostedOrderVersionAsync()
     {
@@ -800,61 +705,21 @@ public partial class TradeOrders
         TradeCommissionPaymentSummary payment,
         bool? isTestFixture = null)
     {
-        var source = order.SourceSnapshot ?? new TradeOrderSourceSnapshot();
         var paymentTiming = GetEditablePaymentTiming(order);
-        var evidenceCapturedAt = payment.Materials
-            .Where(material => material.EvidenceTimestampUtc.HasValue)
-            .Select(material => material.EvidenceTimestampUtc!.Value)
-            .DefaultIfEmpty(source.ImportedAtUtc)
-            .Max();
-
-        return new CommissionBriefDocument
-        {
-            IsTestFixture = isTestFixture ??
-                order.CompanyCommission?.PublicMetadata.IsTestFixture ??
-                false,
-            CompanyName = _companyProfile?.Name ?? "FFXIV Trade Company",
-            Title = order.Title,
-            StatusLabel = order.AssignedCrafterId.HasValue ? "Assigned" : "Open for assignment",
-            AssignmentLabel = order.AssignedCrafterId.HasValue ? FormatAssignedCrafter(order) : "Contact operator",
-            Reference = $"CA-{order.CommissionedAtUtc:yyMMdd}-{order.Id.ToString("N")[..6].ToUpperInvariant()}",
-            Contact = string.IsNullOrWhiteSpace(_commissionContact)
-                ? string.Empty
-                : _commissionContact.Trim(),
-            DeliveryInstructions = string.IsNullOrWhiteSpace(_commissionDeliveryInstructions)
-                ? "Confirm delivery details with the commission operator."
-                : _commissionDeliveryInstructions.Trim(),
-            Outputs = GetOrderRootItems(order)
-                .Select(output => new CommissionBriefOutput(
-                    output.ItemId,
-                    output.Name,
-                    output.Quantity,
-                    output.MustBeHq))
-                .ToArray(),
-            CrafterMaterials = payment.Materials
-                .Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter)
-                .Select(ToBriefMaterial)
-                .ToArray(),
-            CompanyMaterials = payment.Materials
-                .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided)
-                .Select(ToBriefMaterial)
-                .ToArray(),
-            Payment = new CommissionBriefPayment(
-                FormatCommissionPaymentContract(payment.Active.Contract),
-                payment.Active.MaterialReimbursementTotal,
-                0,
-                payment.Active.CraftLaborTotal,
-                payment.Active.Total,
-                payment.Active.CraftSynthCount,
-                payment.Active.GilPerSynth,
+        return TradeCommissionDraftComposer.Compose(
+            order,
+            payment,
+            new TradeCommissionBriefContext(
+                string.IsNullOrWhiteSpace(_companyProfile?.Name)
+                    ? TradeCommissionDraftComposer.DefaultCompanyName
+                    : _companyProfile.Name,
+                _commissionContact?.Trim() ?? string.Empty,
+                _commissionDeliveryInstructions ?? string.Empty,
                 paymentTiming.Schedule,
-                paymentTiming.CustomTerms),
-            Evidence = new CommissionBriefEvidence(
-                source.CostBasis?.ToString() ?? "Unspecified",
-                FormatCommissionMarketScope(source),
-                FormatCommissionLocation(source),
-                evidenceCapturedAt)
-        };
+                paymentTiming.CustomTerms,
+                isTestFixture ?? order.CompanyCommission?.PublicMetadata.IsTestFixture ?? false,
+                order.AssignedCrafterId.HasValue ? "Assigned" : "Open for assignment",
+                order.AssignedCrafterId.HasValue ? FormatAssignedCrafter(order) : "Contact operator"));
     }
 
     private (CompanyCommissionPaymentSchedule Schedule, string? CustomTerms)
@@ -936,15 +801,6 @@ public partial class TradeOrders
         };
     }
 
-    private static CommissionBriefMaterial ToBriefMaterial(TradeCommissionPaymentMaterial material) =>
-        new(
-            material.ItemId,
-            material.Name,
-            material.Quantity,
-            material.RequiresHq,
-            material.UnitCost,
-            material.TotalCost);
-
     private async Task CopyCommissionLinkAsync()
     {
         if (_selectedOrder?.CommissionPublication is { RevokedAtUtc: null } publication)
@@ -988,19 +844,6 @@ public partial class TradeOrders
         publication.PublicUrl = resolved.Url;
         return resolved;
     }
-
-    private static string FormatCommissionMarketScope(TradeOrderSourceSnapshot source) =>
-        source.MarketFetchScope switch
-        {
-            MarketFetchScope.SelectedDataCenter => "Selected data center",
-            MarketFetchScope.EntireRegion => "Entire region",
-            _ => "Captured market scope"
-        };
-
-    private static string FormatCommissionPaymentContract(TradePaymentContractMode contract) =>
-        contract == TradePaymentContractMode.LaborStandard
-            ? "Craft labor and material reimbursement"
-            : "Agreed payment terms";
 
     private static string FormatCommissionLocation(TradeOrderSourceSnapshot source)
     {
