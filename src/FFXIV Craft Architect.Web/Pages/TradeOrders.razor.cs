@@ -143,7 +143,8 @@ public partial class TradeOrders
         _isRepricingSelectedOrder ||
         _isChangingProcurementSource ||
         _isCommissionCommandRunning ||
-        _isCreatingRequestedOrder;
+        _isCreatingRequestedOrder ||
+        _isDuplicatingSelectedOrder;
 
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [
@@ -764,6 +765,10 @@ public partial class TradeOrders
         _isSearchingRequestedOrderItems = false;
         _requestedOrderAddQuantity = 1;
         _requestedOrderOutputs = [];
+        _newRequestedOrderSupplyChoices = [];
+        _newRequestedOrderPaymentSchedule = CompanyCommissionPaymentSchedule.Advance;
+        _newRequestedOrderCustomPaymentTerms = null;
+        _appliedTemplateName = null;
     }
 
 }

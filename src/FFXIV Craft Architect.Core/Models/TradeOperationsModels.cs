@@ -31,6 +31,34 @@ public sealed class TradeCompanyDiscordInstallationBinding
 
 public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
 
+public sealed record TradeCommissionTemplateOutput(
+    int ItemId,
+    string Name,
+    int Quantity,
+    bool MustBeHq = false);
+
+public sealed record TradeCommissionTemplateSupplyChoice(
+    int ItemId,
+    string Name,
+    bool RequiresHq = false,
+    CommissionMaterialResponsibility Responsibility = CommissionMaterialResponsibility.Provided,
+    AcquisitionSource? AcquisitionSource = null);
+
+public sealed record TradeCommissionTemplate
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Name { get; init; } = string.Empty;
+    public string? DefaultOrderTitle { get; init; }
+    public string? Notes { get; init; }
+    public CompanyCommissionPaymentSchedule PaymentSchedule { get; init; } =
+        CompanyCommissionPaymentSchedule.Advance;
+    public string? CustomPaymentTerms { get; init; }
+    public IReadOnlyList<TradeCommissionTemplateOutput> Outputs { get; init; } = [];
+    public IReadOnlyList<TradeCommissionTemplateSupplyChoice> SupplyChoices { get; init; } = [];
+    public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+    public DateTime UpdatedAtUtc { get; init; } = DateTime.UtcNow;
+}
+
 public sealed class TradeCompanyProfile
 {
     public const int CurrentSchemaVersion = 5;
@@ -52,6 +80,7 @@ public sealed class TradeCompanyProfile
     // see this company's open commissions in their Crafter hub while this is on.
     public bool FreelancerOpenCommissions { get; set; } = true;
     public IReadOnlyList<TradeMarginItem> MarginItems { get; set; } = [];
+    public IReadOnlyList<TradeCommissionTemplate> CommissionTemplates { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 

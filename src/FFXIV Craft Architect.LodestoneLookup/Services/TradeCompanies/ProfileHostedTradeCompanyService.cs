@@ -629,7 +629,9 @@ public sealed partial class ProfileHostedTradeCompanyService(
         bool updateCommissionPricingScope = false,
         IReadOnlyList<TradeMarginItem>? marginItems = null,
         bool updateMarginItems = false,
-        bool? freelancerOpenCommissions = null)
+        bool? freelancerOpenCommissions = null,
+        IReadOnlyList<TradeCommissionTemplate>? commissionTemplates = null,
+        bool updateCommissionTemplates = false)
     {
         var snapshot = await LoadCompanyProfileSnapshotAsync(access, cancellationToken);
         if (snapshot == null)
@@ -668,6 +670,12 @@ public sealed partial class ProfileHostedTradeCompanyService(
         {
             updated.FreelancerOpenCommissions = freelancers;
         }
+        if (updateCommissionTemplates)
+        {
+            updated.CommissionTemplates = (commissionTemplates ?? [])
+                .Select(TradeCommissionTemplateValidator.Normalize)
+                .ToArray();
+        }
         updated.UpdatedAtUtc = DateTime.UtcNow;
         updated.SyncState = TradeSyncState.Synced;
 
@@ -680,7 +688,8 @@ public sealed partial class ProfileHostedTradeCompanyService(
             cancellationToken,
             allowCompanyCollection: true,
             updateMarginItems: updateMarginItems,
-            updateFreelancerOpenCommissions: freelancerOpenCommissions.HasValue);
+            updateFreelancerOpenCommissions: freelancerOpenCommissions.HasValue,
+            updateCommissionTemplates: updateCommissionTemplates);
         var appliedRevision = put.Object?.Revision ?? put.RemoteObject?.Revision;
         return put.Success && appliedRevision.HasValue
             ? new CompanyHubMutationResult(

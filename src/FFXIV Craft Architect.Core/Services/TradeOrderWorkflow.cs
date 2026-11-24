@@ -410,6 +410,25 @@ public static class TradeOrderWorkflow
         return true;
     }
 
+    /// <summary>
+    /// A linked plan exists but has never been priced: no cost basis, no quote, no quote
+    /// failure, and no published/agreed canonical terms.
+    /// </summary>
+    public static bool IsUnpricedSkeleton(TradeOrder? order)
+    {
+        if (order == null || string.IsNullOrWhiteSpace(order.CraftPlanId))
+        {
+            return false;
+        }
+
+        var snapshot = order.SourceSnapshot;
+        return snapshot?.CostBasis == null &&
+            snapshot?.MaterialQuote == null &&
+            string.IsNullOrWhiteSpace(snapshot?.MaterialQuoteFailureReason) &&
+            (order.CompanyCommission == null ||
+                order.CompanyCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft);
+    }
+
     public static TradeOrderProcurementEvidenceState GetProcurementEvidenceState(TradeOrder order)
     {
         ArgumentNullException.ThrowIfNull(order);

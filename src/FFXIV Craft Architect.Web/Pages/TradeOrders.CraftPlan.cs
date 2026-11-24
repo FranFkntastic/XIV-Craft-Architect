@@ -115,12 +115,22 @@ public partial class TradeOrders
                 _commissionTermsRevisionRollbackPlan = rollbackPlan;
             }
 
-            var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
-                orderToSave,
-                new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: false,
-                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
-                    MaterialResponsibilities: GetSelectedOrderMaterialResponsibilities()));
+            // Quantity edits before the first pricing run stay instant: rebuild the skeleton only.
+            var pricingResult = IsSelectedOrderUnpricedSkeleton
+                ? await TradeOrderPricingWorkflow.InitializePlanAsync(
+                    orderToSave,
+                    new TradeOrderInitializePlanOptions(
+                        InitialSupplyChoices: TradeCommissionTemplateMapper.ExtractTemplateSupplyChoices(
+                            _selectedOrder,
+                            GetSelectedOrderResponsibilityProjection(),
+                            rollbackPlan),
+                        MaterialResponsibilities: GetSelectedOrderMaterialResponsibilities()))
+                : await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+                    orderToSave,
+                    new TradeOrderPricingWorkflowOptions(
+                        ForceRefreshMarketData: false,
+                        MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
+                        MaterialResponsibilities: GetSelectedOrderMaterialResponsibilities()));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null)

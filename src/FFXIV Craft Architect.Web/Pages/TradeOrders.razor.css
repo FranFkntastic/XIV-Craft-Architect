@@ -2448,3 +2448,165 @@ button.trade-orders-rail-order.is-device-only:hover {
     flex-direction: column;
   }
 }
+
+/* Commission templates and staged supply choices (New Order) */
+.trade-orders-workspace-header > .trade-orders-inline-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.trade-orders-template-strip,
+.trade-orders-supply-choice-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.trade-orders-supply-choice-strip {
+  margin: 10px 0 0;
+}
+
+.trade-orders-template-strip-label {
+  padding-top: 6px;
+  color: #9a9a9a;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.trade-orders-template-list,
+.trade-orders-supply-choice-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trade-orders-template-item {
+  display: inline-flex;
+  align-items: stretch;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  background: #242424;
+}
+
+.trade-orders-template-item:hover {
+  border-color: #4d4d4d;
+}
+
+.trade-orders-template-item.is-applied {
+  border-color: #719363;
+  background: #2a3527;
+}
+
+.trade-orders-template-load {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  max-width: 260px;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  cursor: pointer;
+  padding: 4px 8px;
+  font: inherit;
+  text-align: left;
+}
+
+.trade-orders-template-load:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.trade-orders-template-load strong,
+.trade-orders-template-load span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-orders-template-load strong {
+  font-size: 0.78rem;
+}
+
+.trade-orders-template-load span {
+  color: #b8b8b8;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-orders-template-load .trade-orders-template-company {
+  color: #8fbf7f;
+}
+
+.trade-orders-supply-choice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  background: #242424;
+  padding: 1px 2px 1px 8px;
+  color: #e6e6e6;
+  font-size: 0.74rem;
+}
+
+.trade-orders-supply-choice-chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-orders-supply-choice-chip .trade-orders-hq {
+  margin-left: 0;
+}
+
+.trade-orders-supply-choice-route {
+  color: #a8a8a8;
+  white-space: nowrap;
+}
+
+.trade-orders-chip-remove {
+  flex: 0 0 auto;
+  min-width: 22px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #9a9a9a;
+  cursor: pointer;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.trade-orders-chip-remove:hover:not(:disabled) {
+  background: #343434;
+  color: #f0f0f0;
+}
+
+.trade-orders-chip-remove:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.trade-orders-template-load:focus-visible,
+.trade-orders-chip-remove:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 1px;
+}
+
+.trade-orders-plan-build-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
