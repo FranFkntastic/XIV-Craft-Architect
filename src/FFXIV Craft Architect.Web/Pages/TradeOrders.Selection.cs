@@ -447,7 +447,7 @@ public partial class TradeOrders
 
         if (!HasLinkedCraftPlan(order))
         {
-            return "Create Craft Plan";
+            return "Build & Price";
         }
 
         return order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.Unknown

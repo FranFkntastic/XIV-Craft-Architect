@@ -121,7 +121,8 @@ public sealed partial class CompanyHubClient(
         TradeCompanyProfile profile,
         long expectedRevision,
         CancellationToken cancellationToken = default,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool updateCommissionTemplates = false)
     {
         using var response = await SendAsync(
             HttpMethod.Put,
@@ -138,7 +139,9 @@ public sealed partial class CompanyHubClient(
                 UpdateCommissionPricingScope = true,
                 MarginItems = updateMarginItems ? profile.MarginItems : null,
                 UpdateMarginItems = updateMarginItems,
-                profile.FreelancerOpenCommissions
+                profile.FreelancerOpenCommissions,
+                CommissionTemplates = updateCommissionTemplates ? profile.CommissionTemplates : null,
+                UpdateCommissionTemplates = updateCommissionTemplates
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
@@ -682,7 +685,8 @@ public sealed record TradeCompanyWorkspaceProfile(
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
-    bool FreelancerOpenCommissions = true)
+    bool FreelancerOpenCommissions = true,
+    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -694,6 +698,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         MaterialPricingPolicy = MaterialPricingPolicy!,
         CommissionPricingScope = CommissionPricingScope,
         MarginItems = MarginItems ?? [],
+        CommissionTemplates = CommissionTemplates ?? [],
         FreelancerOpenCommissions = FreelancerOpenCommissions,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,

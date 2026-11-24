@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -16,7 +17,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
-    bool FreelancerOpenCommissions = true);
+    bool FreelancerOpenCommissions = true,
+    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -29,7 +31,9 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     bool UpdateCommissionPricingScope = false,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
     bool UpdateMarginItems = false,
-    bool? FreelancerOpenCommissions = null);
+    bool? FreelancerOpenCommissions = null,
+    IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
+    bool UpdateCommissionTemplates = false);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -89,7 +93,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Profile.UpdatedAtUtc,
                         snapshot.Profile.CommissionPricingScope,
                         snapshot.Profile.MarginItems,
-                        snapshot.Profile.FreelancerOpenCommissions));
+                        snapshot.Profile.FreelancerOpenCommissions,
+                        snapshot.Profile.CommissionTemplates));
             });
 
         companies.MapPut(
@@ -128,6 +133,11 @@ public static class TradeCompanyWorkspaceEndpoints
                 {
                     return Results.BadRequest(new { error = "invalid_margin_items" });
                 }
+                if ((body.UpdateCommissionTemplates || body.CommissionTemplates != null) &&
+                    !TradeCommissionTemplateValidator.IsValid(body.CommissionTemplates, out var templateError))
+                {
+                    return Results.BadRequest(new { error = "invalid_commission_templates", message = templateError });
+                }
 
                 var result = await companies.UpdateCompanyProfileAsync(
                     access,
@@ -142,7 +152,9 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.UpdateCommissionPricingScope,
                     body.MarginItems,
                     body.UpdateMarginItems,
-                    body.FreelancerOpenCommissions);
+                    body.FreelancerOpenCommissions,
+                    body.CommissionTemplates,
+                    body.UpdateCommissionTemplates);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

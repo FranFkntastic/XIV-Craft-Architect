@@ -297,14 +297,61 @@
                                                OnClick="PrepareOrderImport">
                                         Create From Active Plan
                                     </MudButton>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.AccountTree"
+                                               OnClick="InitializeRequestedOrderPlanAsync"
+                                               Disabled="@(!CanCreateRequestedOrder || _isCreatingRequestedOrder)">
+                                        Initialize Plan
+                                    </MudButton>
                                     <MudButton Variant="Variant.Filled"
                                                Color="Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.Payments"
                                                OnClick="CreateRequestedOrderAsync"
                                                Disabled="@(!CanCreateRequestedOrder || _isCreatingRequestedOrder)">
-                                        @(_isCreatingRequestedOrder ? "Creating..." : "Save Order")
+                                        @(_isCreatingRequestedOrder ? "Creating..." : "Save & Price")
                                     </MudButton>
                                 </div>
                             </div>
+                            @if (CommissionTemplates is { Count: > 0 } templates)
+                            {
+                                <div class="trade-orders-template-strip" role="group" aria-label="Commission templates">
+                                    <span class="trade-orders-template-strip-label">Templates</span>
+                                    <div class="trade-orders-template-list">
+                                        @foreach (var template in templates)
+                                        {
+                                            var companySupply = GetTemplateCompanySupplyNames(template);
+                                            var isApplied = string.Equals(_appliedTemplateName, template.Name, StringComparison.Ordinal);
+                                            <div class="@($"trade-orders-template-item{(isApplied ? " is-applied" : string.Empty)}")" @key="template.Id">
+                                                <button type="button"
+                                                        class="trade-orders-template-load"
+                                                        title="@FormatTemplateTooltip(template)"
+                                                        aria-pressed="@(isApplied ? "true" : "false")"
+                                                        disabled="@_isCreatingRequestedOrder"
+                                                        @onclick="() => ApplyCommissionTemplateToNewOrder(template)">
+                                                    <strong>@template.Name</strong>
+                                                    <span>@FormatTemplateOutputSummary(template)</span>
+                                                    @if (companySupply.Count > 0)
+                                                    {
+                                                        <span class="trade-orders-template-company"
+                                                              title="@($"Company: {string.Join(", ", companySupply)}")">
+                                                            Company: @companySupply[0]@(companySupply.Count > 1 ? $" +{companySupply.Count - 1:N0}" : string.Empty)
+                                                        </span>
+                                                    }
+                                                </button>
+                                                <button type="button"
+                                                        class="trade-orders-chip-remove"
+                                                        title="@($"Delete template {template.Name}")"
+                                                        aria-label="@($"Delete template {template.Name}")"
+                                                        disabled="@_isSavingCommissionTemplate"
+                                                        @onclick="() => DeleteCommissionTemplateAsync(template)">
+                                                    ×
+                                                </button>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
                             <div class="trade-orders-editor-grid">
                                 <MudTextField T="string"
                                               id="new-order-title"
@@ -405,6 +452,32 @@
                                         }
                                     }
                                 </div>
+                                @if (_newRequestedOrderSupplyChoices.Count > 0)
+                                {
+                                    <div class="trade-orders-supply-choice-strip" role="group" aria-label="Supply choices">
+                                        <span class="trade-orders-template-strip-label">Supply choices</span>
+                                        <div class="trade-orders-supply-choice-list">
+                                            @foreach (var choice in _newRequestedOrderSupplyChoices.ToArray())
+                                            {
+                                                <span class="trade-orders-supply-choice-chip" @key="@($"{choice.ItemId}:{choice.RequiresHq}")">
+                                                    <span>@choice.Name</span>
+                                                    @if (choice.RequiresHq)
+                                                    {
+                                                        <span class="trade-orders-hq">HQ</span>
+                                                    }
+                                                    <span class="trade-orders-supply-choice-route">· @FormatStagedSupplyChoice(choice)</span>
+                                                    <button type="button"
+                                                            class="trade-orders-chip-remove"
+                                                            title="@($"Remove supply choice for {choice.Name}")"
+                                                            aria-label="@($"Remove supply choice for {choice.Name}")"
+                                                            @onclick="() => RemoveStagedNewOrderSupplyChoice(choice)">
+                                                        ×
+                                                    </button>
+                                                </span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
                             </section>
                         </section>
                     }
@@ -432,6 +505,7 @@
                                                           OnOpenPlan="OpenPlanWorkbenchAsync"
                                                           OnEditTerms="OpenSelectedOrderTermsAsync">
                                     <HeaderActions>
+                                        @RenderDuplicateAndTemplateActions()
                                         @if (HasSelectedLifecycleAction)
                                         {
                                             <MudButton Variant="Variant.Outlined"
@@ -1017,7 +1091,7 @@
                                                        aria-label="Copy payment amount" />
                                     </div>
                                 </div>
-                                @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0)
+                                @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0 && !IsSelectedOrderUnpricedSkeleton)
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
                                 }
@@ -1160,6 +1234,7 @@
                                               @(_isSavingSelectedOrderOutputs ? "Saving..." : "Save Order")
                                           </MudButton>
                                       </span>
+                                      @RenderDuplicateAndTemplateActions()
                                       @if (HasSelectedLifecycleAction)
                                       {
                                           <MudButton Variant="Variant.Outlined"
@@ -1441,6 +1516,14 @@
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
                                                    Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.AccountTree"
+                                                   OnClick="InitializeSelectedOrderPlanAsync"
+                                                   Disabled="@(IsPlanMutationTransactionRunning || !CanEditSelectedOrderPlan || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                            Initialize Plan
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Build"
                                                    OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
                                                    Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || !CanEditSelectedOrderPlan || GetOrderRootItems(_selectedOrder).Count == 0)">
@@ -1610,14 +1693,24 @@
                                     }
                                     @if (!HasLinkedCraftPlan(_selectedOrder))
                                     {
-                                        <MudButton Variant="Variant.Filled"
-                                                   Color="Color.Primary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.Build"
-                                                   Disabled="@(!CanBeginSelectedOrderPlanReconstruction || IsPlanMutationTransactionRunning)"
-                                                   OnClick="BeginSelectedOrderPlanReconstructionAsync">
-                                            @(_isSavingSelectedOrderCraftPlan ? "Building..." : "Build craft plan")
-                                        </MudButton>
+                                        <div class="trade-orders-plan-build-actions">
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.AccountTree"
+                                                       Disabled="@(!CanBeginSelectedOrderPlanReconstruction || IsPlanMutationTransactionRunning)"
+                                                       OnClick="InitializeSelectedOrderPlanAsync">
+                                                Initialize Plan
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Build"
+                                                       Disabled="@(!CanBeginSelectedOrderPlanReconstruction || IsPlanMutationTransactionRunning)"
+                                                       OnClick="BeginSelectedOrderPlanReconstructionAsync">
+                                                @(_isSavingSelectedOrderCraftPlan ? "Building..." : "Build & Price")
+                                            </MudButton>
+                                        </div>
                                     }
                                 </section>
                                 @* Private drafts have no center payment breakdown; their payment lives here. *@
@@ -1682,6 +1775,7 @@
                                 }
                                 else
                                 {
+                                    var isUnpricedSkeleton = IsSelectedOrderUnpricedSkeleton;
                                     var allProcurementRows = GetSelectedOrderProcurementRows();
                                     var procurementRows = GetSupplyPlanRows(allProcurementRows);
                                     var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
@@ -1694,21 +1788,35 @@
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
                                             <span>Crafter reimbursable</span>
-                                            <strong>@(currentMaterialQuote is null && !(HasCanonicalCommission && !IsEditingCommissionTermsRevision) ? "Unavailable" : FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal))</strong>
+                                            <strong>@(isUnpricedSkeleton ? "Not priced" : currentMaterialQuote is null && !(HasCanonicalCommission && !IsEditingCommissionTermsRevision) ? "Unavailable" : FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal))</strong>
                                         </div>
                                         <div class="trade-orders-procurement-health">
                                             <span>Company handoff</span>
                                             <strong>@FormatCompanyHandoffSummary(procurementRows)</strong>
                                             <small>@FormatCompanyHandoffDetail(procurementRows)</small>
                                         </div>
-                                        <MudButton Variant="Variant.Filled"
-                                                   Color="Color.Primary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.Refresh"
-                                                   OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || !CanEditSelectedOrderPlan || !HasLinkedCraftPlan(_selectedOrder))">
-                                            @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
-                                        </MudButton>
+                                        @if (isUnpricedSkeleton)
+                                        {
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Payments"
+                                                       OnClick="PriceSelectedOrderAsync"
+                                                       Disabled="@(IsPlanMutationTransactionRunning || !CanEditSelectedOrderPlan)">
+                                                @(_isRepricingSelectedOrder ? "Pricing..." : "Price Plan")
+                                            </MudButton>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Refresh"
+                                                       OnClick="RepriceSelectedOrderAsync"
+                                                       Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || !CanEditSelectedOrderPlan || !HasLinkedCraftPlan(_selectedOrder))">
+                                                @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
+                                            </MudButton>
+                                        }
                                     </section>
 
                                     <div class="trade-orders-procurement-filters" role="group" aria-label="Filter procurement materials">
@@ -1793,15 +1901,18 @@
                                     <div class="trade-orders-procurement-footer">
                                         <span>@FormatProcurementFooter(procurementRows)</span>
                                         <div>
-                                            <small>@FormatGilAllowZero(GetProcurementMaterialValueTotal(procurementRows)) material value</small>
-                                            <strong>@(currentMaterialQuote is null && !(HasCanonicalCommission && !IsEditingCommissionTermsRevision) ? "Quote unavailable" : $"{FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)} reimbursable")</strong>
+                                            @if (!isUnpricedSkeleton)
+                                            {
+                                                <small>@FormatGilAllowZero(GetProcurementMaterialValueTotal(procurementRows)) material value</small>
+                                            }
+                                            <strong>@(isUnpricedSkeleton ? "Not priced" : currentMaterialQuote is null && !(HasCanonicalCommission && !IsEditingCommissionTermsRevision) ? "Quote unavailable" : $"{FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)} reimbursable")</strong>
                                         </div>
                                     </div>
-                                    @if (paymentSummary.Warnings.Count > 0)
+                                    @if (GetVisiblePlanWarnings(paymentSummary) is { Count: > 0 } planWarnings)
                                     {
                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
                                             <ul class="trade-orders-warning-list">
-                                                @foreach (var warning in paymentSummary.Warnings)
+                                                @foreach (var warning in planWarnings)
                                                 {
                                                     <li>@warning</li>
                                                 }
@@ -2427,7 +2538,31 @@
         </div>
     </div>;
 
-    private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
+    private RenderFragment RenderDuplicateAndTemplateActions() => @<text>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Secondary"
+                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                   OnClick="DuplicateSelectedOrderAsync"
+                   Disabled="@(!CanDuplicateOrTemplateSelectedOrder)">
+            @(_isDuplicatingSelectedOrder ? "Duplicating..." : "Duplicate")
+        </MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Secondary"
+                   StartIcon="@Icons.Material.Filled.BookmarkAdd"
+                   OnClick="SaveSelectedOrderAsTemplateAsync"
+                   Disabled="@(!CanDuplicateOrTemplateSelectedOrder)">
+            Save Template
+        </MudButton>
+    </text>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => IsSelectedOrderUnpricedSkeleton
+        ? @<div class="trade-orders-procurement-cost-cell">
+            <strong>@(row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand ? FormatGilAllowZero(0) : "—")</strong>
+            <span>@(row.Responsibility == CommissionMaterialResponsibility.Provided
+                ? "Company provided"
+                : row.Source == AcquisitionSource.OnHand ? "On hand" : "Not priced")</span>
+        </div>
+        : @<div class="trade-orders-procurement-cost-cell">
         <strong title="Active crafter procurement cash only; excludes labor and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
             ? row.PaymentImpact.HasValue ? FormatGilAllowZero(row.PaymentImpact.Value)
                 : HasAgreedPaymentTerms ? "Not itemized in terms" : "Impact unavailable"

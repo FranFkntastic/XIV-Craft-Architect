@@ -644,7 +644,8 @@ public partial class TradeOrders
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
                 materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
                 cancellationToken: cancellationToken,
-                includeOutputPurchaseQuotes: !IsCommissionPublished,
+                // An unpriced skeleton lists its rows only; pricing them waits for Price Plan.
+                includeOutputPurchaseQuotes: !IsCommissionPublished && !IsSelectedOrderUnpricedSkeleton,
                 routePaymentBasis: CreateRoutePaymentBasis(),
                 materialResponsibilities: GetSelectedOrderMaterialResponsibilities());
             if (requestId != _liveProcurementRefreshRequestId)
@@ -733,7 +734,7 @@ public partial class TradeOrders
     /// </summary>
     private WorkerRoutePaymentBasis? CreateRoutePaymentBasis()
     {
-        if (_selectedOrder == null || IsCommissionPublished)
+        if (_selectedOrder == null || IsCommissionPublished || IsSelectedOrderUnpricedSkeleton)
         {
             return null;
         }
@@ -868,7 +869,7 @@ public partial class TradeOrders
         builder.OpenElement(sequence++, "span");
         builder.AddAttribute(sequence++, "class", GetProcurementEvidenceTextClass(row));
         builder.AddAttribute(sequence++, "title", row.UnitCostExplanation);
-        builder.AddContent(sequence++, FormatPrecraftLaborEvidence(row) ?? FormatProcurementEvidence(row));
+        builder.AddContent(sequence++, FormatPrecraftLaborEvidence(row) ?? FormatSelectedOrderProcurementEvidence(row));
         builder.CloseElement();
     };
 
@@ -899,14 +900,14 @@ public partial class TradeOrders
             .ToArray();
     }
 
-    private static int CountProcurementRows(
+    private int CountProcurementRows(
         IReadOnlyList<TradeOrderProcurementRow> rows,
         TradeOrderProcurementFilter filter)
     {
         return rows.Count(row => MatchesProcurementFilter(row, filter));
     }
 
-    private static bool MatchesProcurementFilter(
+    private bool MatchesProcurementFilter(
         TradeOrderProcurementRow row,
         TradeOrderProcurementFilter filter)
     {
@@ -921,11 +922,18 @@ public partial class TradeOrders
         };
     }
 
-    private static bool ProcurementRowNeedsAttention(TradeOrderProcurementRow row)
+    private bool ProcurementRowNeedsAttention(TradeOrderProcurementRow row)
     {
         if (row.IsFullySuppressed)
         {
             return false;
+        }
+
+        // An unpriced skeleton is a normal working state: missing prices are expected, so only
+        // structural or supply warnings flag a row.
+        if (IsSelectedOrderUnpricedSkeleton)
+        {
+            return row.Warnings.Any(warning => !IsPricingWarning(warning));
         }
 
         if (row.Source == AcquisitionSource.OnHand)
@@ -942,6 +950,16 @@ public partial class TradeOrders
             row.Warnings.Count > 0 ||
             !string.Equals(row.EvidenceStatus, "Priced", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsPricingWarning(string warning) =>
+        warning.Contains("market", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("price", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("pricing", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("quote", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("listing", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("listed", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("evidence", StringComparison.OrdinalIgnoreCase) ||
+        warning.Contains("cost", StringComparison.OrdinalIgnoreCase);
 
     private void SetProcurementFilter(TradeOrderProcurementFilter filter)
     {
@@ -1037,18 +1055,30 @@ public partial class TradeOrders
             : $"{companyCount:N0} {(companyCount == 1 ? "handoff line" : "handoff lines")} before work begins";
     }
 
-    private static string GetProcurementHealthLabel(
+    private string GetProcurementHealthLabel(
         IReadOnlyList<TradeOrderProcurementRow> rows)
     {
         var attentionCount = rows.Count(ProcurementRowNeedsAttention);
+        if (IsSelectedOrderUnpricedSkeleton)
+        {
+            return attentionCount == 0
+                ? "Skeleton ready · not priced"
+                : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention · not priced";
+        }
+
         return attentionCount == 0
             ? "Evidence current"
             : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";
     }
 
-    private static string FormatProcurementEvidenceContext(TradeOrder order)
+    private string FormatProcurementEvidenceContext(TradeOrder order)
     {
         var scope = FormatProcurementScopeLabel(order);
+        if (IsSelectedOrderUnpricedSkeleton)
+        {
+            return string.IsNullOrWhiteSpace(scope) ? "Pricing scope pending" : scope;
+        }
+
         var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         return string.IsNullOrWhiteSpace(scope)
             ? $"Refreshed {refreshed}"
@@ -1072,27 +1102,45 @@ public partial class TradeOrders
         var materialCount = CountActiveProcurementRows(rows);
         var precraftCount = rows.Count(row =>
             IsSupplyPrecraftRow(row) && !IsRequestedOutputRow(row));
-        var state = attentionCount == 0
-            ? "all pricing evidence current"
-            : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";
+        var state = IsSelectedOrderUnpricedSkeleton && attentionCount == 0
+            ? "not priced yet"
+            : attentionCount == 0
+                ? "all pricing evidence current"
+                : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";
         var precraft = precraftCount == 0
             ? string.Empty
             : $" | {precraftCount:N0} {(precraftCount == 1 ? "precraft decision" : "precraft decisions")}";
         return $"{materialCount:N0} active {(materialCount == 1 ? "material" : "materials")}{precraft} | {state}";
     }
 
-    private static string GetProcurementStatusDotClass(TradeOrderProcurementRow row)
+    private string GetProcurementStatusDotClass(TradeOrderProcurementRow row)
     {
         return ProcurementRowNeedsAttention(row)
             ? "trade-orders-procurement-status-dot is-attention"
             : "trade-orders-procurement-status-dot";
     }
 
-    private static string GetProcurementEvidenceTextClass(TradeOrderProcurementRow row)
+    private string GetProcurementEvidenceTextClass(TradeOrderProcurementRow row)
     {
         return ProcurementRowNeedsAttention(row)
             ? "trade-orders-procurement-evidence is-attention"
             : "trade-orders-procurement-evidence";
+    }
+
+    private string FormatSelectedOrderProcurementEvidence(TradeOrderProcurementRow row)
+    {
+        if (!IsSelectedOrderUnpricedSkeleton)
+        {
+            return FormatProcurementEvidence(row);
+        }
+
+        var routeDescription = TradeProcurementRowBuilder.GetPlanRouteDescription(row);
+        if (!string.IsNullOrWhiteSpace(routeDescription))
+        {
+            return routeDescription;
+        }
+
+        return row.Warnings.FirstOrDefault(warning => !IsPricingWarning(warning)) ?? "Not priced yet";
     }
 
     private static string FormatProcurementEvidence(TradeOrderProcurementRow row)
@@ -1372,9 +1420,14 @@ public partial class TradeOrders
             return false;
         }
 
+        // An unpriced skeleton or deliberately skipped On Hand/company item has no listings loaded
+        // yet; keep its market routes selectable so switching back fetches live evidence on demand.
+        var isUnpricedSkeleton = IsSelectedOrderUnpricedSkeleton;
         var liveOption = liveRow.Options.FirstOrDefault(option => option.Source == source);
+        var allowUnfetchedMarketRoute = IsUnfetchedMarketOption(liveRow, liveOption);
         if (!liveRow.AvailableSources.Contains(source) ||
-            (source != liveRow.Source &&
+            (!allowUnfetchedMarketRoute &&
+             source != liveRow.Source &&
              source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq &&
              liveOption is { IsAvailable: false }))
         {
@@ -1405,14 +1458,19 @@ public partial class TradeOrders
         try
         {
             var stagedOrder = TradeOrderWorkflow.CopyOrder(_selectedOrder);
-            pricingResult = await TradeOrderPricingWorkflow.ReviseActiveAcquisitionAsync(
-                stagedOrder,
-                new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
-                source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
-                    ? [row.ItemId]
-                    : null,
-                _companyProfile?.MaterialPricingPolicy,
-                materialResponsibilities: GetSelectedOrderMaterialResponsibilities());
+            pricingResult = isUnpricedSkeleton
+                ? await TradeOrderPricingWorkflow.ReviseSkeletonAcquisitionAsync(
+                    stagedOrder,
+                    new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
+                    GetSelectedOrderMaterialResponsibilities())
+                : await TradeOrderPricingWorkflow.ReviseActiveAcquisitionAsync(
+                    stagedOrder,
+                    new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
+                    source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
+                        ? [row.ItemId]
+                        : null,
+                    _companyProfile?.MaterialPricingPolicy,
+                    materialResponsibilities: GetSelectedOrderMaterialResponsibilities());
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (pricingResult.ActivePlanFence is { } failedFence)
@@ -1482,7 +1540,8 @@ public partial class TradeOrders
         ClearLiveProcurementSnapshot();
         await EnsureLiveProcurementSnapshotAsync();
 
-        if (showSuccess)
+        // Skeleton edits are visible in the grid itself; only priced edits report a result.
+        if (showSuccess && !isUnpricedSkeleton)
         {
             if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
             {

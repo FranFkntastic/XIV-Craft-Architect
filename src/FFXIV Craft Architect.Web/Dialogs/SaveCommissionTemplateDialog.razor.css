@@ -1,0 +1,63 @@
+.commission-template-dialog {
+  display: grid;
+  gap: 10px;
+  min-width: min(440px, 80vw);
+}
+
+.commission-template-replace {
+  margin-top: -4px;
+  color: #d9b35a;
+  font-size: 0.75rem;
+}
+
+.commission-template-preview {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.commission-template-preview-label {
+  padding-top: 3px;
+  color: #9a9a9a;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.commission-template-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.commission-template-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  border: 1px solid #343434;
+  border-radius: 4px;
+  background: #242424;
+  padding: 2px 7px;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.commission-template-chip b {
+  font-weight: 600;
+}
+
+.commission-template-hq {
+  color: #d8b13d;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.commission-template-muted {
+  color: #a8a8a8;
+  font-size: 0.78rem;
+}

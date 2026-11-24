@@ -1826,7 +1826,8 @@ public sealed partial class SqliteProfileHostStore
         bool allowCompanyCollection = false,
         long? expectedServerRevision = null,
         bool updateMarginItems = false,
-        bool updateFreelancerOpenCommissions = false)
+        bool updateFreelancerOpenCommissions = false,
+        bool updateCommissionTemplates = false)
     {
         if (!allowCompanyCollection)
         {
@@ -1914,6 +1915,18 @@ public sealed partial class SqliteProfileHostStore
                         new System.Text.Json.Nodes.JsonArray();
                     payloadJson = marginObject.ToJsonString();
                 }
+                // Only the explicit commission-templates command owns this field. Generic
+                // profile sync and older clients carry the stored templates forward.
+                if (!updateCommissionTemplates && existing != null &&
+                    incoming is System.Text.Json.Nodes.JsonObject templatesObject)
+                {
+                    var previousTemplates =
+                        System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions)?["commissionTemplates"];
+                    templatesObject.Remove("commissionTemplates");
+                    templatesObject["commissionTemplates"] = previousTemplates?.DeepClone() ??
+                        new System.Text.Json.Nodes.JsonArray();
+                    payloadJson = templatesObject.ToJsonString();
+                }
                 // Only the explicit company settings commands own the freelancer
                 // visibility switch. Whole-profile sync, including older clients that
                 // never knew the field, carries the stored value forward.
@@ -1969,6 +1982,16 @@ public sealed partial class SqliteProfileHostStore
                         Success = false,
                         ErrorCode = "invalid_margin_items",
                         ErrorMessage = "Use at most 500 distinct positive item ids with non-negative sale prices."
+                    };
+                }
+                if (!TradeCommissionTemplateValidator.IsValid(company?.CommissionTemplates, out var templateError))
+                {
+                    await transaction.RollbackAsync(ct);
+                    return new ProfileSyncPutResponse
+                    {
+                        Success = false,
+                        ErrorCode = "invalid_commission_templates",
+                        ErrorMessage = templateError
                     };
                 }
                 if (company?.CommissionPricingScope is { IsValid: false })

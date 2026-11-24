@@ -1,0 +1,126 @@
+@using FFXIV_Craft_Architect.Core.Helpers
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Core.Services
+@using FFXIV_Craft_Architect.Web.Services
+
+<MudDialog>
+    <DialogContent>
+        <div class="commission-template-dialog">
+            <MudTextField @bind-Value="_name"
+                          id="save-commission-template-name"
+                          Label="Template name"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true"
+                          AutoFocus="true"
+                          MaxLength="@TradeCommissionTemplateValidator.MaxNameLength"
+                          @onkeyup="OnKeyUp" />
+            @if (ReplacesExisting)
+            {
+                <span class="commission-template-replace" role="status">Replaces existing template</span>
+            }
+            <section class="commission-template-preview" aria-label="Captured outputs">
+                <span class="commission-template-preview-label">Outputs</span>
+                <div class="commission-template-chips">
+                    @foreach (var output in Outputs)
+                    {
+                        <span class="commission-template-chip">
+                            @output.Name <b>×@TradeDisplayFormatter.FormatQuantity(output.Quantity)</b>
+                            @if (output.MustBeHq)
+                            {
+                                <span class="commission-template-hq">HQ</span>
+                            }
+                        </span>
+                    }
+                </div>
+            </section>
+            <section class="commission-template-preview" aria-label="Captured supply choices">
+                <span class="commission-template-preview-label">Supply</span>
+                @if (SupplyChoices.Count == 0)
+                {
+                    <span class="commission-template-muted">Crafter supplies all materials</span>
+                }
+                else
+                {
+                    <div class="commission-template-chips">
+                        @foreach (var choice in SupplyChoices)
+                        {
+                            <span class="commission-template-chip">
+                                @choice.Name
+                                @if (choice.RequiresHq)
+                                {
+                                    <span class="commission-template-hq">HQ</span>
+                                }
+                                <span class="commission-template-muted">· @FormatSupplyChoice(choice)</span>
+                            </span>
+                        }
+                    </div>
+                }
+            </section>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.BookmarkAdd"
+                   OnClick="Save"
+                   Disabled="string.IsNullOrWhiteSpace(_name)">
+            Save Template
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter] public string DefaultName { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<TradeCommissionTemplateOutput> Outputs { get; set; } = [];
+    [Parameter] public IReadOnlyList<TradeCommissionTemplateSupplyChoice> SupplyChoices { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> ExistingTemplateNames { get; set; } = [];
+    [Parameter] public CompanyCommissionPaymentSchedule PaymentSchedule { get; set; }
+    [Parameter] public string? CustomPaymentTerms { get; set; }
+    [Parameter] public string? Notes { get; set; }
+
+    private string _name = string.Empty;
+
+    private bool ReplacesExisting =>
+        !string.IsNullOrWhiteSpace(_name) &&
+        ExistingTemplateNames.Any(existing => string.Equals(
+            existing.Trim(),
+            _name.Trim(),
+            StringComparison.OrdinalIgnoreCase));
+
+    protected override void OnInitialized()
+    {
+        _name = DefaultName.Length > TradeCommissionTemplateValidator.MaxNameLength
+            ? DefaultName[..TradeCommissionTemplateValidator.MaxNameLength]
+            : DefaultName;
+    }
+
+    public static string FormatSupplyChoice(TradeCommissionTemplateSupplyChoice choice) =>
+        choice.Responsibility == CommissionMaterialResponsibility.Provided
+            ? "Company supplies"
+            : choice.AcquisitionSource is { } source
+                ? RecipePlanDisplayHelpers.GetSourceDisplayName(source)
+                : "Crafter";
+
+    private void OnKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_name))
+        {
+            Save();
+        }
+    }
+
+    private void Save()
+    {
+        MudDialog.Close(DialogResult.Ok(_name.Trim()));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+}

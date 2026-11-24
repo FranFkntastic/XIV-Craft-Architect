@@ -159,6 +159,185 @@ public sealed class TradeOrderDraftFactory
         return TradeOrderDraftCreateResult.Available(order);
     }
 
+    /// <summary>
+    /// A fresh draft order from a company commission template. The template's supply choices
+    /// come back alongside so the caller can seed responsibilities and initialize the plan.
+    /// </summary>
+    public TradeOrderSeededDraftResult CreateFromTemplate(TradeCommissionTemplateOrderCreateRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Template);
+
+        var template = TradeCommissionTemplateValidator.Normalize(request.Template);
+        var rootItems = template.Outputs
+            .Where(output => output.Quantity > 0)
+            .Select(output => new TradeOrderRootItemSnapshot(
+                output.ItemId,
+                output.Name,
+                output.Quantity,
+                output.MustBeHq,
+                0m))
+            .ToArray();
+        if (rootItems.Length == 0)
+        {
+            return TradeOrderSeededDraftResult.Unavailable(
+                $"Template \"{template.Name}\" has no outputs to commission.");
+        }
+
+        var title = FirstNonBlank(request.Title, template.DefaultOrderTitle) ??
+            CreateSuggestedTitle(rootItems);
+        var order = CreateSeededOrder(
+            request.CompanyProfileId,
+            request.AssignedCrafterId,
+            title,
+            template.Notes,
+            template.PaymentSchedule,
+            template.CustomPaymentTerms,
+            paymentPolicyOverride: null,
+            rootItems,
+            request.PricingScope,
+            world: null,
+            $"Created from template \"{template.Name}\".",
+            request.CreatedAtUtc);
+        return TradeOrderSeededDraftResult.Available(
+            order,
+            template.SupplyChoices,
+            TradeCommissionTemplateMapper.ToResponsibilityLines(template.SupplyChoices));
+    }
+
+    /// <summary>
+    /// A fresh, unpublished, unassigned draft with the same request as an existing order:
+    /// outputs and payment schedule (from canonical terms when a commission exists), notes,
+    /// and supply choices. Claims, publication, commission, history, plan and pricing are not
+    /// carried over.
+    /// </summary>
+    public TradeOrderSeededDraftResult CreateDuplicate(TradeOrderDuplicateRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Source);
+
+        var source = request.Source;
+        var estimatedValues = (source.SourceSnapshot?.RootItems ?? [])
+            .GroupBy(item => (item.ItemId, item.MustBeHq))
+            .ToDictionary(group => group.Key, group => group.First());
+        var rootItems = TradeCommissionTemplateMapper.ResolveOutputs(source)
+            .Select(output =>
+            {
+                var unitValue = estimatedValues.TryGetValue((output.ItemId, output.MustBeHq), out var root) &&
+                    root.Quantity > 0
+                        ? root.EstimatedSaleValue / root.Quantity
+                        : 0m;
+                return new TradeOrderRootItemSnapshot(
+                    output.ItemId,
+                    output.Name,
+                    output.Quantity,
+                    output.MustBeHq,
+                    unitValue * output.Quantity);
+            })
+            .ToArray();
+        if (rootItems.Length == 0)
+        {
+            return TradeOrderSeededDraftResult.Unavailable("The order has no outputs to duplicate.");
+        }
+
+        var (schedule, customTerms) = TradeCommissionTemplateMapper.ResolvePaymentSchedule(source);
+        var title = FirstNonBlank(request.Title) ??
+            (string.IsNullOrWhiteSpace(source.Title)
+                ? CreateSuggestedTitle(rootItems)
+                : $"{source.Title.Trim()} (Copy)");
+        var snapshot = source.SourceSnapshot;
+        var pricingScope = snapshot is { MarketFetchScope: { } scope } &&
+            !string.IsNullOrWhiteSpace(snapshot.Region)
+                ? new SeedPricingScope(
+                    scope,
+                    snapshot.Region,
+                    snapshot.DataCenter,
+                    snapshot.RequestedDataCenters)
+                : null;
+        var order = CreateSeededOrder(
+            source.CompanyProfileId,
+            assignedCrafterId: null,
+            title,
+            source.Notes,
+            schedule,
+            customTerms,
+            paymentPolicyOverride: null,
+            rootItems,
+            pricingScope,
+            snapshot?.World,
+            $"Duplicated from \"{source.Title}\".",
+            request.CreatedAtUtc);
+        var supplyChoices = TradeCommissionTemplateMapper.ExtractTemplateSupplyChoices(
+            source,
+            request.Responsibilities,
+            request.LinkedPlan);
+        return TradeOrderSeededDraftResult.Available(
+            order,
+            supplyChoices,
+            TradeCommissionTemplateMapper.ToResponsibilityLines(supplyChoices));
+    }
+
+    private static TradeOrder CreateSeededOrder(
+        Guid companyProfileId,
+        Guid? assignedCrafterId,
+        string title,
+        string? notes,
+        CompanyCommissionPaymentSchedule paymentSchedule,
+        string? customPaymentTerms,
+        TradePaymentPolicy? paymentPolicyOverride,
+        IReadOnlyList<TradeOrderRootItemSnapshot> rootItems,
+        SeedPricingScope? pricingScope,
+        string? world,
+        string createdNote,
+        DateTime createdAtUtc)
+    {
+        var orderId = Guid.NewGuid();
+        var status = assignedCrafterId.HasValue
+            ? TradeOrderStatus.Assigned
+            : TradeOrderStatus.ReadyToAssign;
+        return new TradeOrder
+        {
+            Id = orderId,
+            AuthoringSchemaVersion = TradeOrder.CurrentAuthoringSchemaVersion,
+            CompanyProfileId = companyProfileId,
+            Title = title.Trim(),
+            Status = status,
+            AssignedCrafterId = assignedCrafterId,
+            CommissionedAtUtc = createdAtUtc,
+            CreatedAtUtc = createdAtUtc,
+            UpdatedAtUtc = createdAtUtc,
+            Notes = NormalizeOptionalText(notes),
+            PaymentPolicyOverride = paymentPolicyOverride,
+            PaymentSchedule = paymentSchedule,
+            CustomPaymentTerms = paymentSchedule == CompanyCommissionPaymentSchedule.Custom
+                ? NormalizeOptionalText(customPaymentTerms)
+                : null,
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                SourceKind = TradeOrderSourceKind.TradeRequestedOutputs,
+                SourcePlanName = "Trade requested outputs",
+                MarketFetchScope = pricingScope?.Scope,
+                Region = pricingScope?.Region,
+                DataCenter = pricingScope?.DataCenter,
+                World = NormalizeOptionalText(world),
+                RequestedDataCenters = pricingScope?.RequestedDataCenters.ToArray() ?? [],
+                ImportedAtUtc = createdAtUtc,
+                RootItems = rootItems.ToArray(),
+                Materials = []
+            },
+            History = CreateInitialHistory(
+                companyProfileId,
+                orderId,
+                assignedCrafterId,
+                status,
+                createdNote,
+                createdAtUtc)
+        };
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+
     private static TradeOrderRootItemSnapshot ToRootSnapshot(TradeRequestedOrderOutput output)
     {
         return new TradeOrderRootItemSnapshot(
@@ -258,4 +437,57 @@ public sealed record TradeOrderDraftCreateResult(
     {
         return new TradeOrderDraftCreateResult(false, null, reason);
     }
+}
+
+public sealed record SeedPricingScope(
+    MarketFetchScope Scope,
+    string Region,
+    string? DataCenter,
+    IReadOnlyList<string> RequestedDataCenters)
+{
+    public static SeedPricingScope From(TradeCompanyPricingScope scope) =>
+        new(
+            scope.MarketFetchScope,
+            scope.Region,
+            scope.EffectiveDataCenter,
+            MarketFetchScopeResolver.GetDataCenters(
+                scope.MarketFetchScope,
+                scope.EffectiveDataCenter,
+                scope.Region,
+                [scope.Region]));
+}
+
+public sealed record TradeCommissionTemplateOrderCreateRequest(
+    TradeCommissionTemplate Template,
+    Guid CompanyProfileId,
+    DateTime CreatedAtUtc,
+    Guid? AssignedCrafterId = null,
+    string? Title = null,
+    SeedPricingScope? PricingScope = null);
+
+public sealed record TradeOrderDuplicateRequest(
+    TradeOrder Source,
+    DateTime CreatedAtUtc,
+    string? Title = null,
+    // The source order's payroll draft and linked plan, when loaded, carry its supply choices.
+    TradePayrollWorkflowDraft? Responsibilities = null,
+    StoredPlan? LinkedPlan = null);
+
+/// <summary>A new draft plus the supply choices to apply when its plan is initialized.</summary>
+public sealed record TradeOrderSeededDraftResult(
+    TradeOrderDraftCreateResult Draft,
+    IReadOnlyList<TradeCommissionTemplateSupplyChoice> SupplyChoices,
+    IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities)
+{
+    public bool CanCreate => Draft.CanCreate;
+    public TradeOrder? Order => Draft.Order;
+
+    public static TradeOrderSeededDraftResult Available(
+        TradeOrder order,
+        IReadOnlyList<TradeCommissionTemplateSupplyChoice> supplyChoices,
+        IReadOnlyList<TradePayrollResponsibilityLine> responsibilities) =>
+        new(TradeOrderDraftCreateResult.Available(order), supplyChoices, responsibilities);
+
+    public static TradeOrderSeededDraftResult Unavailable(string reason) =>
+        new(TradeOrderDraftCreateResult.Unavailable(reason), [], []);
 }

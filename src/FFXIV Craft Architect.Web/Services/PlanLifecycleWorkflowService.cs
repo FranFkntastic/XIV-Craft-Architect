@@ -19,7 +19,13 @@ public sealed record PlanDerivationRequest(
     TradeCompanyPricingScope? CompanyPricingScope = null,
     // Re-reconcile already-published market evidence without forcing a refetch:
     // pairs still fresh in the local cache resolve instantly, stale ones refresh.
-    bool ReconcileMarketEvidence = false);
+    bool ReconcileMarketEvidence = false,
+    // Trade pricing scope: only these market items need evidence. Null means every
+    // candidate; empty means none (company supplies or holds everything buyable).
+    IReadOnlyCollection<int>? TargetItemIds = null,
+    // Trade pricing quotes its own executable route, so the planner procurement
+    // route is not needed.
+    bool SkipProcurement = false);
 
 public sealed record PlanDerivationResult(
     bool MarketPublished,
@@ -257,9 +263,31 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             marketContextChanged = false;
         }
 
-        if (hadMarketCandidates)
+        if (hadMarketCandidates && request.TargetItemIds is { Count: 0 })
         {
-            if (request.SkipMarketRefresh && !marketContextChanged)
+            // Trade scope needs no listings at all: the company supplies or holds every
+            // buyable item. Adopt the pricing context when no published evidence prevents it.
+            if (market?.HasAnalysis != true && (marketContextChanged || request.CompanyPricingScope != null))
+            {
+                await _worker.MutateActiveContextAsync(
+                    new WorkerActiveContextMutation(
+                        selectedDataCenter,
+                        selectedRegion,
+                        marketScope),
+                    cancellationToken,
+                    operationId);
+                market = await _worker.GetMarketProjectionAsync(cancellationToken);
+                marketContextChanged = false;
+            }
+            marketPublished = true;
+        }
+        else if (hadMarketCandidates)
+        {
+            // A targeted item with no published evidence (e.g. a material switched back from
+            // company-supplied to crafter) is fetched even when refresh was skipped; items
+            // still fresh in the local cache resolve without a network call.
+            var missingTargetEvidence = IsMissingTargetEvidence(request.TargetItemIds, acquisition, market);
+            if (request.SkipMarketRefresh && !marketContextChanged && !missingTargetEvidence)
             {
                 marketPublished = market?.HasAnalysis == true;
                 analyzedCount = market?.AvailableCount ?? 0;
@@ -318,7 +346,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             else if (request.ForceRefreshMarketData ||
                      request.ReconcileMarketEvidence ||
                      market?.HasAnalysis != true ||
-                     marketContextChanged)
+                     marketContextChanged ||
+                     missingTargetEvidence)
             {
                 var outcome = await _worker.RunMarketAnalysisAsync(
                     new WorkerMarketAnalysisRequest(
@@ -327,7 +356,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                         selectedDataCenter,
                         selectedRegion,
                         market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
-                        SelectedRegions: selectedRegions),
+                        SelectedRegions: selectedRegions,
+                        TargetItemIds: request.TargetItemIds),
                     cancellationToken,
                     reportStatus,
                     operationId);
@@ -358,8 +388,9 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             return EmptyResult();
         }
 
-        var procurementPublished = acquisition.ActiveProcurementCount == 0;
-        if (acquisition.ActiveProcurementCount > 0 &&
+        var procurementPublished = acquisition.ActiveProcurementCount == 0 || request.SkipProcurement;
+        if (!request.SkipProcurement &&
+            acquisition.ActiveProcurementCount > 0 &&
             (marketPublished || !hadMarketCandidates) &&
             !_settings.DeferAutomaticProcurementReconciliationForBenchmark)
         {
@@ -420,6 +451,31 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             fetchedCount,
             procurementPublished,
             warnings);
+    }
+
+    /// <summary>
+    /// True when a targeted (Trade) derivation needs a market candidate whose evidence was
+    /// never published, e.g. a material just switched back from company-supplied to crafter.
+    /// </summary>
+    private static bool IsMissingTargetEvidence(
+        IReadOnlyCollection<int>? targetItemIds,
+        WorkerAcquisitionProjection acquisition,
+        WorkerMarketProjection? market)
+    {
+        if (targetItemIds is not { Count: > 0 } || market is null)
+        {
+            return false;
+        }
+
+        // Items lists every published shopping plan even when details are not projected;
+        // unavailable items were already checked and found unlisted.
+        var known = market.Items
+            .Select(item => item.ItemId)
+            .Concat(acquisition.UnavailableMarketItems.Select(item => item.ItemId))
+            .ToHashSet();
+        return acquisition.Rows
+            .Where(row => row.IsMarketCandidate && targetItemIds.Contains(row.ItemId))
+            .Any(row => !known.Contains(row.ItemId));
     }
 
     private async Task RunInBackgroundAsync(
