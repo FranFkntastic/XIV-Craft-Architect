@@ -45,7 +45,7 @@
         </div>
         <span class="toolbar-spacer"></span>
         <CompactMultiSelectField Id="margins-market-scope" Label="Prices from" Class="margins-scope"
-                                 Values="@(_profile?.MarginsMarketRegions ?? [])" ValuesChanged="SaveRegionsAsync"
+                                 Values="@RegionValues" ValuesChanged="SaveRegionsAsync"
                                  Options="@RegionOptions" ClearOptionLabel="Commission scope" SummaryText="@ScopeSummary"
                                  Disabled="@(_profile == null)" />
         <button type="button" class="margin-button" disabled="@Refreshing" @onclick="RefreshAsync">@(Refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
@@ -110,6 +110,10 @@
     private TradeMarginMarketScope? MarginScope => MarginScopeOf(_profile);
     private static TradeMarginMarketScope? MarginScopeOf(TradeCompanyProfile? profile) =>
         profile == null ? null : TradeMarginMarketScope.Resolve(profile.CommissionPricingScope, profile.MarginsMarketRegions);
+    // The region selection while its save is pending, so quick successive clicks build on each
+    // other instead of on the last saved value.
+    private IReadOnlyList<string>? _regionsDraft;
+    private IReadOnlyList<string> RegionValues => _regionsDraft ?? _profile?.MarginsMarketRegions ?? [];
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
         MarketFetchScopeResolver.GetRegions().Select(region => new CompactSelectOption(region, region)).ToArray();
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
@@ -276,7 +280,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     {
         get
         {
-            var regions = TradeMarginMarketScope.NormalizeRegions(_profile?.MarginsMarketRegions);
+            var regions = TradeMarginMarketScope.NormalizeRegions(RegionValues);
             if (regions.Count == MarketFetchScopeResolver.GetRegions().Count) return "All regions";
             if (regions.Count > 0) return string.Join(" + ", regions);
             return _profile?.CommissionPricingScope is not { } scope ? "Commission scope"
@@ -834,15 +838,22 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     private async Task SaveRegionsAsync(IReadOnlyList<string> regions)
     {
         var next = TradeMarginMarketScope.NormalizeRegions(regions);
+        _regionsDraft = next;
         await _gate.WaitAsync();
         try
         {
-            if (_disposed || _profile == null ||
+            // A newer selection is waiting behind this one and saves itself.
+            if (!ReferenceEquals(_regionsDraft, next) || _disposed || _profile == null ||
                 TradeMarginMarketScope.NormalizeRegions(_profile.MarginsMarketRegions).SequenceEqual(next)) return;
             await SaveProfileAsync(profile => profile.MarginsMarketRegions = next, marginsScope: true);
         }
         catch (Exception ex) { ReportError(ex); }
-        finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
+        finally
+        {
+            if (ReferenceEquals(_regionsDraft, next)) _regionsDraft = null;
+            _gate.Release();
+            if (!_disposed) StateHasChanged();
+        }
     }
     private Task SaveSourceAsync(int itemId, TradeMaterialRoute route, long? price = null) =>
         SaveSourcesAsync(sources => sources.Where(source => source.ItemId != itemId)
