@@ -46,6 +46,20 @@ public sealed class DiscordPublicationReconciliationService(
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                if (publication.State == DiscordPublicationState.Revoked &&
+                    string.IsNullOrWhiteSpace(publication.MessageId))
+                {
+                    await collaboration.EnqueueProjectionAsync(
+                        publication.PublicationId,
+                        DiscordPublicationState.Revoked,
+                        checked(publication.DesiredProjectionRevision + 1),
+                        "{}",
+                        timeProvider.GetUtcNow(),
+                        cancellationToken);
+                    reconciled++;
+                    continue;
+                }
+
                 var hosted = ResolveHostedOrder(publication, hostedOrders);
                 if (hosted is { Object.Deleted: true })
                 {

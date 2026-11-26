@@ -63,10 +63,8 @@ public partial class TradeOrders
     private HostedOrderProjectionSnapshot? _selectedLocalHostedCollision;
     private bool _showNewOrderPanel;
     private string _newOrderTitle = string.Empty;
-    private Guid? _newOrderCrafterId;
     private string _newRequestedOrderTitle = string.Empty;
     private bool _usingSuggestedRequestedOrderTitle;
-    private Guid? _newRequestedOrderCrafterId;
     private string? _newRequestedOrderNotes;
     private string _requestedOrderSearchQuery = string.Empty;
     private string _orderSearchText = string.Empty;
@@ -348,6 +346,7 @@ public partial class TradeOrders
         HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed += OnArchiveSummariesChanged;
         ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
+        DraftPromotions.StateChanged += OnDraftPromotionStateChanged;
         WorkerProjections.Changed += OnWorkerProjectionChangedForPlanRestoration;
         var notificationNavigation = TradeOrderNotificationNavigation.Parse(
             NavigationManager.ToAbsoluteUri(NavigationManager.Uri));
@@ -444,6 +443,7 @@ public partial class TradeOrders
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed -= OnArchiveSummariesChanged;
         ProfileSync.StatusChanged -= OnProfileSyncStatusChanged;
+        DraftPromotions.StateChanged -= OnDraftPromotionStateChanged;
         WorkerProjections.Changed -= OnWorkerProjectionChangedForPlanRestoration;
         if (_tradeOrdersLayoutRegistration != null)
         {
@@ -545,6 +545,7 @@ public partial class TradeOrders
                     _activeOpsTab = selectedTab;
                 }
             }
+            SchedulePendingDraftPromotion();
         }
         catch (Exception ex)
         {
@@ -660,41 +661,50 @@ public partial class TradeOrders
             return false;
         }
 
+        // Saves and promotions of one order never interleave. A promotion (here or in another
+        // tab sharing this browser's storage) may have made the order canonical since the
+        // editor loaded it; the stored copy decides, and a plain copy is never written over it.
+        return await DraftPromotions.RunExclusiveAsync(
+            order.Id,
+            () => SavePlainOrderAsync(order));
+    }
+
+    private async Task<bool> SavePlainOrderAsync(TradeOrder order)
+    {
+        var stored = await TradeOperationsPersistence.LoadOrderAsync(order.Id);
+        var canonical = stored?.CompanyCommission != null
+            ? stored
+            : _orders.FirstOrDefault(candidate =>
+                  candidate.Id == order.Id && candidate.CompanyCommission != null) ??
+              (HostedOrders.Get(order.Id)?.Order is { CompanyCommission: not null } hosted
+                  ? hosted
+                  : null);
+        if (canonical != null)
+        {
+            return await ReapplyEditToCanonicalDraftAsync(order, canonical);
+        }
+
+        // A plain draft that never reached the host stays a pending creation on this device:
+        // it joins the hosted workspace only as a commission draft, never as a plain order.
+        var draftWorkPackage = TradeCompanyCommissionMigrationService.IsDraftWorkPackage(order);
         var linkedPlanChanged =
             _selectedOrder?.Id != order.Id ||
             !string.Equals(_selectedOrder.CraftPlanId, order.CraftPlanId, StringComparison.Ordinal) ||
             _selectedOrder.CraftPlanSavedAtUtc != order.CraftPlanSavedAtUtc ||
             _selectedOrder.CraftPlanLinkKind != order.CraftPlanLinkKind;
-        if (linkedPlanChanged &&
-            order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
-            !string.IsNullOrWhiteSpace(order.CraftPlanId))
-        {
-            var linkedPlan = await PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId);
-            if (linkedPlan == null ||
-                !order.CraftPlanSavedAtUtc.HasValue ||
-                linkedPlan.SavedAt != order.CraftPlanSavedAtUtc.Value ||
-                linkedPlan.LinkedOrderId != order.Id)
-            {
-                Snackbar.Add(
-                    "The exact linked plan revision is unavailable, so the order was not saved.",
-                    Severity.Error);
-                return false;
-            }
-
-            await ProfileSync.QueueLocalSaveAsync(
-                ProfileSyncCollections.Plans,
-                linkedPlan.Id);
-        }
-
-        if (!await TradeOperationsPersistence.SaveOrderAsync(order))
+        if (!await SaveOrderLocallyAsync(
+                order,
+                verifyLinkedPlan: linkedPlanChanged,
+                queueProfileUpload: !draftWorkPackage || IsOrderHostedSynchronized(order)))
         {
             return false;
         }
 
-        await ProfileSync.QueueLocalSaveAsync(
-            ProfileSyncCollections.TradeOrders,
-            order.Id.ToString("D"));
-        AppState.NotifyTradeOperationsDataChanged();
+        if (draftWorkPackage)
+        {
+            DraftPromotions.ResetRefusal(order.Id);
+            SchedulePendingDraftPromotion();
+        }
         return true;
     }
 
@@ -716,7 +726,7 @@ public partial class TradeOrders
         var result = TradeOrderDraftFactory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
             source,
             _companyProfile.Id,
-            _newOrderCrafterId,
+            null,
             null,
             DateTime.UtcNow));
         if (!result.CanCreate || result.Order == null)
@@ -767,7 +777,6 @@ public partial class TradeOrders
     {
         _newRequestedOrderTitle = string.Empty;
         _usingSuggestedRequestedOrderTitle = false;
-        _newRequestedOrderCrafterId = null;
         _newRequestedOrderNotes = null;
         ++_requestedOrderSearchGeneration;
         _requestedOrderSearchQuery = string.Empty;

@@ -487,7 +487,6 @@ public partial class TradeOrders
                     _newRequestedOrderTitle,
                     ToRequestedOrderOutputs(),
                     _newRequestedOrderNotes,
-                    _newRequestedOrderCrafterId,
                     _newRequestedOrderPaymentSchedule,
                     _newRequestedOrderCustomPaymentTerms,
                     _newRequestedOrderSupplyChoices.ToArray()),
@@ -524,7 +523,6 @@ public partial class TradeOrders
         string Title,
         IReadOnlyList<TradeRequestedOrderOutput> Outputs,
         string? Notes,
-        Guid? AssignedCrafterId,
         CompanyCommissionPaymentSchedule PaymentSchedule,
         string? CustomPaymentTerms,
         IReadOnlyList<TradeCommissionTemplateSupplyChoice> SupplyChoices);
@@ -547,7 +545,7 @@ public partial class TradeOrders
 
         var draftResult = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
             companyProfile.Id,
-            spec.AssignedCrafterId,
+            null,
             spec.Title,
             spec.Outputs,
             AppState.SelectedDataCenter,
@@ -661,7 +659,6 @@ public partial class TradeOrders
                     string.IsNullOrWhiteSpace(template.DefaultOrderTitle) ? template.Name : template.DefaultOrderTitle,
                     outputs,
                     template.Notes,
-                    AssignedCrafterId: null,
                     template.PaymentSchedule,
                     template.CustomPaymentTerms,
                     TradeCommissionTemplateMapper.MergeCompanySupplyDefaults(
@@ -904,13 +901,13 @@ public partial class TradeOrders
             }
         }
 
-        if (!await SaveOrderAndNotifyAsync(order))
+        if (await SaveNewWorkPackageAsync(order, companyProfile) is not { } saved)
         {
             Snackbar.Add("Failed to save Trade order.", Severity.Error);
             return null;
         }
 
-        return order;
+        return saved;
     }
 
     /// <summary>

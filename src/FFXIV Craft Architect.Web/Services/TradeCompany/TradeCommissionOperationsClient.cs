@@ -191,6 +191,66 @@ public sealed class TradeCommissionOperationsClient(
             result.ClaimUrl);
     }
 
+    public async Task<TradeCommissionOwnerMutationResponse> CreateDraftAsync(
+        CreateCompanyCommissionDraftRequest request,
+        HostedProfileConnectionSettings capturedConnection,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(capturedConnection);
+        var workPackage = request.WorkPackage;
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{workPackage.CompanyProfileId:D}/commissions/" +
+            $"{workPackage.Id:D}/commands/create-draft",
+            request,
+            typeof(CreateCompanyCommissionDraftRequest),
+            cancellationToken,
+            capturedConnection);
+        if (!response.IsSuccessStatusCode)
+        {
+            var problem = await ReadProblemAsync(response, cancellationToken);
+            var code = problem?.Error ?? response.StatusCode switch
+            {
+                System.Net.HttpStatusCode.NotFound or
+                System.Net.HttpStatusCode.MethodNotAllowed => "create_draft_unsupported",
+                System.Net.HttpStatusCode.Unauthorized or
+                System.Net.HttpStatusCode.Forbidden => "company_access_denied",
+                _ => null
+            };
+            if (code != null)
+            {
+                throw new CompanyCommissionDraftRefusedException(
+                    code,
+                    problem?.Message ??
+                    problem?.ErrorMessage ??
+                    (code == "company_access_denied"
+                        ? "This hosted profile is not an operator of the order's Trade company."
+                        : "The connected Profile Hosting server cannot create commission drafts yet."));
+            }
+
+            throw new HttpRequestException(
+                $"Commission draft creation failed with HTTP {(int)response.StatusCode}.",
+                null,
+                response.StatusCode);
+        }
+
+        var result = await response.Content.ReadFromJsonAsync<TradeCommissionOwnerMutationBody>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The commission draft endpoint returned an empty mutation result.");
+        return new TradeCommissionOwnerMutationResponse(
+            new CompanyCommissionMutationResult(
+                result.Status,
+                result.Order,
+                result.Activity,
+                result.ErrorCode,
+                result.ErrorMessage),
+            result.Projection,
+            result.ClaimUrl);
+    }
+
     public async Task<TradeCommissionRecoveryResetResponse> ResetParticipantRecoveryAsync(
         ResetCompanyCommissionParticipantRecoveryCommand command,
         CancellationToken cancellationToken = default,
@@ -324,6 +384,13 @@ internal sealed class CompanyCommissionRevisionConflictException : InvalidOperat
             "The hosted commission or company changed before the command was applied.")
     {
     }
+}
+
+/// <summary>The host refused to create a commission draft and named why.</summary>
+public sealed class CompanyCommissionDraftRefusedException(string code, string message)
+    : InvalidOperationException(message)
+{
+    public string Code { get; } = code;
 }
 
 internal sealed class TradeCompanyAuthorizationException : InvalidOperationException

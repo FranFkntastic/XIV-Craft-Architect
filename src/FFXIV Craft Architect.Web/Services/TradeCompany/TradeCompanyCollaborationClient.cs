@@ -182,6 +182,16 @@ public sealed class TradeCompanyCollaborationClient(
                 idempotencyKey),
             cancellationToken,
             capturedConnection);
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<OrderAdoptionProblemDto>(
+                JsonOptions,
+                cancellationToken);
+            throw new TradeCompanyOrderConflictException(
+                problem?.Error ?? "order_adoption_conflict",
+                problem?.Message ?? "The company already has a different order with this identity.",
+                problem?.CurrentRecord);
+        }
         await EnsureSuccessAsync(response, cancellationToken);
         var adopted = await response.Content.ReadFromJsonAsync<TradeCompanyOrderAdoptionDto>(
             JsonOptions,
@@ -443,6 +453,10 @@ public sealed class TradeCompanyCollaborationClient(
         string? Message);
 
     private sealed record DiscordProblemDto(string? Error, string? Message);
+    private sealed record OrderAdoptionProblemDto(
+        string? Error,
+        string? Message,
+        TradeCompanyRecordEnvelope? CurrentRecord);
     private sealed record DiscordNotificationRouteDto(
         CompanyId CompanyId,
         string CommissionerDiscordUserId,
@@ -468,3 +482,15 @@ public sealed record TradeCompanyPortablePublication(
 
 public sealed class TradeCompanyPublicationRefusedException(string message)
     : InvalidOperationException(message);
+
+/// <summary>The company already holds a different record for an order this browser tried to adopt.</summary>
+public sealed class TradeCompanyOrderConflictException(
+    string code,
+    string message,
+    TradeCompanyRecordEnvelope? currentRecord)
+    : InvalidOperationException(message)
+{
+    public string Code { get; } = code;
+
+    public TradeCompanyRecordEnvelope? CurrentRecord { get; } = currentRecord;
+}

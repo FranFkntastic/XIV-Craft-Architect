@@ -115,6 +115,9 @@ public sealed class TradeCompanyProfile
     // What each material costs the company in Margins. Independent of
     // DefaultCompanySuppliedItems, which decides who supplies a material on a commission.
     public IReadOnlyList<TradeMaterialSource> MaterialSources { get; set; } = [];
+    // Whole regions Margins prices from; empty follows CommissionPricingScope. Margins only:
+    // commission planning, procurement and crafter pricing never read it.
+    public IReadOnlyList<string> MarginsMarketRegions { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 

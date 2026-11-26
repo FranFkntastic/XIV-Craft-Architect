@@ -25,7 +25,8 @@ public static class DiscordCommissionEndpoints
                         : "disabled",
                 signingReady = options.CanVerifyInteractions,
                 publishingReady = options.IsConfigured,
-                directPublishingReady = options.CanPublishDirectly
+                directPublishingReady = options.CanPublishDirectly,
+                logChannelConfigured = options.HasLogChannel
             }));
 
         app.MapPost(

@@ -9,6 +9,17 @@
         <div class="compact-multi-select-field-options"
              role="group"
              aria-labelledby="@LabelId">
+            @if (!string.IsNullOrWhiteSpace(ClearOptionLabel))
+            {
+                <label class="compact-multi-select-field-option is-clear">
+                    <input type="checkbox"
+                           checked="@(Values.Count == 0)"
+                           disabled="@Disabled"
+                           @onclick:preventDefault="@(Values.Count == 0)"
+                           @onchange="ClearAsync" />
+                    <span>@ClearOptionLabel</span>
+                </label>
+            }
             @foreach (var option in Options)
             {
                 <label class="compact-multi-select-field-option">
@@ -33,14 +44,20 @@
     [Parameter] public IReadOnlyList<CompactSelectOption> Options { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public string? Class { get; set; }
+    /// <summary>An option above the others that is checked while nothing is selected and clears the selection.</summary>
+    [Parameter] public string? ClearOptionLabel { get; set; }
+    /// <summary>Replaces the default closed-state text.</summary>
+    [Parameter] public string? SummaryText { get; set; }
 
     private string ControlId => string.IsNullOrWhiteSpace(Id) ? _generatedId : Id;
     private string LabelId => $"{ControlId}-label";
-    private string Summary => Values.Count == 0
+    private string Summary => SummaryText ?? (Values.Count == 0
         ? "No comparison"
         : string.Join(", ", Options
             .Where(option => Values.Contains(option.Value, StringComparer.OrdinalIgnoreCase))
-            .Select(option => option.Label));
+            .Select(option => option.Label)));
+
+    private Task ClearAsync() => Values.Count == 0 ? Task.CompletedTask : ValuesChanged.InvokeAsync([]);
 
     private string RootClass => string.Join(" ", new[]
     {

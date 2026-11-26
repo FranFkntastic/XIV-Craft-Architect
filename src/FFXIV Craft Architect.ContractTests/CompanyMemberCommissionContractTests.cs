@@ -588,6 +588,74 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal("membership_inactive", error!.Error);
     }
 
+    /// <summary>
+    /// An older client re-sending create-draft for an order the company has already assigned
+    /// must not silently turn that in-work record back into an unassigned commission draft.
+    /// </summary>
+    [Fact]
+    public async Task CreateDraftRefusesToReplaceAssignedPlainCompanyOrder()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var access = await fixture.Companies.ResolveMembershipAccessAsync(
+            fixture.Owner.ProfileId,
+            new CompanyId(fixture.Company.Id),
+            CancellationToken.None);
+        var webJson = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var now = DateTime.UtcNow;
+        var draft = new TradeOrder
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = fixture.Company.Id,
+            Title = "Bavarois",
+            Status = TradeOrderStatus.ReadyToAssign,
+            CommissionedAtUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                ImportedAtUtc = now,
+                RootItems = [new(100, "Rarefied Sykon Bavarois", 2, false, 0)],
+                CraftLabor = [new("bavarois", 100, "Rarefied Sykon Bavarois", 2, 500)]
+            }
+        };
+        var assigned = TradeOrderWorkflow.CopyOrder(draft);
+        assigned.Status = TradeOrderStatus.InProgress;
+        assigned.AssignedCrafterId = Guid.NewGuid();
+        var stored = await fixture.Companies.PutRecordAsync(
+            access!,
+            TradeCompanyRecordKinds.Order,
+            draft.Id.ToString("D"),
+            JsonSerializer.Serialize(assigned, webJson),
+            CompanyRecordRevision.None,
+            "assigned-plain-order",
+            CancellationToken.None);
+        Assert.True(stored.Success);
+
+        var result = await fixture.Commissions.CreateDraftAsync(
+            access!,
+            draft.Id,
+            new CreateCompanyCommissionDraftRequest(
+                stored.Record!.RecordRevision,
+                draft,
+                FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionDraftComposer.ComposeNewDraft(
+                    draft,
+                    null,
+                    fixture.Company)));
+
+        Assert.Equal(CompanyCommissionMutationStatus.Conflict, result.Status);
+        Assert.Equal("order_not_draft", result.ErrorCode);
+        var after = await fixture.Companies.LoadRecordAsync(
+            access!,
+            TradeCompanyRecordKinds.Order,
+            draft.Id.ToString("D"),
+            CancellationToken.None);
+        Assert.Equal(stored.Record.RecordRevision, after!.RecordRevision);
+        var kept = JsonSerializer.Deserialize<TradeOrder>(after.PayloadJson, webJson)!;
+        Assert.Null(kept.CompanyCommission);
+        Assert.Equal(assigned.AssignedCrafterId, kept.AssignedCrafterId);
+        Assert.Equal(TradeOrderStatus.InProgress, kept.Status);
+    }
+
     private sealed class MemberCommissionFixture : IAsyncDisposable
     {
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

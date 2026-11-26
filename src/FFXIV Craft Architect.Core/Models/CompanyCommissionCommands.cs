@@ -38,6 +38,17 @@ public sealed record CompanyCommissionDraftWorkPackage(
     DateTime? CraftPlanSavedAtUtc,
     TradeOrderCraftPlanLinkKind CraftPlanLinkKind);
 
+/// <summary>
+/// Creates the canonical unpublished commission for a new or not-yet-canonical Trade order.
+/// The host rebuilds the draft from the plain work package and brief with the same Core builder
+/// the browser used, so both sides commit byte-identical drafts. ExpectedObjectRevision is the
+/// company order record revision to replace, or 0 when no company record exists yet.
+/// </summary>
+public sealed record CreateCompanyCommissionDraftRequest(
+    CompanyRecordRevision ExpectedObjectRevision,
+    TradeOrder WorkPackage,
+    CommissionBriefDocument Brief);
+
 public sealed record AmendCompanyCommissionTermsCommand(
     CompanyCommissionCommandContext Context,
     CompanyCommissionTermsVersion Terms,

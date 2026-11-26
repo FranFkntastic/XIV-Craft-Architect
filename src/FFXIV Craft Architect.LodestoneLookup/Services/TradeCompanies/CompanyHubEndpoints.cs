@@ -109,7 +109,8 @@ public sealed record CompanyHubPostUpdateRequest(
 
 public sealed record CompanyHubMutationResponse(long ProfileRevision);
 public sealed record CompanyMarginItemsUpdateRequest(long ExpectedProfileRevision, bool UpdateMarginItems, IReadOnlyList<TradeMarginItem>? MarginItems,
-    bool UpdateMaterialSources = false, IReadOnlyList<TradeMaterialSource>? MaterialSources = null);
+    bool UpdateMaterialSources = false, IReadOnlyList<TradeMaterialSource>? MaterialSources = null,
+    bool UpdateMarginsMarketRegions = false, IReadOnlyList<string>? MarginsMarketRegions = null);
 public sealed record CompanyPolicyUpdateRequest(long ExpectedProfileRevision, string Name,
     string? Description, string? CommissionContact, TradePaymentPolicy PaymentPolicy,
     TradeCompanyPricingScope? CommissionPricingScope, bool? FreelancerOpenCommissions = null);
@@ -478,6 +479,14 @@ public sealed partial class CompanyHubService(
                 ErrorMessage: sourcesError ?? "Material sources are missing.");
         }
 
+        string? regionsError = null;
+        if (body.UpdateMarginsMarketRegions &&
+            (body.MarginsMarketRegions == null || !TradeMarginMarketScope.IsValid(body.MarginsMarketRegions, out regionsError)))
+        {
+            return new(CompanyHubMutationStatus.Invalid, ErrorCode: TradeMarginMarketScope.ErrorCode,
+                ErrorMessage: regionsError ?? "Margins regions are missing.");
+        }
+
         if (body.ExpectedProfileRevision != company!.ObjectRevision)
         {
             return RevisionConflict();
@@ -489,9 +498,13 @@ public sealed partial class CompanyHubService(
         {
             updated.MaterialSources = body.MaterialSources!.Select(TradeMaterialSourceValidator.Normalize).ToArray();
         }
+        if (body.UpdateMarginsMarketRegions)
+        {
+            updated.MarginsMarketRegions = TradeMarginMarketScope.NormalizeRegions(body.MarginsMarketRegions);
+        }
         updated.UpdatedAtUtc = DateTime.UtcNow;
         return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken, updateMarginItems: true,
-            updateMaterialSources: body.UpdateMaterialSources);
+            updateMaterialSources: body.UpdateMaterialSources, updateMarginsMarketRegions: body.UpdateMarginsMarketRegions);
     }
 
     public async Task<CompanyHubMutationResult> UpdatePolicyAsync(
@@ -662,7 +675,8 @@ public sealed partial class CompanyHubService(
         CancellationToken cancellationToken,
         bool updateMarginItems = false,
         bool updateFreelancerOpenCommissions = false,
-        bool updateMaterialSources = false)
+        bool updateMaterialSources = false,
+        bool updateMarginsMarketRegions = false)
     {
         var result = await profiles.PutObjectAsync(
             company.HostProfileId.ToString("D"),
@@ -674,7 +688,8 @@ public sealed partial class CompanyHubService(
             allowCompanyCollection: true,
             updateMarginItems: updateMarginItems,
             updateFreelancerOpenCommissions: updateFreelancerOpenCommissions,
-            updateMaterialSources: updateMaterialSources);
+            updateMaterialSources: updateMaterialSources,
+            updateMarginsMarketRegions: updateMarginsMarketRegions);
         return result.Success
             ? new CompanyHubMutationResult(
                 CompanyHubMutationStatus.Applied,

@@ -490,14 +490,10 @@ public partial class TradeOrders
         }
 
         var orderToSave = TradeOrderWorkflow.CopyOrder(_pendingImport);
-        var previousCrafterId = orderToSave.AssignedCrafterId;
         orderToSave.Title = _newOrderTitle.Trim();
-        orderToSave.AssignedCrafterId = _newOrderCrafterId;
-        orderToSave.Status = _newOrderCrafterId.HasValue
-            ? TradeOrderStatus.Assigned
-            : TradeOrderStatus.ReadyToAssign;
+        orderToSave.AssignedCrafterId = null;
+        orderToSave.Status = TradeOrderStatus.ReadyToAssign;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
-        AddHistoryIfAssignmentChanged(orderToSave, previousCrafterId, _newOrderCrafterId);
 
         if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
             "Creating this Trade order",
@@ -532,7 +528,6 @@ public partial class TradeOrders
 
         _pendingImport = null;
         _newOrderTitle = string.Empty;
-        _newOrderCrafterId = null;
         if (!await SelectCreatedOrderAsync(created.Id))
         {
             return;

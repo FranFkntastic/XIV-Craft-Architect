@@ -317,6 +317,54 @@ public static class CompanyCommissionEndpoints
             });
 
         company.MapPost(
+            "/{commissionId:guid}/commands/create-draft",
+            async (
+                string companyId,
+                Guid commissionId,
+                JsonElement body,
+                HttpRequest request,
+                TradeCompanyAuthorization authorization,
+                ProfileHostedTradeCompanyService companyService,
+                HostedCompanyCommissionService commissions,
+                CancellationToken cancellationToken) =>
+            {
+                var access = await authorization.ResolveAsync(
+                    request,
+                    companyId,
+                    cancellationToken);
+                if (access == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                CreateCompanyCommissionDraftRequest create;
+                try
+                {
+                    create = Deserialize<CreateCompanyCommissionDraftRequest>(body);
+                }
+                catch (JsonException exception)
+                {
+                    return InvalidCommand(exception.Message);
+                }
+
+                var mutation = await commissions.CreateDraftAsync(
+                    access,
+                    commissionId,
+                    create,
+                    cancellationToken);
+                if (!mutation.Success)
+                {
+                    return ToCommandError(mutation);
+                }
+
+                var profileObjectRevision = await companyService.MirrorOrderToGrantAsync(
+                    access,
+                    mutation.Order!,
+                    cancellationToken);
+                return Results.Ok(ToOwnerResponse(mutation, profileObjectRevision));
+            });
+
+        company.MapPost(
             "/{commissionId:guid}/commands/{route}",
             async (
                 string companyId,

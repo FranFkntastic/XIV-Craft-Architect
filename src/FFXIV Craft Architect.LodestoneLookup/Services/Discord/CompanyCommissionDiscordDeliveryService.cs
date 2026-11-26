@@ -76,10 +76,7 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                     existing.PublicId,
                     projection.Commission.PublicBriefId,
                     StringComparison.Ordinal) ||
-                !string.Equals(
-                    existing.ChannelId,
-                    installation.ChannelId,
-                    StringComparison.Ordinal))
+                !installation.OwnsChannel(existing.ChannelId))
             {
                 return Conflict(
                     "The canonical commission projection conflicts with its persisted Discord binding.");
@@ -101,6 +98,7 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                     projection.Commission.ProjectionRevision,
                     JsonSerializer.Serialize(payload, JsonOptions),
                     timeProvider.GetUtcNow(),
+                    installation.ResolveChannelId(state, existing.ChannelId),
                     cancellationToken);
             }
             catch (InvalidOperationException exception)
@@ -125,7 +123,7 @@ public sealed class CompanyCommissionDiscordDeliveryService(
             projection.Commission.Terms.Version,
             $"commission-projection:{projection.EventId:N}",
             actionToken,
-            installation.ChannelId,
+            installation.ResolveChannelId(state),
             state,
             JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),

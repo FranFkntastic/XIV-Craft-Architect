@@ -191,6 +191,7 @@ builder.Services.AddSingleton(services =>
         BotToken = botToken,
         AllowedGuildId = builder.Configuration["Discord:AllowedGuildId"] ?? string.Empty,
         AllowedChannelId = builder.Configuration["Discord:AllowedChannelId"] ?? string.Empty,
+        LogChannelId = builder.Configuration["Discord:LogChannelId"] ?? string.Empty,
         CommissionBaseUrl = builder.Configuration["Discord:CommissionBaseUrl"]
             ?? "https://dev.xivcraftarchitect.com/commission.html?id=",
         ApiBaseUrl = builder.Configuration["Discord:ApiBaseUrl"]
