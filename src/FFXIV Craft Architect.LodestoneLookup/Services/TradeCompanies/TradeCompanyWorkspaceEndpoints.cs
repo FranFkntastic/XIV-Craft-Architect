@@ -20,7 +20,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     bool FreelancerOpenCommissions = true,
     IReadOnlyList<TradeCommissionTemplate>? CommissionTemplates = null,
     IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null,
-    IReadOnlyList<TradeMaterialSource>? MaterialSources = null);
+    IReadOnlyList<TradeMaterialSource>? MaterialSources = null,
+    IReadOnlyList<string>? MarginsMarketRegions = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -39,7 +40,9 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     IReadOnlyList<TradeCompanySupplyDefault>? DefaultCompanySuppliedItems = null,
     bool UpdateDefaultCompanySuppliedItems = false,
     IReadOnlyList<TradeMaterialSource>? MaterialSources = null,
-    bool UpdateMaterialSources = false);
+    bool UpdateMaterialSources = false,
+    IReadOnlyList<string>? MarginsMarketRegions = null,
+    bool UpdateMarginsMarketRegions = false);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -102,7 +105,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Profile.FreelancerOpenCommissions,
                         snapshot.Profile.CommissionTemplates,
                         snapshot.Profile.DefaultCompanySuppliedItems,
-                        snapshot.Profile.MaterialSources));
+                        snapshot.Profile.MaterialSources,
+                        snapshot.Profile.MarginsMarketRegions));
             });
 
         companies.MapPut(
@@ -167,6 +171,16 @@ public static class TradeCompanyWorkspaceEndpoints
                     });
                 }
 
+                if ((body.UpdateMarginsMarketRegions || body.MarginsMarketRegions != null) &&
+                    !TradeMarginMarketScope.IsValid(body.MarginsMarketRegions, out var marginsScopeError))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = TradeMarginMarketScope.ErrorCode,
+                        message = marginsScopeError
+                    });
+                }
+
                 var result = await companies.UpdateCompanyProfileAsync(
                     access,
                     new CompanyRecordRevision(body.ExpectedRevision),
@@ -186,7 +200,9 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.DefaultCompanySuppliedItems,
                     body.UpdateDefaultCompanySuppliedItems,
                     body.MaterialSources,
-                    body.UpdateMaterialSources);
+                    body.UpdateMaterialSources,
+                    body.MarginsMarketRegions,
+                    body.UpdateMarginsMarketRegions);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

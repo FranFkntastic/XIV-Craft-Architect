@@ -1829,7 +1829,8 @@ public sealed partial class SqliteProfileHostStore
         bool updateFreelancerOpenCommissions = false,
         bool updateCommissionTemplates = false,
         bool updateDefaultCompanySuppliedItems = false,
-        bool updateMaterialSources = false)
+        bool updateMaterialSources = false,
+        bool updateMarginsMarketRegions = false)
     {
         if (!allowCompanyCollection)
         {
@@ -1953,6 +1954,18 @@ public sealed partial class SqliteProfileHostStore
                         new System.Text.Json.Nodes.JsonArray();
                     payloadJson = materialSourcesObject.ToJsonString();
                 }
+                // Only the explicit Margins scope command owns this field. Generic profile
+                // sync, Settings saves, margin-item saves and older clients carry it forward.
+                if (!updateMarginsMarketRegions && existing != null &&
+                    incoming is System.Text.Json.Nodes.JsonObject marginsScopeObject)
+                {
+                    var previousRegions =
+                        System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions)?["marginsMarketRegions"];
+                    marginsScopeObject.Remove("marginsMarketRegions");
+                    marginsScopeObject["marginsMarketRegions"] = previousRegions?.DeepClone() ??
+                        new System.Text.Json.Nodes.JsonArray();
+                    payloadJson = marginsScopeObject.ToJsonString();
+                }
                 // Only the explicit company settings commands own the freelancer
                 // visibility switch. Whole-profile sync, including older clients that
                 // never knew the field, carries the stored value forward.
@@ -2039,6 +2052,16 @@ public sealed partial class SqliteProfileHostStore
                         Success = false,
                         ErrorCode = TradeMaterialSourceValidator.ErrorCode,
                         ErrorMessage = materialSourcesError
+                    };
+                }
+                if (!TradeMarginMarketScope.IsValid(company?.MarginsMarketRegions, out var marginsScopeError))
+                {
+                    await transaction.RollbackAsync(ct);
+                    return new ProfileSyncPutResponse
+                    {
+                        Success = false,
+                        ErrorCode = TradeMarginMarketScope.ErrorCode,
+                        ErrorMessage = marginsScopeError
                     };
                 }
                 if (company?.CommissionPricingScope is { IsValid: false })

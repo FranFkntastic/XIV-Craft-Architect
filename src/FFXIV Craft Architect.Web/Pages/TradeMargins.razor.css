@@ -11,6 +11,13 @@
 .add-results button { display:flex; justify-content:flex-start; width:100%; align-items:center; gap:10px; padding:7px 12px; border:0; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
 .add-results button:hover,.add-results button[aria-selected=true] { background:rgba(212,167,58,.12); }
 .toolbar-spacer { flex:1; }
+.margins-toolbar ::deep .margins-scope { display:flex; align-items:center; gap:8px; }
+.margins-toolbar ::deep .margins-scope .compact-multi-select-field-label { color:#bdbdbd; font-size:12px; font-weight:600; }
+.margins-toolbar ::deep .margins-scope .compact-multi-select-field-summary { min-width:190px; max-width:300px; border-color:#555; border-radius:4px; background:transparent; list-style:none; }
+.margins-toolbar ::deep .margins-scope .compact-multi-select-field-summary::after { content:"▾"; position:absolute; right:9px; color:#9aa1a9; font-size:11px; }
+.margins-toolbar ::deep .margins-scope .compact-multi-select-field-summary::-webkit-details-marker { display:none; }
+.margins-toolbar ::deep .margins-scope .compact-multi-select-field-options { left:auto; min-width:100%; width:max-content; border-color:#48596b; background:#2d2d2d; }
+.margins-toolbar ::deep .margins-scope .compact-multi-select-field-option.is-clear { border-bottom:1px solid #3b3b3b; border-radius:3px 3px 0 0; margin-bottom:2px; }
 .margin-button { min-height:30px; padding:5px 10px; border:1px solid #555; border-radius:4px; background:transparent; color:#f3f3f3; font-size:12px; font-weight:700; cursor:pointer; }
 .margins-table-wrap { width:100%; max-width:100%; overflow-x:auto; border:1px solid #3b3b3b; border-top:0; background:#242424; }
 .margins-table-wrap ::deep .web-data-table { width:100%; min-width:1322px; table-layout:fixed; border-collapse:collapse; }

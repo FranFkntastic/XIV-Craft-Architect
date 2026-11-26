@@ -38,14 +38,19 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     private static string Key(Guid companyId, int itemId) => CompanyPrefix(companyId) + itemId.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Everything a row's figures depend on besides the market data: company, pricing scope,
-    /// item, batch size, labor rate and the company's material sources.
+    /// Everything a row's figures depend on besides the market data: company, Margins market
+    /// scope, item, batch size, labor rate and the company's material sources. A scope that
+    /// follows the commission scope keeps the inputs it had before Margins had its own scope.
     /// </summary>
-    public string Inputs(Guid companyId, TradeCompanyPricingScope scope, int itemId, int batchSize, decimal laborRate,
+    public string Inputs(Guid companyId, TradeMarginMarketScope scope, int itemId, int batchSize, decimal laborRate,
         IReadOnlyList<TradeMaterialSource> sources) =>
-        string.Join('|', companyId.ToString("D"), scope.Region, scope.DataCenter ?? "", (int)scope.MarketFetchScope,
+        string.Join('|', companyId.ToString("D"), ScopeInputs(scope),
             itemId.ToString(CultureInfo.InvariantCulture), batchSize.ToString(CultureInfo.InvariantCulture),
             laborRate.ToString("0.##########", CultureInfo.InvariantCulture), SourcesHash(sources));
+
+    private static string ScopeInputs(TradeMarginMarketScope scope) => scope.Commission is { } commission
+        ? string.Join('|', commission.Region, commission.DataCenter ?? "", ((int)commission.MarketFetchScope).ToString(CultureInfo.InvariantCulture))
+        : "regions:" + string.Join('+', scope.Regions);
 
     private string SourcesHash(IReadOnlyList<TradeMaterialSource> sources)
     {

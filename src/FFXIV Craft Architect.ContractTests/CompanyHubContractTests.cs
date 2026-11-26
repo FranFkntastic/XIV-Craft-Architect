@@ -374,7 +374,7 @@ public sealed class CompanyHubContractTests
     }
 
     [Fact]
-    public async Task MaterialSourcesAndBatchSizesSurviveSettingsSyncAndMarginItemSaves()
+    public async Task MaterialSourcesMarginsScopeAndBatchSizesSurviveSettingsSyncAndMarginItemSaves()
     {
         await using var fixture = await HubFixture.CreateAsync();
         var owner = await fixture.CreateAccountAsync("Owner");
@@ -386,12 +386,16 @@ public sealed class CompanyHubContractTests
             new(5057, TradeMaterialRoute.Vendor),
             new(5371, TradeMaterialRoute.SetPrice, 0)
         ];
+        string[] regions = ["North America", "Europe"];
         var workspace = $"/trade/v1/companies/{company.Id:D}/workspace-profile";
 
+        // A company-wide Margins scope that is silently dropped reverts every operator's margins
+        // to the narrow commission scope with no visible error.
         async Task<long> PutWorkspaceAsync(long revision, bool withSources) =>
             await ReadRevisionAsync(await client.PutAsJsonAsync(workspace, new TradeCompanyWorkspaceProfileUpdateRequest(
                 revision, company.Name, "Settings edit", null, company.PaymentPolicy,
-                MaterialSources: withSources ? sources : null, UpdateMaterialSources: withSources)));
+                MaterialSources: withSources ? sources : null, UpdateMaterialSources: withSources,
+                MarginsMarketRegions: withSources ? regions : null, UpdateMarginsMarketRegions: withSources)));
 
         async Task<long> SyncAsync(long revision)
         {
@@ -423,6 +427,7 @@ public sealed class CompanyHubContractTests
 
         var stored = await client.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(workspace);
         Assert.Equal(sources, stored!.MaterialSources);
+        Assert.Equal(regions, stored.MarginsMarketRegions!);
         Assert.Equal([new TradeMarginItem(5057, 120, 25)], stored.MarginItems!);
         // An item stored before batch sizes existed reads as a batch of one.
         Assert.Equal(1, JsonSerializer.Deserialize<TradeMarginItem>(
