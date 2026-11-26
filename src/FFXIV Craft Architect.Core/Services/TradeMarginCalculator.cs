@@ -207,15 +207,20 @@ public sealed class TradeMarginCalculator(
     }
 
     /// <summary>
-    /// True when every material of the row has stored market data in every data center of
-    /// <paramref name="scope"/>. Data covering only part of the scope (e.g. just after the scope
-    /// widened) would price the row as if the scope were narrower.
+    /// True when the row can be priced from <paramref name="stored"/>: it carries an issue, or every
+    /// material has stored market data in every data center of <paramref name="scope"/>. Data
+    /// covering only part of the scope (e.g. just after the scope widened) would price the row as
+    /// if the scope were narrower.
     /// </summary>
     public static bool HasMarketData(PreparedRow row, TradeMarginMarketScope? scope,
         IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
     {
-        var pairs = Pairs(row, scope);
-        return pairs.Count > 0 && pairs.All(stored.ContainsKey);
+        if (row.Issue != null)
+        {
+            return true;
+        }
+
+        return scope is not null && Pairs(row, scope).All(stored.ContainsKey);
     }
 
     /// <summary>
