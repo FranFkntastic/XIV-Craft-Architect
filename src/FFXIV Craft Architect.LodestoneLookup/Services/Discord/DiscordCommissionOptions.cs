@@ -10,6 +10,7 @@ public sealed class DiscordCommissionOptions
     public string BotToken { get; init; } = string.Empty;
     public string AllowedGuildId { get; init; } = string.Empty;
     public string AllowedChannelId { get; init; } = string.Empty;
+    public string LogChannelId { get; init; } = string.Empty;
     public string CommissionBaseUrl { get; init; } = string.Empty;
     public string ApiBaseUrl { get; init; } = "https://discord.com/api/v10/";
     public string DatabasePath { get; init; } = Path.Combine(
@@ -42,7 +43,22 @@ public sealed class DiscordCommissionOptions
         companyId != Guid.Empty &&
         IsDiscordSnowflake(ApplicationId) &&
         IsDiscordSnowflake(AllowedGuildId) &&
-        IsDiscordSnowflake(AllowedChannelId);
+        IsDiscordSnowflake(AllowedChannelId) &&
+        (string.IsNullOrWhiteSpace(LogChannelId) || IsDiscordSnowflake(LogChannelId));
+
+    // Claimed and completed commissions move to a sibling log channel so the
+    // open channel stays a spotlight of claimable work.
+    public bool HasLogChannel =>
+        IsDiscordSnowflake(LogChannelId) &&
+        !string.Equals(LogChannelId, AllowedChannelId, StringComparison.Ordinal);
+
+    public string EffectiveLogChannelId =>
+        HasLogChannel ? LogChannelId : AllowedChannelId;
+
+    public bool IsAllowedChannel(string? channelId) =>
+        !string.IsNullOrWhiteSpace(channelId) &&
+        (string.Equals(channelId, AllowedChannelId, StringComparison.Ordinal) ||
+         HasLogChannel && string.Equals(channelId, LogChannelId, StringComparison.Ordinal));
 
     public bool TryBuildCommissionUrl(string publicId, out string publicUrl)
     {

@@ -22,8 +22,9 @@ internal sealed class DiscordCommissionInteractionService(
         JsonElement interaction,
         CancellationToken cancellationToken = default)
     {
+        var interactionChannelId = ReadString(interaction, "channel_id");
         if (ReadString(interaction, "guild_id") != options.AllowedGuildId ||
-            ReadString(interaction, "channel_id") != options.AllowedChannelId)
+            !options.IsAllowedChannel(interactionChannelId))
         {
             return Refusal("This action is available only in the dedicated commission channel.");
         }
@@ -44,9 +45,10 @@ internal sealed class DiscordCommissionInteractionService(
             !DiscordSnowflake.IsValid(interactionId) ||
             !string.Equals(
                 publication.ChannelId,
-                options.AllowedChannelId,
+                interactionChannelId,
                 StringComparison.Ordinal))
         {
+            // A card left behind in the other channel after a move is stale.
             return Refusal("This commission action is no longer available.");
         }
 
