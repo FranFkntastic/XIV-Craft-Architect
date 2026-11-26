@@ -142,9 +142,8 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
   const guildId = requireValue(configuration, 'DISCORD_GUILD_ID');
   const channelName = requireValue(configuration, 'DISCORD_CHANNEL_NAME');
   const parentId = requireValue(configuration, 'DISCORD_CHANNEL_PARENT_ID');
-  const logChannelName =
-    configuration.DISCORD_LOG_CHANNEL_NAME?.trim() || `${channelName}-log`;
-  if (logChannelName === channelName) {
+  const logChannelName = configuration.DISCORD_LOG_CHANNEL_NAME?.trim() ?? '';
+  if (logChannelName && logChannelName === channelName) {
     throw new Error('DISCORD_LOG_CHANNEL_NAME must differ from DISCORD_CHANNEL_NAME.');
   }
 
@@ -168,12 +167,18 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
   const canSetOverwrites = (permissions & (Administrator | ManageRoles)) !== 0n;
   const channels = await discordRequest(fetchImpl, token, `/guilds/${guildId}/channels`);
   const reuseOrCreateTextChannel = async (name, topic, permissionOverwrites = null) => {
-    const matches = channels.filter(channel =>
+    const inCategory = channels.filter(channel =>
       channel.name === name &&
       channel.parent_id === parentId &&
       channel.type === 0);
-    if (matches.length > 1) {
+    if (inCategory.length > 1) {
       throw new Error(`More than one #${name} text channel exists under the configured category.`);
+    }
+    const matches = inCategory.length === 1
+      ? inCategory
+      : channels.filter(channel => channel.name === name && channel.type === 0);
+    if (matches.length > 1) {
+      throw new Error(`More than one #${name} text channel exists in the guild.`);
     }
 
     const createBody = {
@@ -199,11 +204,13 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
   const channel = await reuseOrCreateTextChannel(
     channelName,
     'Craft Architect commission briefs: scope, material responsibility, payment basis, and evidence in one place.');
-  const logChannel = await reuseOrCreateTextChannel(
-    logChannelName,
-    'Claimed and completed Craft Architect commissions.',
-    channel.permission_overwrites);
-  if (logChannel.id === channel.id) {
+  const logChannel = logChannelName
+    ? await reuseOrCreateTextChannel(
+        logChannelName,
+        'Claimed and completed Craft Architect commissions.',
+        channel.permission_overwrites)
+    : null;
+  if (logChannel && logChannel.id === channel.id) {
     throw new Error('The commission log channel resolved to the open commission channel.');
   }
 
@@ -242,7 +249,8 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
   }
 
   let legacyWorkspaceLabelsUpdated = 0;
-  for (const channelId of [channel.id, logChannel.id]) {
+  const channelIdsToScan = logChannel ? [channel.id, logChannel.id] : [channel.id];
+  for (const channelId of channelIdsToScan) {
     legacyWorkspaceLabelsUpdated += await reconcileLegacyWorkspaceLabels(
       fetchImpl,
       token,
@@ -258,8 +266,8 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     guildName: guild.name,
     channelId: channel.id,
     channelName: channel.name,
-    logChannelId: logChannel.id,
-    logChannelName: logChannel.name,
+    logChannelId: logChannel?.id ?? '',
+    logChannelName: logChannel?.name ?? null,
     commandId: commands[0].id,
     legacyWorkspaceLabelsUpdated
   };
@@ -274,9 +282,11 @@ async function main() {
         `command_id=${result.commandId}\n`,
       'utf8');
   }
+  const channelSummary = result.logChannelName
+    ? `#${result.channelName} + #${result.logChannelName}`
+    : `#${result.channelName}`;
   console.log(
-    `Discord integration ready: ${result.guildName} / #${result.channelName} + ` +
-    `#${result.logChannelName} / commission; ` +
+    `Discord integration ready: ${result.guildName} / ${channelSummary} / commission; ` +
     `${result.legacyWorkspaceLabelsUpdated} legacy workspace label(s) updated.`);
 }
 
