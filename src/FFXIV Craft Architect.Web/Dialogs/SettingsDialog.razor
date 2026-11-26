@@ -1696,6 +1696,7 @@
         profile.DefaultCompanySuppliedItems = latest.DefaultCompanySuppliedItems;
         // Material sources are written only from Margins.
         profile.MaterialSources = latest.MaterialSources;
+        profile.MarginsMarketRegions = latest.MarginsMarketRegions;
         if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
         {
             return false;

@@ -48,9 +48,13 @@ public sealed class TradeMarginPricing
 public sealed record TradeMarginRouteOption(
     TradeMaterialRoute Route, decimal? Total, decimal? Materials = null, int Synths = 0,
     int ListingCount = 0, int ListedQuantity = 0, int RequiredQuantity = 0, DateTime? ObservedAtUtc = null,
-    decimal? UnitPrice = null, IReadOnlyList<string>? Missing = null)
+    decimal? UnitPrice = null, IReadOnlyList<string>? Missing = null, string? WorldName = null, string? DataCenter = null)
 {
     public bool IsShortOfListings => Route == TradeMaterialRoute.Market && ListedQuantity < RequiredQuantity;
+
+    /// <summary>The one world a market price was taken from, as <c>World (Data center)</c>; null when none was selected.</summary>
+    public string? BuyAt => string.IsNullOrWhiteSpace(WorldName) ? null
+        : string.IsNullOrWhiteSpace(DataCenter) ? WorldName : $"{WorldName} ({DataCenter})";
 }
 
 /// <summary>
@@ -91,7 +95,7 @@ public sealed class TradeMarginCalculator(
 
     /// <param name="batchSize">Units one production run makes; quantities and listings are evaluated for the whole run.</param>
     public async Task<PreparedRow> PrepareAsync(
-        int itemId, TradeCompanyPricingScope? scope, CancellationToken ct = default, int batchSize = 1)
+        int itemId, TradeMarginMarketScope? scope, CancellationToken ct = default, int batchSize = 1)
     {
         var batch = MarginTree.ClampBatch(batchSize);
         PreparedRow Issue(TradeMarginCost issue) => new(issue with { BatchSize = batch });
@@ -163,7 +167,7 @@ public sealed class TradeMarginCalculator(
         // Cost the whole production run; Units lets callers report per-unit figures.
         var rootYield = edges.TryGetValue(itemId, out var rootRecipe) ? rootRecipe.Yield : 1;
         var tree = new MarginTree(itemId, root, rootYield, data, edges, order);
-        if (scope is not { IsValid: true })
+        if (scope is null)
         {
             var units = tree.UnitsFor(batch);
             var synths = tree.Propagate(itemId, units, _ => TradeMaterialRoute.Craft).Synths;
@@ -191,14 +195,14 @@ public sealed class TradeMarginCalculator(
     private const int StoredReadSlice = 16;
 
     /// <summary>Every item/data-center pair a row's materials are priced from.</summary>
-    public static IReadOnlyList<(int itemId, string dataCenter)> Pairs(PreparedRow row, TradeCompanyPricingScope? scope)
+    public static IReadOnlyList<(int itemId, string dataCenter)> Pairs(PreparedRow row, TradeMarginMarketScope? scope)
     {
-        if (row.Issue != null || scope is not { IsValid: true })
+        if (row.Issue != null || scope is null)
         {
             return [];
         }
 
-        var centers = DataCenters(scope);
+        var centers = scope.DataCenters;
         return row.Leaves.SelectMany(id => centers.Select(dataCenter => (id, dataCenter))).ToArray();
     }
 
@@ -247,7 +251,7 @@ public sealed class TradeMarginCalculator(
     }
 
     /// <summary>Prices a prepared row from <paramref name="stored"/> market data, without fetching.</summary>
-    public static Task<TradeMarginCost> PriceAsync(PreparedRow row, TradeCompanyPricingScope? scope,
+    public static Task<TradeMarginCost> PriceAsync(PreparedRow row, TradeMarginMarketScope? scope,
         IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored, TradeMarginPricing? pricing,
         CancellationToken ct = default)
     {
@@ -259,13 +263,10 @@ public sealed class TradeMarginCalculator(
         ArgumentNullException.ThrowIfNull(scope);
         var pairs = Pairs(row, scope);
         var entries = pairs.Where(stored.ContainsKey).ToDictionary(pair => pair, pair => stored[pair]);
-        var evidence = new MarketEvidenceSet(entries, pairs, scope.MarketFetchScope, DataCenters(scope),
-            scope.EffectiveDataCenter, scope.Region, maxAge: null, fetchedCount: 0, DateTime.UtcNow);
+        var evidence = new MarketEvidenceSet(entries, pairs, scope.FetchScope, scope.DataCenters,
+            scope.SelectedDataCenter, scope.Region, maxAge: null, fetchedCount: 0, DateTime.UtcNow);
         return row.Price(evidence, pricing ?? TradeMarginPricing.None, ct);
     }
-
-    private static IReadOnlyList<string> DataCenters(TradeCompanyPricingScope scope) =>
-        MarketFetchScopeResolver.GetDataCenters(scope.MarketFetchScope, scope.EffectiveDataCenter, scope.Region);
 
     /// <summary>Reprices a row for new company inputs from the evidence it was priced with.</summary>
     public static Task<TradeMarginCost> RepriceAsync(TradeMarginCost cost, TradeMarginPricing pricing, CancellationToken ct = default) =>
@@ -615,7 +616,8 @@ public sealed class TradeMarginBasis
 
         var quote = await QuoteAsync(id, qty, ct);
         options.Add(new(TradeMaterialRoute.Market, quote.Unit * qty, ListingCount: quote.ListingCount,
-            ListedQuantity: quote.Listed, RequiredQuantity: qty, ObservedAtUtc: quote.Oldest, UnitPrice: quote.Unit));
+            ListedQuantity: quote.Listed, RequiredQuantity: qty, ObservedAtUtc: quote.Oldest, UnitPrice: quote.Unit,
+            WorldName: quote.World, DataCenter: quote.DataCenter));
         if (_vendors.TryGetValue(id, out var vendor))
         {
             options.Add(new(TradeMaterialRoute.Vendor, vendor * qty, UnitPrice: vendor));
@@ -646,7 +648,8 @@ public sealed class TradeMarginBasis
         }
     }
 
-    private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge);
+    private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge,
+        string? World = null, string? DataCenter = null);
 
     /// <summary>
     /// The market route for <paramref name="quantity"/> units. Listings that cannot cover the
@@ -667,6 +670,7 @@ public sealed class TradeMarginBasis
         decimal? unit = null;
         DateTime? oldest = null;
         var unknownAge = false;
+        string? buyWorld = null, buyDataCenter = null;
         if (listings.Length > 0)
         {
             var analysis = (await new MarketPriceLadderAnalysisService().AnalyzeAsync(new MarketAnalysisRequest
@@ -700,6 +704,7 @@ public sealed class TradeMarginBasis
                         unit = selected.ActionableAverageUnitPrice;
                     }
                     worlds = worlds.Where(pair => pair.entry.DataCenter == selected.DataCenter && pair.world.WorldName == selected.WorldName);
+                    (buyWorld, buyDataCenter) = (selected.WorldName, selected.DataCenter);
                 }
                 var contributing = worlds.Where(pair => pair.world.Listings.Count > 0).ToArray();
                 unknownAge = contributing.Length == 0;
@@ -713,7 +718,7 @@ public sealed class TradeMarginBasis
             }
         }
 
-        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge);
+        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter);
         _quotes[(id, quantity)] = quote;
         return quote;
     }

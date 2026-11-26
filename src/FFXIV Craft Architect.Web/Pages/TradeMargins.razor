@@ -44,6 +44,10 @@
             }
         </div>
         <span class="toolbar-spacer"></span>
+        <CompactMultiSelectField Id="margins-market-scope" Label="Prices from" Class="margins-scope"
+                                 Values="@RegionValues" ValuesChanged="SaveRegionsAsync"
+                                 Options="@RegionOptions" ClearOptionLabel="Commission scope" SummaryText="@ScopeSummary"
+                                 Disabled="@(_profile == null)" />
         <button type="button" class="margin-button" disabled="@Refreshing" @onclick="RefreshAsync">@(Refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
     </div>
     <div @ref="_tableWrap" class="margins-table-wrap @Glass("table")">
@@ -58,10 +62,6 @@
         <span><strong>@_rows.Count</strong> @(_rows.Count == 1 ? "item" : "items")</span>
         @if (_lastCheckedUtc is { } checkedAt) { <span title="@checkedAt.ToLocalTime().ToString("f")">checked @(RelativeAge(checkedAt) == "now" ? "just now" : RelativeAge(checkedAt) + " ago")</span> }
         <span><strong>@(_profile == null ? "—" : Rate.ToString("N0"))</strong> gil per synth</span>
-        @if (_profile?.CommissionPricingScope is { } scope)
-        {
-            <span><strong>@scope.DataCenter</strong> · @scope.Region</span>
-        }
     </footer>
     </div>
 </div>
@@ -101,11 +101,21 @@
     // (Refresh prices); other rows refetch only pairs older than the Margins reuse window.
     private readonly HashSet<int> _forceFetch = [];
     private CancellationTokenSource? _priceJob;
-    private (Guid? Company, TradeCompanyPricingScope? Scope) _priceJobScope;
+    private (Guid? Company, TradeMarginMarketScope? Scope) _priceJobScope;
     private bool _priceAgain;
     private bool Refreshing => _forceFetch.Count > 0;
     private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
     private TradeMarginPricing Pricing => new(Rate, _profile?.MaterialSources ?? []);
+    /// <summary>The market Margins prices from: whole regions, or the commission scope when none are chosen.</summary>
+    private TradeMarginMarketScope? MarginScope => MarginScopeOf(_profile);
+    private static TradeMarginMarketScope? MarginScopeOf(TradeCompanyProfile? profile) =>
+        profile == null ? null : TradeMarginMarketScope.Resolve(profile.CommissionPricingScope, profile.MarginsMarketRegions);
+    // The region selection while its save is pending, so quick successive clicks build on each
+    // other instead of on the last saved value.
+    private IReadOnlyList<string>? _regionsDraft;
+    private IReadOnlyList<string> RegionValues => _regionsDraft ?? _profile?.MarginsMarketRegions ?? [];
+    private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
+        MarketFetchScopeResolver.GetRegions().Select(region => new CompactSelectOption(region, region)).ToArray();
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
     private enum Column { Item, Sale, Batch, Materials, Labor, Total, Margin, Percent, Age, Commission, Remove }
     private sealed class MarginRow(int itemId, long? sale)
@@ -240,7 +250,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 {
                     @unit.ToString("N0")
                     @if (route == TradeMaterialRoute.Market && market is { IsShortOfListings: true }) { <span class="sub short-listed">@ShortOfListings(market)</span> }
-                    else if (route == TradeMaterialRoute.Market && market?.ObservedAtUtc is { } observed) { <span class="sub">@RelativeAge(observed)</span> }
+                    else if (route == TradeMaterialRoute.Market && MarketBasis(market) is { Length: > 0 } basis) { <span class="sub">@basis</span> }
                 }
                 else
                 {
@@ -265,9 +275,23 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     private static string Signed(decimal value) => (value < 0 ? "−" : "+") + Math.Abs(value).ToString("N0");
     private static string ShortOfListings(TradeMarginRouteOption market) =>
         market.ListedQuantity == 0 ? "⚠ None listed" : $"⚠ Only {market.ListedQuantity:N0} of {market.RequiredQuantity:N0} listed";
-    private string? ScopeLabel => _profile?.CommissionPricingScope is not { } scope ? null
-        : scope.MarketFetchScope == MarketFetchScope.EntireRegion ? $"{scope.Region} region"
-        : string.IsNullOrWhiteSpace(scope.DataCenter) ? scope.Region : scope.DataCenter;
+    /// <summary>The closed scope control: the effective Margins scope.</summary>
+    private string ScopeSummary
+    {
+        get
+        {
+            var regions = TradeMarginMarketScope.NormalizeRegions(RegionValues);
+            if (regions.Count == MarketFetchScopeResolver.GetRegions().Count) return "All regions";
+            if (regions.Count > 0) return string.Join(" + ", regions);
+            return _profile?.CommissionPricingScope is not { } scope ? "Commission scope"
+                : scope.MarketFetchScope == MarketFetchScope.EntireRegion || string.IsNullOrWhiteSpace(scope.DataCenter)
+                    ? $"Commission · {scope.Region}" : $"Commission · {scope.DataCenter}";
+        }
+    }
+    /// <summary>The world a market price was taken from and the age of its listings.</summary>
+    private static string MarketBasis(TradeMarginRouteOption? market) => market == null ? "" :
+        string.Join(" · ", new[] { market.BuyAt, market.ObservedAtUtc is { } observed ? RelativeAge(observed) : null }
+            .Where(part => !string.IsNullOrWhiteSpace(part)));
 
     /// <summary>
     /// Each line's cost per unit sold, rounded so the column adds up to the row's Total cost
@@ -314,7 +338,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     items.Add(new(value, "Market", string.Join(" · ", new[]
                     {
                         option.ListingCount == 1 ? "1 listing" : $"{option.ListingCount:N0} listings",
-                        ScopeLabel, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null
+                        option.BuyAt, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null
                     }.Where(part => !string.IsNullOrWhiteSpace(part))), Amount(option.Total)));
                     break;
                 case TradeMaterialRoute.Vendor:
@@ -366,6 +390,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 "Could not save margin items. Use at most 500 distinct items with non-negative sale prices and batch sizes from 1 to 9,999.",
             CompanyHubRequestException { ErrorCode: TradeMaterialSourceValidator.ErrorCode } =>
                 "Could not save material sources.",
+            CompanyHubRequestException { ErrorCode: TradeMarginMarketScope.ErrorCode } =>
+                "Could not save the Margins market scope.",
             _ => $"Margins: {ex.Message}"
         }, Severity.Error);
     }
@@ -411,8 +437,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             var resolved = await Profiles.ResolveAsync(selected.Id);
             var previous = _profile;
             var previousRate = Rate;
-            var scopeChanged = previous?.Id != resolved.Profile.Id ||
-                previous?.CommissionPricingScope != resolved.Profile.CommissionPricingScope;
+            var scopeChanged = previous?.Id != resolved.Profile.Id || MarginScopeOf(previous) != MarginScopeOf(resolved.Profile);
             if (scopeChanged) _lastCheckedUtc = null;
             var unchanged = !scopeChanged && _revision == resolved.HostedRevision &&
                 (previous?.MarginItems ?? []).SequenceEqual(resolved.Profile.MarginItems ?? []);
@@ -462,7 +487,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     private static bool Unpriced(MarginRow row) => row.Cost == null || row.Restored;
     private static bool NeedsPricing(MarginRow row) => Unpriced(row) || IsFailure(row.Cost!);
     private string? FiguresInputs(MarginRow row, int batchSize) =>
-        _profile?.CommissionPricingScope is { IsValid: true } scope
+        _profile != null && MarginScope is { } scope
             ? SavedFigures.Inputs(_profile.Id, scope, row.ItemId, batchSize, Rate, _profile.MaterialSources ?? [])
             : null;
     /// <summary>
@@ -499,7 +524,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     private async Task CalculateAsync(bool refresh)
     {
         if (_disposed) return;
-        var scope = _profile?.CommissionPricingScope;
+        var scope = MarginScope;
         var ct = _lifetime.Token;
         if (refresh) foreach (var row in _rows) _forceFetch.Add(row.ItemId);
         StateHasChanged();
@@ -530,7 +555,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private void StartPriceUpdate()
     {
-        var scope = (_profile?.Id, _profile?.CommissionPricingScope);
+        var scope = (_profile?.Id, MarginScope);
         if (_priceJob != null && _priceJobScope == scope)
         {
             _priceAgain = true;
@@ -607,7 +632,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     /// <summary>Reprices one row from updated market data; false when the company or scope changed.</summary>
     private async Task<bool> ApplyUpdateAsync(int itemId, TradeMarginCalculator.PreparedRow plan,
-        Dictionary<(int itemId, string dataCenter), CachedMarketData> market, Guid? company, TradeCompanyPricingScope? scope,
+        Dictionary<(int itemId, string dataCenter), CachedMarketData> market, Guid? company, TradeMarginMarketScope? scope,
         CancellationToken ct)
     {
         TradeMarginCost cost;
@@ -622,7 +647,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         await _gate.WaitAsync(ct);
         try
         {
-            if (_disposed || _profile?.Id != company || _profile?.CommissionPricingScope != scope) return false;
+            if (_disposed || _profile?.Id != company || MarginScope != scope) return false;
             var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
             if (row == null) return true;
             // Labor, material sources or the batch size may have changed while this row was priced.
@@ -752,7 +777,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     /// Rebases only this edit onto the latest company profile and retries one concurrent hosted
     /// write. Margin items and material sources each travel only on their own explicit flag.
     /// </summary>
-    private async Task SaveProfileAsync(Action<TradeCompanyProfile> edit, bool marginItems = false, bool materialSources = false)
+    private async Task SaveProfileAsync(Action<TradeCompanyProfile> edit, bool marginItems = false, bool materialSources = false,
+        bool marginsScope = false)
     {
         if (_disposed) return;
         if (_profile == null) throw new InvalidOperationException("Company is unavailable.");
@@ -764,7 +790,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             {
                 if (current.IsHosted)
                     _revision = await Hubs.UpdateWorkspaceProfileAsync(current.Profile, current.HostedRevision!.Value,
-                        updateMarginItems: marginItems, updateMaterialSources: materialSources);
+                        updateMarginItems: marginItems, updateMaterialSources: materialSources,
+                        updateMarginsMarketRegions: marginsScope);
                 else
                 {
                     if (!await Persistence.SaveCompanyProfileAsync(current.Profile)) throw new InvalidOperationException("Could not save company.");
@@ -772,10 +799,11 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     try { await Sync.QueueLocalSaveAsync(ProfileSyncCollections.TradeCompanyProfiles, current.Profile.Id.ToString("D")); }
                     catch (Exception ex) { ReportError(ex); }
                 }
-                var scopeChanged = _profile.CommissionPricingScope != current.Profile.CommissionPricingScope;
+                var scopeChanged = MarginScope != MarginScopeOf(current.Profile);
                 var pricingChanged = Rate != TradePaymentPolicyNormalizer.Normalize(current.Profile.PaymentPolicy).LaborGilPerSynth ||
                     !(_profile.MaterialSources ?? []).SequenceEqual(current.Profile.MaterialSources ?? []);
                 _profile = current.Profile;
+                if (scopeChanged) _lastCheckedUtc = null;
                 RebuildRows(_rows.ToDictionary(row => row.ItemId), scopeChanged);
                 await CalculateAsync(false);
                 if (pricingChanged) await RepriceAllAsync();
@@ -805,6 +833,27 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         catch (Exception ex) { failed = true; ReportError(ex); }
         finally { _gate.Release(); }
         if (failed) await ReloadSafelyAsync();
+    }
+    /// <summary>Saves the company's Margins regions; no regions follows the commission scope. Rows reprice in place.</summary>
+    private async Task SaveRegionsAsync(IReadOnlyList<string> regions)
+    {
+        var next = TradeMarginMarketScope.NormalizeRegions(regions);
+        _regionsDraft = next;
+        await _gate.WaitAsync();
+        try
+        {
+            // A newer selection is waiting behind this one and saves itself.
+            if (!ReferenceEquals(_regionsDraft, next) || _disposed || _profile == null ||
+                TradeMarginMarketScope.NormalizeRegions(_profile.MarginsMarketRegions).SequenceEqual(next)) return;
+            await SaveProfileAsync(profile => profile.MarginsMarketRegions = next, marginsScope: true);
+        }
+        catch (Exception ex) { ReportError(ex); }
+        finally
+        {
+            if (ReferenceEquals(_regionsDraft, next)) _regionsDraft = null;
+            _gate.Release();
+            if (!_disposed) StateHasChanged();
+        }
     }
     private Task SaveSourceAsync(int itemId, TradeMaterialRoute route, long? price = null) =>
         SaveSourcesAsync(sources => sources.Where(source => source.ItemId != itemId)
