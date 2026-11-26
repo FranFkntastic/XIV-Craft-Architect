@@ -141,6 +141,11 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
   const guildId = requireValue(configuration, 'DISCORD_GUILD_ID');
   const channelName = requireValue(configuration, 'DISCORD_CHANNEL_NAME');
   const parentId = requireValue(configuration, 'DISCORD_CHANNEL_PARENT_ID');
+  const logChannelName =
+    configuration.DISCORD_LOG_CHANNEL_NAME?.trim() || `${channelName}-log`;
+  if (logChannelName === channelName) {
+    throw new Error('DISCORD_LOG_CHANNEL_NAME must differ from DISCORD_CHANNEL_NAME.');
+  }
 
   const bot = await discordRequest(fetchImpl, token, '/users/@me');
   if (bot.id !== applicationId || bot.bot !== true) {
@@ -160,27 +165,39 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
   }
 
   const channels = await discordRequest(fetchImpl, token, `/guilds/${guildId}/channels`);
-  const matches = channels.filter(channel =>
-    channel.name === channelName &&
-    channel.parent_id === parentId &&
-    channel.type === 0);
-  if (matches.length > 1) {
-    throw new Error(`More than one #${channelName} text channel exists under the configured category.`);
-  }
+  const reuseOrCreateTextChannel = async (name, topic) => {
+    const matches = channels.filter(channel =>
+      channel.name === name &&
+      channel.parent_id === parentId &&
+      channel.type === 0);
+    if (matches.length > 1) {
+      throw new Error(`More than one #${name} text channel exists under the configured category.`);
+    }
 
-  const channel = matches[0] ?? await discordRequest(
-    fetchImpl,
-    token,
-    `/guilds/${guildId}/channels`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        name: channelName,
-        type: 0,
-        parent_id: parentId,
-        topic: 'Craft Architect commission briefs: scope, material responsibility, payment basis, and evidence in one place.'
-      })
-    });
+    return matches[0] ?? await discordRequest(
+      fetchImpl,
+      token,
+      `/guilds/${guildId}/channels`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          type: 0,
+          parent_id: parentId,
+          topic
+        })
+      });
+  };
+
+  const channel = await reuseOrCreateTextChannel(
+    channelName,
+    'Craft Architect commission briefs: scope, material responsibility, payment basis, and evidence in one place.');
+  const logChannel = await reuseOrCreateTextChannel(
+    logChannelName,
+    'Claimed and completed Craft Architect commissions.');
+  if (logChannel.id === channel.id) {
+    throw new Error('The commission log channel resolved to the open commission channel.');
+  }
 
   const commands = await discordRequest(
     fetchImpl,
@@ -216,12 +233,15 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     throw new Error('Discord did not retain the managed commission command.');
   }
 
-  const legacyWorkspaceLabelsUpdated = await reconcileLegacyWorkspaceLabels(
-    fetchImpl,
-    token,
-    channel.id,
-    applicationId,
-    bot.id);
+  let legacyWorkspaceLabelsUpdated = 0;
+  for (const channelId of [channel.id, logChannel.id]) {
+    legacyWorkspaceLabelsUpdated += await reconcileLegacyWorkspaceLabels(
+      fetchImpl,
+      token,
+      channelId,
+      applicationId,
+      bot.id);
+  }
 
   return {
     applicationId,
@@ -230,6 +250,8 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     guildName: guild.name,
     channelId: channel.id,
     channelName: channel.name,
+    logChannelId: logChannel.id,
+    logChannelName: logChannel.name,
     commandId: commands[0].id,
     legacyWorkspaceLabelsUpdated
   };
@@ -240,11 +262,13 @@ async function main() {
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(
       process.env.GITHUB_OUTPUT,
-      `channel_id=${result.channelId}\ncommand_id=${result.commandId}\n`,
+      `channel_id=${result.channelId}\nlog_channel_id=${result.logChannelId}\n` +
+        `command_id=${result.commandId}\n`,
       'utf8');
   }
   console.log(
-    `Discord integration ready: ${result.guildName} / #${result.channelName} / commission; ` +
+    `Discord integration ready: ${result.guildName} / #${result.channelName} + ` +
+    `#${result.logChannelName} / commission; ` +
     `${result.legacyWorkspaceLabelsUpdated} legacy workspace label(s) updated.`);
 }
 

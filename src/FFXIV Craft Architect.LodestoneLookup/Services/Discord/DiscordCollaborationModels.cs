@@ -4,7 +4,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 public static class DiscordPublicationProjectionFormat
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 }
 
 public sealed record DiscordCompanyInstallationBinding(
@@ -12,7 +12,30 @@ public sealed record DiscordCompanyInstallationBinding(
     string ApplicationId,
     string GuildId,
     string ChannelId,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? LogChannelId = null)
+{
+    public string EffectiveLogChannelId =>
+        !string.IsNullOrWhiteSpace(LogChannelId) ? LogChannelId : ChannelId;
+
+    public bool OwnsChannel(string? channelId) =>
+        !string.IsNullOrWhiteSpace(channelId) &&
+        (string.Equals(channelId, ChannelId, StringComparison.Ordinal) ||
+         string.Equals(channelId, EffectiveLogChannelId, StringComparison.Ordinal));
+
+    // Open work stays in the spotlight channel; claimed and completed work moves to
+    // the log channel. Removals delete from whichever channel currently holds the card.
+    public string ResolveChannelId(
+        DiscordPublicationState state,
+        string? currentChannelId = null) =>
+        state switch
+        {
+            DiscordPublicationState.Open or DiscordPublicationState.TestFixture => ChannelId,
+            DiscordPublicationState.Assigned or DiscordPublicationState.Closed =>
+                EffectiveLogChannelId,
+            _ => !string.IsNullOrWhiteSpace(currentChannelId) ? currentChannelId : ChannelId
+        };
+}
 
 public enum DiscordPublicationState
 {

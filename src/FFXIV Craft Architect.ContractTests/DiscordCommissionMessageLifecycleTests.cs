@@ -290,9 +290,305 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
+    private const string SpotlightChannelId = "100000000000000003";
+    private const string LogChannelId = "100000000000000004";
+
+    [Fact]
+    public async Task SpotlightCreateOvertakenByLogMoveKeepsEachChannelsCardIdentity()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-move-race-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath, logChannelId: LogChannelId);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            const string spotlightCard = "900000000000000201";
+            const string logCard = "900000000000000202";
+            const string repostedSpotlightCard = "900000000000000203";
+
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            var spotlightCreate = Assert.Single(await LeaseAsync(store));
+            Assert.Equal(DiscordOutboxOperation.CreateMessage, spotlightCreate.Operation);
+            Assert.Equal(SpotlightChannelId, spotlightCreate.ChannelId);
+
+            // Claimed while the spotlight post is still in flight: the card moves to the
+            // log and the unknown spotlight message waits for cleanup.
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.Assigned,
+                projectionRevision: 2,
+                eventKind: CompanyCommissionActivityKind.ClaimAccepted,
+                claimed: true));
+            var logCreate = Assert.Single(await LeaseAsync(store));
+            Assert.Equal(DiscordOutboxOperation.CreateMessage, logCreate.Operation);
+            Assert.Equal(LogChannelId, logCreate.ChannelId);
+            await store.CompleteAsync(
+                logCreate.WorkItemId,
+                logCreate.LeaseId,
+                logCard,
+                DateTimeOffset.UtcNow);
+
+            // A follow-up log edit must not discard the pending spotlight cleanup.
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.Assigned,
+                projectionRevision: 3,
+                eventKind: CompanyCommissionActivityKind.WorkClearanceAchieved,
+                claimed: true));
+
+            // The late spotlight post releases its cleanup without claiming the live card.
+            await store.CompleteAsync(
+                spotlightCreate.WorkItemId,
+                spotlightCreate.LeaseId,
+                spotlightCard,
+                DateTimeOffset.UtcNow);
+            var publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(LogChannelId, publication!.ChannelId);
+            Assert.Equal(logCard, publication.MessageId);
+
+            var cleanupAndEdit = await LeaseAsync(store);
+            Assert.Equal(2, cleanupAndEdit.Count);
+            var spotlightDelete = Assert.Single(
+                cleanupAndEdit,
+                item => item.Operation == DiscordOutboxOperation.DeleteMessage);
+            Assert.Equal(SpotlightChannelId, spotlightDelete.ChannelId);
+            Assert.Equal(spotlightCard, spotlightDelete.MessageId);
+            var logEdit = Assert.Single(
+                cleanupAndEdit,
+                item => item.Operation == DiscordOutboxOperation.EditMessage);
+            Assert.Equal(LogChannelId, logEdit.ChannelId);
+            Assert.Equal(logCard, logEdit.MessageId);
+            foreach (var item in cleanupAndEdit)
+            {
+                await store.CompleteAsync(
+                    item.WorkItemId,
+                    item.LeaseId,
+                    item.MessageId,
+                    DateTimeOffset.UtcNow);
+            }
+
+            publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(logCard, publication!.MessageId);
+
+            // Released before work began: the commission is open again and returns to
+            // the spotlight as a fresh card.
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 4,
+                eventKind: CompanyCommissionActivityKind.ClaimReleased,
+                claimed: false));
+            var release = await LeaseAsync(store);
+            Assert.Equal(2, release.Count);
+            var logDelete = Assert.Single(
+                release,
+                item => item.Operation == DiscordOutboxOperation.DeleteMessage);
+            Assert.Equal(LogChannelId, logDelete.ChannelId);
+            Assert.Equal(logCard, logDelete.MessageId);
+            var repost = Assert.Single(
+                release,
+                item => item.Operation == DiscordOutboxOperation.CreateMessage);
+            Assert.Equal(SpotlightChannelId, repost.ChannelId);
+            Assert.Null(repost.MessageId);
+            await store.CompleteAsync(
+                repost.WorkItemId,
+                repost.LeaseId,
+                repostedSpotlightCard,
+                DateTimeOffset.UtcNow);
+            await store.CompleteAsync(
+                logDelete.WorkItemId,
+                logDelete.LeaseId,
+                logDelete.MessageId,
+                DateTimeOffset.UtcNow);
+
+            publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(DiscordPublicationState.Open, publication!.State);
+            Assert.Equal(SpotlightChannelId, publication.ChannelId);
+            Assert.Equal(repostedSpotlightCard, publication.MessageId);
+            Assert.Empty(await LeaseAsync(store));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task StaleSpotlightEditMissingAfterMoveKeepsLogCardThroughCancelAndReopen()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-stale-edit-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath, logChannelId: LogChannelId);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            var discord = new RecordingDiscordClient();
+            var dispatcher = CreateDispatcher(store, discord, options);
+
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            await dispatcher.DispatchDueAsync(default);
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 2,
+                eventKind: CompanyCommissionActivityKind.CommentAdded,
+                claimed: false));
+
+            // The spotlight edit is in flight when the claim lands; Discord then reports
+            // the spotlight message missing.
+            discord.BeforeMissingEdit = () => delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.Assigned,
+                projectionRevision: 3,
+                eventKind: CompanyCommissionActivityKind.ClaimAccepted,
+                claimed: true));
+            await dispatcher.DispatchDueAsync(default);
+            var publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(DiscordPublicationState.Assigned, publication!.State);
+            Assert.Equal(LogChannelId, publication.ChannelId);
+
+            await dispatcher.DispatchDueAsync(default);
+            publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(DiscordPublicationState.Assigned, publication!.State);
+            Assert.Equal(LogChannelId, publication.ChannelId);
+            var logCard = Assert.Single(
+                discord.Calls,
+                call => call.Operation == DiscordOutboxOperation.CreateMessage &&
+                    call.ChannelId == LogChannelId).MessageId;
+            Assert.Equal(logCard, publication.MessageId);
+            Assert.Single(
+                discord.Calls,
+                call => call.Operation == DiscordOutboxOperation.CreateMessage &&
+                    call.ChannelId == SpotlightChannelId);
+
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.Canceled,
+                projectionRevision: 4,
+                eventKind: CompanyCommissionActivityKind.CommissionCanceled,
+                claimed: true));
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 5,
+                eventKind: CompanyCommissionActivityKind.ClaimReleased,
+                claimed: false));
+            await dispatcher.DispatchDueAsync(default);
+
+            publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(DiscordPublicationState.Open, publication!.State);
+            Assert.Equal(SpotlightChannelId, publication.ChannelId);
+            var reopenedCard = discord.Calls.Last(
+                call => call.Operation == DiscordOutboxOperation.CreateMessage).MessageId;
+            Assert.Equal(reopenedCard, publication.MessageId);
+            Assert.Single(
+                discord.Calls,
+                call => call.Operation == DiscordOutboxOperation.DeleteMessage &&
+                    call.ChannelId == LogChannelId &&
+                    call.MessageId == logCard);
+            Assert.Equal(
+                2,
+                discord.Calls.Count(call =>
+                    call.Operation == DiscordOutboxOperation.CreateMessage &&
+                    call.ChannelId == SpotlightChannelId));
+            Assert.Empty(await LeaseAsync(store));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private sealed class RecordingDiscordClient : IDiscordApiClient
+    {
+        private int _messages;
+
+        public List<(DiscordOutboxOperation Operation, string ChannelId, string? MessageId)> Calls { get; } = [];
+
+        // Runs once while an edit is in flight; that edit then finds its message missing.
+        public Func<Task>? BeforeMissingEdit { get; set; }
+
+        public Task<DiscordApiResult> CreateMessageAsync(
+            string channelId,
+            object payload,
+            CancellationToken cancellationToken = default)
+        {
+            var messageId = $"9000000000000003{++_messages:00}";
+            Calls.Add((DiscordOutboxOperation.CreateMessage, channelId, messageId));
+            return Task.FromResult(new DiscordApiResult(
+                DiscordApiOutcome.Succeeded,
+                messageId,
+                HttpStatusCode.OK));
+        }
+
+        public async Task<DiscordApiResult> EditMessageAsync(
+            string channelId,
+            string messageId,
+            object payload,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add((DiscordOutboxOperation.EditMessage, channelId, messageId));
+            if (BeforeMissingEdit is not { } beforeMissingEdit)
+            {
+                return new DiscordApiResult(DiscordApiOutcome.Succeeded, messageId, HttpStatusCode.OK);
+            }
+
+            BeforeMissingEdit = null;
+            await beforeMissingEdit();
+            return new DiscordApiResult(
+                DiscordApiOutcome.TerminalFailure,
+                StatusCode: HttpStatusCode.NotFound,
+                Error: "Unknown Message");
+        }
+
+        public Task<DiscordApiResult> DeleteMessageAsync(
+            string channelId,
+            string messageId,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add((DiscordOutboxOperation.DeleteMessage, channelId, messageId));
+            return Task.FromResult(new DiscordApiResult(
+                DiscordApiOutcome.Succeeded,
+                messageId,
+                HttpStatusCode.NoContent));
+        }
+
+        public Task<DiscordApiResult> GetMessageAsync(
+            string channelId,
+            string messageId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> CreateNotificationMessageAsync(
+            string channelId,
+            object payload,
+            string? allowedMentionUserId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> ResolveDirectMessageChannelAsync(
+            string recipientUserId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
     private static DiscordCommissionOptions CreateDiscordOptions(
         string databasePath,
-        bool crafterWorkspaceEnabled = false) =>
+        bool crafterWorkspaceEnabled = false,
+        string? logChannelId = null) =>
         new()
         {
             Enabled = true,
@@ -303,6 +599,7 @@ public sealed class DiscordCommissionMessageLifecycleTests
             BotToken = "test-token",
             AllowedGuildId = "100000000000000002",
             AllowedChannelId = "100000000000000003",
+            LogChannelId = logChannelId ?? string.Empty,
             CommissionBaseUrl = "https://example.test/commission/",
             DatabasePath = databasePath
         };

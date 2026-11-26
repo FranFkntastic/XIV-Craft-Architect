@@ -36,7 +36,8 @@ public sealed class SqliteDiscordCollaborationStore(
                     application_id TEXT NOT NULL,
                     guild_id TEXT NOT NULL,
                     channel_id TEXT NOT NULL,
-                    updated_at_utc TEXT NOT NULL
+                    updated_at_utc TEXT NOT NULL,
+                    log_channel_id TEXT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS discord_publications (
@@ -94,6 +95,7 @@ public sealed class SqliteDiscordCollaborationStore(
             await EnsureProjectionFormatVersionColumnAsync(
                 connection,
                 cancellationToken);
+            await EnsureLogChannelIdColumnAsync(connection, cancellationToken);
             if (options.HasBootstrapInstallation)
             {
                 await UpsertCompanyInstallationAsync(
@@ -103,7 +105,8 @@ public sealed class SqliteDiscordCollaborationStore(
                         options.ApplicationId,
                         options.AllowedGuildId,
                         options.AllowedChannelId,
-                        DateTimeOffset.UtcNow),
+                        DateTimeOffset.UtcNow,
+                        options.HasLogChannel ? options.LogChannelId : null),
                     cancellationToken);
             }
             _schemaReady = true;
@@ -133,11 +136,7 @@ public sealed class SqliteDiscordCollaborationStore(
         var installation = await ResolveCompanyInstallationAsync(
             companyId,
             cancellationToken);
-        return installation != null &&
-            string.Equals(
-                installation.ChannelId,
-                channelId,
-                StringComparison.Ordinal);
+        return installation?.OwnsChannel(channelId) == true;
     }
 
     public async Task<DiscordPublicationCreateResult> CreatePublicationAsync(
@@ -180,10 +179,7 @@ public sealed class SqliteDiscordCollaborationStore(
             cancellationToken,
             (SqliteTransaction)transaction);
         if (installation == null ||
-            !string.Equals(
-                installation.ChannelId,
-                channelId,
-                StringComparison.Ordinal))
+            !installation.OwnsChannel(channelId))
         {
             await transaction.RollbackAsync(cancellationToken);
             return new DiscordPublicationCreateResult(
@@ -205,7 +201,9 @@ public sealed class SqliteDiscordCollaborationStore(
                 replay.OrderId == ownership.OrderId &&
                 replay.SourceOrderRevision == ownership.OrderRevision &&
                 string.Equals(replay.PublicId, publicId, StringComparison.Ordinal) &&
-                string.Equals(replay.ChannelId, channelId, StringComparison.Ordinal);
+                // A replayed publication may since have moved between the open and log
+                // channels; either one still belongs to this installation.
+                installation.OwnsChannel(replay.ChannelId);
             return new DiscordPublicationCreateResult(
                 matches
                     ? DiscordPublicationCreateStatus.Replayed
@@ -379,13 +377,17 @@ public sealed class SqliteDiscordCollaborationStore(
             UPDATE discord_publications
             SET message_id = $messageId, state = $failed, updated_at_utc = $now
             WHERE publication_id = $id AND state = $ambiguous AND message_id IS NULL
+              AND channel_id = $channelId
               AND desired_projection_revision = $revision
               AND 1 = (SELECT COUNT(*) FROM discord_outbox
-                       WHERE publication_id = $id AND state = $ambiguousWork AND operation = $create)
+                       WHERE publication_id = $id AND channel_id = $channelId
+                         AND state = $ambiguousWork AND operation = $create)
               AND NOT EXISTS (SELECT 1 FROM discord_outbox
-                              WHERE publication_id = $id AND state = $inFlight);
+                              WHERE publication_id = $id AND channel_id = $channelId
+                                AND state = $inFlight);
             """;
         command.Parameters.AddWithValue("$id", expected.PublicationId.ToString("D"));
+        command.Parameters.AddWithValue("$channelId", expected.ChannelId);
         command.Parameters.AddWithValue("$revision", expected.DesiredProjectionRevision);
         command.Parameters.AddWithValue("$messageId", (object?)messageId ?? DBNull.Value);
         command.Parameters.AddWithValue("$failed", (int)(messageId == null
@@ -405,7 +407,8 @@ public sealed class SqliteDiscordCollaborationStore(
             UPDATE discord_outbox
             SET state = $resolved, message_id = $messageId, last_error = $error,
                 updated_at_utc = $now
-            WHERE publication_id = $id AND state = $ambiguousWork AND operation = $create;
+            WHERE publication_id = $id AND channel_id = $channelId
+              AND state = $ambiguousWork AND operation = $create;
             """;
         command.Parameters.AddWithValue("$resolved", (int)(messageId == null
             ? DiscordOutboxState.Failed : DiscordOutboxState.Succeeded));
@@ -421,14 +424,16 @@ public sealed class SqliteDiscordCollaborationStore(
         command.CommandText = messageId == null
             ? """
               DELETE FROM discord_outbox
-              WHERE publication_id = $id AND operation IN ($edit, $delete)
+              WHERE publication_id = $id AND channel_id = $channelId
+                AND operation IN ($edit, $delete)
                 AND message_id IS NULL AND state IN ($pending, $retry, $ambiguousWork);
               """
             : """
               UPDATE discord_outbox
               SET message_id = $messageId, state = $pending, next_attempt_at_utc = $now,
                   updated_at_utc = $now
-              WHERE publication_id = $id AND operation IN ($edit, $delete)
+              WHERE publication_id = $id AND channel_id = $channelId
+                AND operation IN ($edit, $delete)
                 AND message_id IS NULL AND state IN ($pending, $retry, $ambiguousWork);
               """;
         command.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
@@ -519,7 +524,19 @@ public sealed class SqliteDiscordCollaborationStore(
                 }
 
                 var outboxState = (DiscordOutboxState)reader.GetInt32(19);
-                if (outboxState == DiscordOutboxState.Failed)
+                var activeChannel = string.Equals(
+                    reader.GetString(17),
+                    publication.ChannelId,
+                    StringComparison.Ordinal);
+                if (!activeChannel)
+                {
+                    // Cleanup left behind in a channel the card already moved out of
+                    // cannot be retried here; only in-progress work blocks a retry.
+                    hasUnsafeState |= outboxState is DiscordOutboxState.Pending or
+                        DiscordOutboxState.InFlight or
+                        DiscordOutboxState.Retry;
+                }
+                else if (outboxState == DiscordOutboxState.Failed)
                 {
                     failed.Add((
                         Guid.Parse(reader.GetString(15)),
@@ -549,10 +566,7 @@ public sealed class SqliteDiscordCollaborationStore(
             cancellationToken,
             (SqliteTransaction)transaction);
         if (installation == null ||
-            !string.Equals(
-                installation.ChannelId,
-                publication.ChannelId,
-                StringComparison.Ordinal))
+            !installation.OwnsChannel(publication.ChannelId))
         {
             await transaction.RollbackAsync(cancellationToken);
             return new DiscordPublicationRetryResult(
@@ -677,12 +691,37 @@ public sealed class SqliteDiscordCollaborationStore(
             });
     }
 
+    public Task EnqueueProjectionAsync(
+        Guid publicationId,
+        DiscordPublicationState state,
+        long desiredProjectionRevision,
+        string payloadJson,
+        DateTimeOffset queuedAt,
+        CancellationToken cancellationToken = default) =>
+        EnqueueProjectionAsync(
+            publicationId,
+            state,
+            desiredProjectionRevision,
+            payloadJson,
+            queuedAt,
+            targetChannelId: null,
+            cancellationToken);
+
+    /// <summary>
+    /// Queues the projection for <paramref name="state"/>. A displayed state whose
+    /// <paramref name="targetChannelId"/> differs from the channel holding the card moves
+    /// it: the old card is deleted (deferred until an in-flight create reports its id)
+    /// and a fresh card is created in the target channel. Removal states always act on
+    /// the channel that currently holds the card. Pending deletes are never discarded by
+    /// later projections, so cleanup of an earlier move survives follow-up edits.
+    /// </summary>
     public async Task EnqueueProjectionAsync(
         Guid publicationId,
         DiscordPublicationState state,
         long desiredProjectionRevision,
         string payloadJson,
         DateTimeOffset queuedAt,
+        string? targetChannelId,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
@@ -695,9 +734,10 @@ public sealed class SqliteDiscordCollaborationStore(
         await using var transaction = await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
+        var sqliteTransaction = (SqliteTransaction)transaction;
         var publication = await LoadPublicationAsync(
             connection,
-            (SqliteTransaction)transaction,
+            sqliteTransaction,
             publicationId,
             cancellationToken) ??
             throw new InvalidOperationException("Discord publication was not found.");
@@ -714,107 +754,224 @@ public sealed class SqliteDiscordCollaborationStore(
             return;
         }
 
-        var activeCreate = string.IsNullOrWhiteSpace(publication.MessageId)
+        var removes = RemovesMessage(state);
+        var currentChannelId = publication.ChannelId;
+        var channelId = removes || string.IsNullOrWhiteSpace(targetChannelId)
+            ? currentChannelId
+            : targetChannelId;
+        if (!IsDiscordSnowflake(channelId))
+        {
+            throw new InvalidOperationException(
+                "The Discord projection target is not a channel identity.");
+        }
+
+        var moves = !removes &&
+            !string.Equals(channelId, currentChannelId, StringComparison.Ordinal);
+        var currentMessageId = string.IsNullOrWhiteSpace(publication.MessageId)
+            ? null
+            : publication.MessageId;
+        var currentCreate = currentMessageId == null
             ? await LoadActiveCreateAsync(
                 connection,
-                (SqliteTransaction)transaction,
+                sqliteTransaction,
                 publicationId,
+                currentChannelId,
                 cancellationToken)
             : null;
-        await using var discardStale = connection.CreateCommand();
-        discardStale.Transaction = (SqliteTransaction)transaction;
-        discardStale.CommandText =
-            """
-            DELETE FROM discord_outbox
-            WHERE publication_id = $publicationId
-              AND state IN ($pending, $retry)
-              AND desired_projection_revision < $desiredRevision
-              AND ($preservedWorkItemId IS NULL OR work_item_id <> $preservedWorkItemId);
-            """;
-        discardStale.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
-        discardStale.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
-        discardStale.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
-        discardStale.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
-        discardStale.Parameters.AddWithValue(
-            "$preservedWorkItemId",
-            activeCreate is null || RemovesMessage(state)
-                ? DBNull.Value
-                : activeCreate.Value.WorkItemId.ToString("D"));
-        await discardStale.ExecuteNonQueryAsync(cancellationToken);
+        var targetCreate = moves
+            ? await LoadActiveCreateAsync(
+                connection,
+                sqliteTransaction,
+                publicationId,
+                channelId,
+                cancellationToken)
+            : currentCreate;
+        var preservedCreate = !removes &&
+            targetCreate?.State is DiscordOutboxState.Pending or DiscordOutboxState.Retry
+            ? targetCreate
+            : null;
 
-        await using var update = connection.CreateCommand();
-        update.Transaction = (SqliteTransaction)transaction;
-        update.CommandText =
-            """
-            UPDATE discord_publications
-            SET
-                state = $state,
-                desired_projection_revision = $desiredRevision,
-                projection_format_version = $projectionFormatVersion,
-                updated_at_utc = $now
-            WHERE publication_id = $publicationId;
-            """;
-        update.Parameters.AddWithValue("$state", (int)state);
-        update.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
-        update.Parameters.AddWithValue(
-            "$projectionFormatVersion",
-            DiscordPublicationProjectionFormat.CurrentVersion);
-        update.Parameters.AddWithValue("$now", queuedAt.ToString("O"));
-        update.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
-        await update.ExecuteNonQueryAsync(cancellationToken);
+        await using (var discardStale = connection.CreateCommand())
+        {
+            discardStale.Transaction = sqliteTransaction;
+            discardStale.CommandText =
+                """
+                DELETE FROM discord_outbox
+                WHERE publication_id = $publicationId
+                  AND state IN ($pending, $retry)
+                  AND desired_projection_revision < $desiredRevision
+                  AND operation <> $delete
+                  AND ($preservedWorkItemId IS NULL OR work_item_id <> $preservedWorkItemId);
+
+                -- A deferred delete waits for its channel's create to report a message id.
+                -- Once that create is discarded nothing will be posted there, and an
+                -- orphaned deferred delete would otherwise consume a later card's id.
+                DELETE FROM discord_outbox
+                WHERE publication_id = $publicationId
+                  AND operation = $delete
+                  AND message_id IS NULL
+                  AND state IN ($pending, $retry)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM discord_outbox create_work
+                      WHERE create_work.publication_id = discord_outbox.publication_id
+                        AND create_work.channel_id = discord_outbox.channel_id
+                        AND create_work.operation = $create
+                        AND create_work.state IN ($pending, $inFlight, $retry));
+                """;
+            discardStale.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+            discardStale.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+            discardStale.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+            discardStale.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
+            discardStale.Parameters.AddWithValue("$create", (int)DiscordOutboxOperation.CreateMessage);
+            discardStale.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+            discardStale.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
+            discardStale.Parameters.AddWithValue(
+                "$preservedWorkItemId",
+                preservedCreate is null
+                    ? DBNull.Value
+                    : preservedCreate.Value.WorkItemId.ToString("D"));
+            await discardStale.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // A same-channel card with a delete already queued or running is going away;
+        // re-showing it posts a fresh card rather than editing one that is being removed.
+        var messageDoomed = !removes &&
+            !moves &&
+            currentMessageId != null &&
+            await HasActiveDeleteAsync(
+                connection,
+                sqliteTransaction,
+                publicationId,
+                currentChannelId,
+                currentMessageId,
+                cancellationToken);
+        var clearsMessage = moves || messageDoomed;
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = sqliteTransaction;
+            update.CommandText =
+                """
+                UPDATE discord_publications
+                SET
+                    channel_id = $channelId,
+                    message_id = CASE WHEN $clearMessage = 1 THEN NULL ELSE message_id END,
+                    state = $state,
+                    desired_projection_revision = $desiredRevision,
+                    projection_format_version = $projectionFormatVersion,
+                    updated_at_utc = $now
+                WHERE publication_id = $publicationId;
+                """;
+            update.Parameters.AddWithValue("$channelId", channelId);
+            update.Parameters.AddWithValue("$clearMessage", clearsMessage ? 1 : 0);
+            update.Parameters.AddWithValue("$state", (int)state);
+            update.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
+            update.Parameters.AddWithValue(
+                "$projectionFormatVersion",
+                DiscordPublicationProjectionFormat.CurrentVersion);
+            update.Parameters.AddWithValue("$now", queuedAt.ToString("O"));
+            update.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
 
         var updated = publication with
         {
+            ChannelId = channelId,
+            MessageId = clearsMessage ? null : currentMessageId,
             State = state,
             DesiredProjectionRevision = desiredProjectionRevision,
             ProjectionFormatVersion = DiscordPublicationProjectionFormat.CurrentVersion,
             UpdatedAt = queuedAt
         };
-        if (RemovesMessage(state))
+        var projectionKey = $"projection:{publicationId:N}:{desiredProjectionRevision}";
+        if (removes || moves)
         {
-            var createIsInFlight = activeCreate?.State == DiscordOutboxState.InFlight;
-            if (!string.IsNullOrWhiteSpace(publication.MessageId) || createIsInFlight)
+            // Remove the card from the channel that holds it: a known message now, or
+            // whatever an in-flight create produces once it reports its id.
+            var createIsInFlight = currentCreate?.State == DiscordOutboxState.InFlight;
+            if ((currentMessageId != null || createIsInFlight) &&
+                !await HasActiveDeleteAsync(
+                    connection,
+                    sqliteTransaction,
+                    publicationId,
+                    currentChannelId,
+                    currentMessageId,
+                    cancellationToken))
             {
                 await InsertOutboxAsync(
                     connection,
-                    (SqliteTransaction)transaction,
-                    updated,
+                    sqliteTransaction,
+                    updated with
+                    {
+                        ChannelId = currentChannelId,
+                        MessageId = currentMessageId
+                    },
                     DiscordOutboxOperation.DeleteMessage,
                     payloadJson,
-                    $"projection:{publicationId:N}:{desiredProjectionRevision}",
+                    moves
+                        ? $"move-delete:{publicationId:N}:{desiredProjectionRevision}"
+                        : projectionKey,
                     queuedAt,
-                    createIsInFlight ? DateTimeOffset.MaxValue : queuedAt,
+                    currentMessageId == null ? DateTimeOffset.MaxValue : queuedAt,
                     cancellationToken);
             }
+
+            if (removes)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return;
+            }
         }
-        else if (activeCreate.HasValue &&
-            activeCreate.Value.State is DiscordOutboxState.Pending or DiscordOutboxState.Retry)
+
+        if (targetCreate.HasValue)
+        {
+            // The card this projection wants is the one the active create is posting
+            // here, so a deferred delete of that same create (from an earlier removal or
+            // move away from this channel) must not consume it.
+            await DiscardDeferredDeletesAsync(
+                connection,
+                sqliteTransaction,
+                publicationId,
+                channelId,
+                cancellationToken);
+        }
+
+        if (preservedCreate.HasValue)
         {
             await CoalesceQueuedCreateAsync(
                 connection,
-                (SqliteTransaction)transaction,
-                activeCreate.Value.WorkItemId,
+                sqliteTransaction,
+                preservedCreate.Value.WorkItemId,
                 desiredProjectionRevision,
                 payloadJson,
                 queuedAt,
                 cancellationToken);
         }
-        else
+        else if (targetCreate?.State == DiscordOutboxState.InFlight)
         {
-            var createIsInFlight =
-                activeCreate?.State == DiscordOutboxState.InFlight;
-            var operation = string.IsNullOrWhiteSpace(publication.MessageId) && !createIsInFlight
-                ? DiscordOutboxOperation.CreateMessage
-                : DiscordOutboxOperation.EditMessage;
             await InsertOutboxAsync(
                 connection,
-                (SqliteTransaction)transaction,
+                sqliteTransaction,
                 updated,
-                operation,
+                DiscordOutboxOperation.EditMessage,
                 payloadJson,
-                $"projection:{publicationId:N}:{desiredProjectionRevision}",
+                projectionKey,
                 queuedAt,
-                createIsInFlight ? DateTimeOffset.MaxValue : queuedAt,
+                DateTimeOffset.MaxValue,
+                cancellationToken);
+        }
+        else
+        {
+            await InsertOutboxAsync(
+                connection,
+                sqliteTransaction,
+                updated,
+                updated.MessageId == null
+                    ? DiscordOutboxOperation.CreateMessage
+                    : DiscordOutboxOperation.EditMessage,
+                payloadJson,
+                projectionKey,
+                queuedAt,
+                queuedAt,
                 cancellationToken);
         }
 
@@ -955,58 +1112,68 @@ public sealed class SqliteDiscordCollaborationStore(
             null,
             completedAt,
             cancellationToken);
+        // Every publication write is fenced to the channel the work item acted on, so
+        // work finishing in a channel the card already left cannot touch the live card.
         await using var publication = connection.CreateCommand();
         publication.Transaction = (SqliteTransaction)transaction;
-        publication.CommandText =
-            """
-            UPDATE discord_publications
-            SET
-                message_id = CASE
-                    WHEN $clearMessageId = 1 THEN NULL
-                    ELSE COALESCE($messageId, message_id)
-                END,
-                updated_at_utc = $now
-            WHERE publication_id = $publicationId;
-            """;
-        publication.Parameters.AddWithValue(
-            "$messageId",
-            string.IsNullOrWhiteSpace(messageId) ? DBNull.Value : messageId);
-        publication.Parameters.AddWithValue(
-            "$clearMessageId",
-            metadata.Value.Operation == DiscordOutboxOperation.DeleteMessage ? 1 : 0);
-        publication.Parameters.AddWithValue("$now", completedAt.ToString("O"));
         publication.Parameters.AddWithValue(
             "$publicationId",
             metadata.Value.PublicationId.ToString("D"));
-        await publication.ExecuteNonQueryAsync(cancellationToken);
-        if (!string.IsNullOrWhiteSpace(messageId))
+        publication.Parameters.AddWithValue("$workChannelId", metadata.Value.ChannelId);
+        publication.Parameters.AddWithValue("$now", completedAt.ToString("O"));
+        var reportedMessageId = string.IsNullOrWhiteSpace(messageId) ? null : messageId;
+        switch (metadata.Value.Operation)
         {
-            await using var releaseDeferred = connection.CreateCommand();
-            releaseDeferred.Transaction = (SqliteTransaction)transaction;
-            releaseDeferred.CommandText =
-                """
-                UPDATE discord_outbox
-                SET
-                    message_id = $messageId,
-                    next_attempt_at_utc = $completedAt,
-                    updated_at_utc = $completedAt
-                WHERE publication_id = $publicationId
-                  AND operation IN ($edit, $delete)
-                  AND message_id IS NULL
-                  AND state IN ($pending, $retry);
-                """;
-            releaseDeferred.Parameters.AddWithValue("$messageId", messageId);
-            releaseDeferred.Parameters.AddWithValue("$completedAt", completedAt.ToString("O"));
-            releaseDeferred.Parameters.AddWithValue(
-                "$publicationId",
-                metadata.Value.PublicationId.ToString("D"));
-            releaseDeferred.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
-            releaseDeferred.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
-            releaseDeferred.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
-            releaseDeferred.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
-            await releaseDeferred.ExecuteNonQueryAsync(cancellationToken);
+            case DiscordOutboxOperation.DeleteMessage:
+                publication.CommandText =
+                    """
+                    UPDATE discord_publications
+                    SET message_id = NULL, updated_at_utc = $now
+                    WHERE publication_id = $publicationId
+                      AND channel_id = $workChannelId
+                      AND message_id = $workMessageId;
+                    """;
+                publication.Parameters.AddWithValue(
+                    "$workMessageId",
+                    (object?)metadata.Value.MessageId ?? DBNull.Value);
+                break;
+            case DiscordOutboxOperation.CreateMessage when reportedMessageId != null:
+                publication.CommandText =
+                    """
+                    UPDATE discord_publications
+                    SET message_id = $messageId, updated_at_utc = $now
+                    WHERE publication_id = $publicationId
+                      AND channel_id = $workChannelId;
+
+                    UPDATE discord_outbox
+                    SET
+                        message_id = $messageId,
+                        next_attempt_at_utc = $now,
+                        updated_at_utc = $now
+                    WHERE publication_id = $publicationId
+                      AND channel_id = $workChannelId
+                      AND operation IN ($edit, $delete)
+                      AND message_id IS NULL
+                      AND state IN ($pending, $retry);
+                    """;
+                publication.Parameters.AddWithValue("$messageId", reportedMessageId);
+                publication.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
+                publication.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
+                publication.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+                publication.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+                break;
+            default:
+                publication.CommandText =
+                    """
+                    UPDATE discord_publications
+                    SET updated_at_utc = $now
+                    WHERE publication_id = $publicationId
+                      AND channel_id = $workChannelId;
+                    """;
+                break;
         }
 
+        await publication.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -1029,7 +1196,11 @@ public sealed class SqliteDiscordCollaborationStore(
                 o.operation,
                 o.desired_projection_revision,
                 p.desired_projection_revision,
-                p.state
+                p.state,
+                o.channel_id,
+                o.message_id,
+                p.channel_id,
+                p.message_id
             FROM discord_outbox o
             INNER JOIN discord_publications p
                 ON p.publication_id = o.publication_id
@@ -1044,6 +1215,9 @@ public sealed class SqliteDiscordCollaborationStore(
         long workProjectionRevision;
         long desiredProjectionRevision;
         DiscordPublicationState publicationState;
+        string workChannelId;
+        string? workMessageId;
+        bool editsLiveCard;
         await using (var reader = await inspect.ExecuteReaderAsync(cancellationToken))
         {
             if (!await reader.ReadAsync(cancellationToken) ||
@@ -1058,6 +1232,30 @@ public sealed class SqliteDiscordCollaborationStore(
             workProjectionRevision = reader.GetInt64(2);
             desiredProjectionRevision = reader.GetInt64(3);
             publicationState = (DiscordPublicationState)reader.GetInt32(4);
+            workChannelId = reader.GetString(5);
+            workMessageId = reader.IsDBNull(6) ? null : reader.GetString(6);
+            editsLiveCard =
+                string.Equals(workChannelId, reader.GetString(7), StringComparison.Ordinal) &&
+                !reader.IsDBNull(8) &&
+                string.Equals(workMessageId, reader.GetString(8), StringComparison.Ordinal);
+        }
+
+        if (!editsLiveCard)
+        {
+            // The card moved to another channel (or was already replaced) after this
+            // edit was queued. The missing message is not the live card, so neither
+            // clear the live identity nor resurrect a card where this edit was aimed.
+            await UpdateOutboxTerminalAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                workItemId,
+                leaseId,
+                DiscordOutboxState.Succeeded,
+                null,
+                recoveredAt,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return true;
         }
 
         await using (var clearIdentity = connection.CreateCommand())
@@ -1067,11 +1265,15 @@ public sealed class SqliteDiscordCollaborationStore(
                 """
                 UPDATE discord_publications
                 SET message_id = NULL, updated_at_utc = $recoveredAt
-                WHERE publication_id = $publicationId;
+                WHERE publication_id = $publicationId
+                  AND channel_id = $workChannelId
+                  AND message_id = $workMessageId;
                 """;
             clearIdentity.Parameters.AddWithValue(
                 "$publicationId",
                 publicationId.ToString("D"));
+            clearIdentity.Parameters.AddWithValue("$workChannelId", workChannelId);
+            clearIdentity.Parameters.AddWithValue("$workMessageId", workMessageId);
             clearIdentity.Parameters.AddWithValue(
                 "$recoveredAt",
                 recoveredAt.ToString("O"));
@@ -1141,10 +1343,12 @@ public sealed class SqliteDiscordCollaborationStore(
                 last_error = NULL,
                 updated_at_utc = $recoveredAt
             WHERE publication_id = $publicationId
+              AND channel_id = $workChannelId
               AND desired_projection_revision = $desiredProjectionRevision
               AND operation = $edit
               AND state IN ($pending, $retry);
             """;
+        recover.Parameters.AddWithValue("$workChannelId", workChannelId);
         recover.Parameters.AddWithValue("$create", (int)DiscordOutboxOperation.CreateMessage);
         recover.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
         recover.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
@@ -1250,26 +1454,44 @@ public sealed class SqliteDiscordCollaborationStore(
                 application_id,
                 guild_id,
                 channel_id,
-                updated_at_utc
+                updated_at_utc,
+                log_channel_id
             )
             VALUES (
                 $companyId,
                 $applicationId,
                 $guildId,
                 $channelId,
-                $updatedAt
+                $updatedAt,
+                $logChannelId
             )
             ON CONFLICT(company_id) DO UPDATE SET
                 application_id = excluded.application_id,
                 guild_id = excluded.guild_id,
                 channel_id = excluded.channel_id,
-                updated_at_utc = excluded.updated_at_utc;
+                updated_at_utc = excluded.updated_at_utc,
+                log_channel_id = excluded.log_channel_id;
+
+            -- Other companies sharing this open channel (staging test companies) share
+            -- its log channel too, so their claimed work moves alongside.
+            UPDATE discord_company_installations
+            SET log_channel_id = $logChannelId, updated_at_utc = $updatedAt
+            WHERE company_id <> $companyId
+              AND application_id = $applicationId
+              AND guild_id = $guildId
+              AND channel_id = $channelId
+              AND log_channel_id IS NOT $logChannelId;
             """;
         command.Parameters.AddWithValue("$companyId", installation.CompanyId.ToString());
         command.Parameters.AddWithValue("$applicationId", installation.ApplicationId);
         command.Parameters.AddWithValue("$guildId", installation.GuildId);
         command.Parameters.AddWithValue("$channelId", installation.ChannelId);
         command.Parameters.AddWithValue("$updatedAt", installation.UpdatedAt.ToString("O"));
+        command.Parameters.AddWithValue(
+            "$logChannelId",
+            string.IsNullOrWhiteSpace(installation.LogChannelId)
+                ? DBNull.Value
+                : installation.LogChannelId);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1283,7 +1505,7 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Transaction = transaction;
         command.CommandText =
             """
-            SELECT application_id, guild_id, channel_id, updated_at_utc
+            SELECT application_id, guild_id, channel_id, updated_at_utc, log_channel_id
             FROM discord_company_installations
             WHERE company_id = $companyId;
             """;
@@ -1295,7 +1517,8 @@ public sealed class SqliteDiscordCollaborationStore(
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
-                DateTimeOffset.Parse(reader.GetString(3)))
+                DateTimeOffset.Parse(reader.GetString(3)),
+                reader.IsDBNull(4) ? null : reader.GetString(4))
             : null;
     }
 
@@ -1346,6 +1569,38 @@ public sealed class SqliteDiscordCollaborationStore(
             """
             ALTER TABLE discord_publications
             ADD COLUMN projection_format_version INTEGER NOT NULL DEFAULT 0;
+            """;
+        await migrate.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureLogChannelIdColumnAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = "PRAGMA table_info(discord_company_installations);";
+        var hasColumn = false;
+        await using (var reader = await inspect.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                hasColumn |= string.Equals(
+                    reader.GetString(1),
+                    "log_channel_id",
+                    StringComparison.Ordinal);
+            }
+        }
+
+        if (hasColumn)
+        {
+            return;
+        }
+
+        await using var migrate = connection.CreateCommand();
+        migrate.CommandText =
+            """
+            ALTER TABLE discord_company_installations
+            ADD COLUMN log_channel_id TEXT NULL;
             """;
         await migrate.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -1476,6 +1731,7 @@ public sealed class SqliteDiscordCollaborationStore(
         SqliteConnection connection,
         SqliteTransaction transaction,
         Guid publicationId,
+        string channelId,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -1485,6 +1741,7 @@ public sealed class SqliteDiscordCollaborationStore(
             SELECT work_item_id, state
             FROM discord_outbox
             WHERE publication_id = $publicationId
+              AND channel_id = $channelId
               AND operation = $create
               AND state IN ($pending, $inFlight, $retry)
             ORDER BY
@@ -1493,6 +1750,7 @@ public sealed class SqliteDiscordCollaborationStore(
             LIMIT 1;
             """;
         command.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$create", (int)DiscordOutboxOperation.CreateMessage);
         command.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
         command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
@@ -1501,6 +1759,63 @@ public sealed class SqliteDiscordCollaborationStore(
         return await reader.ReadAsync(cancellationToken)
             ? (Guid.Parse(reader.GetString(0)), (DiscordOutboxState)reader.GetInt32(1))
             : null;
+    }
+
+    private static async Task<bool> HasActiveDeleteAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid publicationId,
+        string channelId,
+        string? messageId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM discord_outbox
+                WHERE publication_id = $publicationId
+                  AND channel_id = $channelId
+                  AND operation = $delete
+                  AND message_id IS $messageId
+                  AND state IN ($pending, $inFlight, $retry));
+            """;
+        command.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$messageId", (object?)messageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
+        command.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        command.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)) != 0;
+    }
+
+    private static async Task DiscardDeferredDeletesAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid publicationId,
+        string channelId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            DELETE FROM discord_outbox
+            WHERE publication_id = $publicationId
+              AND channel_id = $channelId
+              AND operation = $delete
+              AND message_id IS NULL
+              AND state IN ($pending, $retry);
+            """;
+        command.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
+        command.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        command.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task CoalesceQueuedCreateAsync(
@@ -1722,6 +2037,17 @@ public sealed class SqliteDiscordCollaborationStore(
             error,
             failedAt,
             cancellationToken);
+        var activeChannel = string.Equals(
+            metadata.Value.ChannelId,
+            metadata.Value.PublicationChannelId,
+            StringComparison.Ordinal);
+        var targetsLiveCard = activeChannel &&
+            (metadata.Value.Operation == DiscordOutboxOperation.CreateMessage
+                ? string.IsNullOrWhiteSpace(metadata.Value.PublicationMessageId)
+                : string.Equals(
+                    metadata.Value.MessageId,
+                    metadata.Value.PublicationMessageId,
+                    StringComparison.Ordinal));
         await using var failDeferred = connection.CreateCommand();
         failDeferred.Transaction = (SqliteTransaction)transaction;
         failDeferred.CommandText =
@@ -1732,41 +2058,72 @@ public sealed class SqliteDiscordCollaborationStore(
                 last_error = $error,
                 updated_at_utc = $failedAt
             WHERE publication_id = $publicationId
+              AND channel_id = $workChannelId
               AND operation IN ($edit, $delete)
               AND message_id IS NULL
               AND state IN ($pending, $retry);
             """;
+        if (!activeChannel &&
+            metadata.Value.Operation == DiscordOutboxOperation.CreateMessage &&
+            outboxState == DiscordOutboxState.Failed)
+        {
+            // Nothing was posted in the channel the card already left, so the cleanup
+            // delete waiting for this create has nothing to remove.
+            failDeferred.CommandText =
+                """
+                DELETE FROM discord_outbox
+                WHERE publication_id = $publicationId
+                  AND channel_id = $workChannelId
+                  AND operation = $delete
+                  AND message_id IS NULL
+                  AND state IN ($pending, $retry);
+                """ + failDeferred.CommandText;
+        }
+
         failDeferred.Parameters.AddWithValue("$state", (int)outboxState);
         failDeferred.Parameters.AddWithValue("$error", Truncate(error, 512));
         failDeferred.Parameters.AddWithValue("$failedAt", failedAt.ToString("O"));
         failDeferred.Parameters.AddWithValue(
             "$publicationId",
             metadata.Value.PublicationId.ToString("D"));
+        failDeferred.Parameters.AddWithValue("$workChannelId", metadata.Value.ChannelId);
         failDeferred.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
         failDeferred.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
         failDeferred.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
         failDeferred.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
         await failDeferred.ExecuteNonQueryAsync(cancellationToken);
-        await using var publication = connection.CreateCommand();
-        publication.Transaction = (SqliteTransaction)transaction;
-        publication.CommandText =
-            """
-            UPDATE discord_publications
-            SET state = $state, updated_at_utc = $updatedAt
-            WHERE publication_id = $publicationId;
-            """;
-        publication.Parameters.AddWithValue("$state", (int)publicationState);
-        publication.Parameters.AddWithValue("$updatedAt", failedAt.ToString("O"));
-        publication.Parameters.AddWithValue(
-            "$publicationId",
-            metadata.Value.PublicationId.ToString("D"));
-        await publication.ExecuteNonQueryAsync(cancellationToken);
+        if (targetsLiveCard)
+        {
+            // Only failures targeting the live card describe the publication; a failed
+            // cleanup in an abandoned channel or for a replaced card stays on its work item.
+            await using var publication = connection.CreateCommand();
+            publication.Transaction = (SqliteTransaction)transaction;
+            publication.CommandText =
+                """
+                UPDATE discord_publications
+                SET state = $state, updated_at_utc = $updatedAt
+                WHERE publication_id = $publicationId
+                  AND channel_id = $workChannelId;
+                """;
+            publication.Parameters.AddWithValue("$state", (int)publicationState);
+            publication.Parameters.AddWithValue("$updatedAt", failedAt.ToString("O"));
+            publication.Parameters.AddWithValue(
+                "$publicationId",
+                metadata.Value.PublicationId.ToString("D"));
+            publication.Parameters.AddWithValue("$workChannelId", metadata.Value.ChannelId);
+            await publication.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
     private readonly record struct DiscordOutboxMetadata(
         Guid PublicationId,
-        DiscordOutboxOperation Operation);
+        DiscordOutboxOperation Operation,
+        string ChannelId,
+        string? MessageId,
+        string PublicationChannelId,
+        string? PublicationMessageId);
 
     private static async Task<DiscordOutboxMetadata?> LoadOutboxMetadataAsync(
         SqliteConnection connection,
@@ -1779,11 +2136,13 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Transaction = transaction;
         command.CommandText =
             """
-            SELECT publication_id, operation
-            FROM discord_outbox
-            WHERE work_item_id = $workItemId
-              AND lease_id = $leaseId
-              AND state = $inFlight;
+            SELECT o.publication_id, o.operation, o.channel_id, o.message_id, p.channel_id, p.message_id
+            FROM discord_outbox o
+            INNER JOIN discord_publications p
+                ON p.publication_id = o.publication_id
+            WHERE o.work_item_id = $workItemId
+              AND o.lease_id = $leaseId
+              AND o.state = $inFlight;
             """;
         command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
         command.Parameters.AddWithValue("$leaseId", leaseId);
@@ -1792,7 +2151,11 @@ public sealed class SqliteDiscordCollaborationStore(
         return await reader.ReadAsync(cancellationToken)
             ? new DiscordOutboxMetadata(
                 Guid.Parse(reader.GetString(0)),
-                (DiscordOutboxOperation)reader.GetInt32(1))
+                (DiscordOutboxOperation)reader.GetInt32(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5))
             : null;
     }
 

@@ -63,6 +63,7 @@ jobs:
         shell: bash
         env:
           TARGET_DISCORD_CHANNEL_NAME: ${{ vars.CRAFT_ARCHITECT_DISCORD_CHANNEL_NAME }}
+          TARGET_DISCORD_LOG_CHANNEL_NAME: ${{ vars.CRAFT_ARCHITECT_DISCORD_LOG_CHANNEL_NAME }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
@@ -108,6 +109,16 @@ jobs:
             channel_name="$TARGET_DISCORD_CHANNEL_NAME"
           fi
 
+          log_channel_name="${channel_name}-log"
+          if [[ -n "$TARGET_DISCORD_LOG_CHANNEL_NAME" ]]; then
+            log_channel_name="$TARGET_DISCORD_LOG_CHANNEL_NAME"
+          fi
+          [[ "$log_channel_name" =~ ^[a-z0-9_-]{1,100}$ ]]
+          if [[ "$log_channel_name" == "$channel_name" ]]; then
+            echo "The Discord log channel must differ from the open commission channel." >&2
+            exit 1
+          fi
+
           {
             echo "target=$target"
             echo "root=$root"
@@ -117,6 +128,7 @@ jobs:
             echo "profile_db=$profile_db"
             echo "discord_db=$discord_db"
             echo "channel_name=$channel_name"
+            echo "log_channel_name=$log_channel_name"
           } >> "$GITHUB_OUTPUT"
 
       - name: Configure SSH
@@ -425,6 +437,7 @@ jobs:
         id: discord
         env:
           DISCORD_CHANNEL_NAME: ${{ steps.target.outputs.channel_name }}
+          DISCORD_LOG_CHANNEL_NAME: ${{ steps.target.outputs.log_channel_name }}
         run: node tools/Discord/reconcile-guild.mjs
 
       - name: Write isolated Discord environment
@@ -432,6 +445,7 @@ jobs:
           TRADE_COMPANY_ID: ${{ vars.CRAFT_ARCHITECT_TRADE_COMPANY_ID }}
           TARGET_DISCORD_ENABLED: ${{ steps.features.outputs.discord_enabled }}
           TARGET_DISCORD_CHANNEL_ID: ${{ steps.discord.outputs.channel_id }}
+          TARGET_DISCORD_LOG_CHANNEL_ID: ${{ steps.discord.outputs.log_channel_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -441,6 +455,11 @@ jobs:
           umask 077
           if [[ "$TARGET_DISCORD_ENABLED" == "true" ]]; then
             [[ "$TARGET_DISCORD_CHANNEL_ID" =~ ^[0-9]{17,20}$ ]]
+            [[ "$TARGET_DISCORD_LOG_CHANNEL_ID" =~ ^[0-9]{17,20}$ ]]
+            if [[ "$TARGET_DISCORD_LOG_CHANNEL_ID" == "$TARGET_DISCORD_CHANNEL_ID" ]]; then
+              echo "The Discord log channel resolved to the open commission channel." >&2
+              exit 1
+            fi
             {
               printf 'Discord__Enabled=true\n'
               printf 'Discord__CompanyId=%s\n' "$TRADE_COMPANY_ID"
@@ -450,6 +469,7 @@ jobs:
               printf 'Discord__DatabasePath=%s\n' '${{ steps.target.outputs.discord_db }}'
               printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
               printf 'Discord__AllowedChannelId=%s\n' "$TARGET_DISCORD_CHANNEL_ID"
+              printf 'Discord__LogChannelId=%s\n' "$TARGET_DISCORD_LOG_CHANNEL_ID"
               printf 'Discord__CommissionBaseUrl=https://%s/commission.html?id=\n' '${{ steps.target.outputs.domain }}'
               printf 'Discord__CrafterWorkspaceEnabled=true\n'
               printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'
@@ -1241,13 +1261,15 @@ jobs:
                   status: "ready",
                   signingReady: true,
                   publishingReady: true,
-                  directPublishingReady: true
+                  directPublishingReady: true,
+                  logChannelConfigured: true
                 }
               : {
                   status: "disabled",
                   signingReady: false,
                   publishingReady: false,
-                  directPublishingReady: false
+                  directPublishingReady: false,
+                  logChannelConfigured: false
                 };
             for (const [key, value] of Object.entries(expected)) {
               if (health?.[key] !== value) process.exit(1);

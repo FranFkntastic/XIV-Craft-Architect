@@ -136,7 +136,7 @@ public sealed class DiscordPublicationService(
             published.Version,
             idempotencyKey,
             actionToken,
-            installation.ChannelId,
+            installation.ResolveChannelId(state),
             state,
             JsonSerializer.Serialize(initialPayload, JsonOptions),
             now,
@@ -462,10 +462,7 @@ public sealed class DiscordPublicationService(
             access.CompanyId,
             cancellationToken);
         if (installation == null ||
-            !string.Equals(
-                installation.ChannelId,
-                publication.ChannelId,
-                StringComparison.Ordinal))
+            !installation.OwnsChannel(publication.ChannelId))
         {
             return RetryConflict(
                 "The failed publication destination no longer matches the company's ready Discord installation.");
@@ -515,7 +512,7 @@ public sealed class DiscordPublicationService(
             projection,
             publication.ActionToken,
             options.CrafterWorkspaceEnabled);
-        return await collaboration.RetryFailedPublicationAsync(
+        var retried = await collaboration.RetryFailedPublicationAsync(
             access.CompanyId,
             publication.PublicationId,
             publicId,
@@ -523,6 +520,24 @@ public sealed class DiscordPublicationService(
             JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),
             cancellationToken);
+        if (retried.Success &&
+            !string.Equals(
+                installation.ResolveChannelId(restoredState, publication.ChannelId),
+                publication.ChannelId,
+                StringComparison.Ordinal))
+        {
+            // The commission was claimed, completed, or reopened while delivery was
+            // failed; the retried card belongs in the other channel now.
+            await RefreshOrderAsync(access, publication.OrderId, cancellationToken);
+            return retried with
+            {
+                Publication = await collaboration.LoadPublicationAsync(
+                    publication.PublicationId,
+                    cancellationToken) ?? retried.Publication
+            };
+        }
+
+        return retried;
     }
 
     public async Task RevokeAsync(
@@ -538,7 +553,17 @@ public sealed class DiscordPublicationService(
             return;
         }
 
-        var payload = JsonSerializer.Serialize(
+        await collaboration.EnqueueProjectionAsync(
+            publication.PublicationId,
+            DiscordPublicationState.Revoked,
+            checked(publication.DesiredProjectionRevision + 1),
+            CreateRevokedPayload(),
+            timeProvider.GetUtcNow(),
+            cancellationToken);
+    }
+
+    private static string CreateRevokedPayload() =>
+        JsonSerializer.Serialize(
             new
             {
                 content = "This commission publication was revoked.",
@@ -547,14 +572,6 @@ public sealed class DiscordPublicationService(
                 allowed_mentions = new { parse = Array.Empty<string>() }
             },
             JsonOptions);
-        await collaboration.EnqueueProjectionAsync(
-            publication.PublicationId,
-            DiscordPublicationState.Revoked,
-            checked(publication.DesiredProjectionRevision + 1),
-            payload,
-            timeProvider.GetUtcNow(),
-            cancellationToken);
-    }
 
     public async Task RefreshOrderAsync(
         TradeCompanyAccessContext access,
@@ -664,10 +681,33 @@ public sealed class DiscordPublicationService(
             return;
         }
 
-        var published = await briefs.LoadAsync(publication.PublicId, cancellationToken)
-            ?? throw new InvalidOperationException(
-                "An active Discord publication no longer has immutable commission terms.");
         var state = ResolvePublicationState(order);
+        var published = await briefs.LoadAsync(publication.PublicId, cancellationToken);
+        if (published == null &&
+            (state == DiscordPublicationState.Revoked ||
+             publication.State == DiscordPublicationState.Revoked))
+        {
+            // Revoked briefs no longer load. The projection only removes the card, so
+            // reconciliation (including format migrations) must not fail on them.
+            await collaboration.EnqueueProjectionAsync(
+                publication.PublicationId,
+                DiscordPublicationState.Revoked,
+                checked(publication.DesiredProjectionRevision + 1),
+                CreateRevokedPayload(),
+                timeProvider.GetUtcNow(),
+                cancellationToken);
+            return;
+        }
+
+        if (published == null)
+        {
+            throw new InvalidOperationException(
+                "An active Discord publication no longer has immutable commission terms.");
+        }
+
+        var installation = await collaboration.ResolveCompanyInstallationAsync(
+            access.CompanyId,
+            cancellationToken);
         if (!TryResolveCanonicalPublicUrl(publication.PublicId, out var publicUrl) ||
             !string.Equals(
                 order.CommissionPublication?.PublicUrl,
@@ -699,6 +739,7 @@ public sealed class DiscordPublicationService(
             checked(publication.DesiredProjectionRevision + 1),
             JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),
+            installation?.ResolveChannelId(state, publication.ChannelId),
             cancellationToken);
     }
 

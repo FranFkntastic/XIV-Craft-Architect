@@ -148,6 +148,12 @@ public sealed class DiscordOutboxDispatcher(
                     cancellationToken);
                 return;
             case DiscordApiOutcome.ReconciliationRequired:
+                logger.LogWarning(
+                    "Discord outbox work item {WorkItemId} ({Operation}) on channel {ChannelId} requires reconciliation: {Error}",
+                    workItem.WorkItemId,
+                    workItem.Operation,
+                    workItem.ChannelId,
+                    result.Error ?? "Discord message creation has an ambiguous outcome.");
                 await store.RequireReconciliationAsync(
                     workItem.WorkItemId,
                     workItem.LeaseId,
@@ -167,6 +173,12 @@ public sealed class DiscordOutboxDispatcher(
                     return;
                 }
 
+                logger.LogWarning(
+                    "Discord outbox work item {WorkItemId} ({Operation}) on channel {ChannelId} failed terminally: {Error}",
+                    workItem.WorkItemId,
+                    workItem.Operation,
+                    workItem.ChannelId,
+                    result.Error ?? "Discord rejected the outbox operation.");
                 await store.ExhaustAsync(
                     workItem.WorkItemId,
                     workItem.LeaseId,
@@ -177,6 +189,12 @@ public sealed class DiscordOutboxDispatcher(
             case DiscordApiOutcome.RetryableFailure:
                 if (workItem.AttemptCount >= options.OutboxMaximumAttempts)
                 {
+                    logger.LogWarning(
+                        "Discord outbox work item {WorkItemId} ({Operation}) on channel {ChannelId} exhausted its retry budget: {Error}",
+                        workItem.WorkItemId,
+                        workItem.Operation,
+                        workItem.ChannelId,
+                        result.Error ?? "Discord outbox retry budget was exhausted.");
                     await store.ExhaustAsync(
                         workItem.WorkItemId,
                         workItem.LeaseId,
