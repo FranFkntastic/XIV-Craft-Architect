@@ -537,9 +537,9 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 var plan = row.Plan != null && Unpriced(row) ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
                 row.Plan = plan;
                 row.Market = await Calculator.ReadStoredAsync(TradeMarginCalculator.Pairs(plan, scope), ct);
-                // A row with no stored data for some material waits for the update rather
-                // than showing that material as unpriced.
-                if (TradeMarginCalculator.HasMarketData(plan, row.Market))
+                // A row without stored data for some material in some data center of the scope
+                // waits for the update rather than showing a figure priced from part of the scope.
+                if (TradeMarginCalculator.HasMarketData(plan, scope, row.Market))
                 {
                     SetCost(row, Named(row, await TradeMarginCalculator.PriceAsync(plan, scope, row.Market, Pricing, ct)));
                     StateHasChanged();

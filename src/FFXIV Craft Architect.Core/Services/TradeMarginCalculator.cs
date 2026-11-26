@@ -206,11 +206,16 @@ public sealed class TradeMarginCalculator(
         return row.Leaves.SelectMany(id => centers.Select(dataCenter => (id, dataCenter))).ToArray();
     }
 
-    /// <summary>True when every material of the row has stored market data in at least one data center.</summary>
-    public static bool HasMarketData(PreparedRow row, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
+    /// <summary>
+    /// True when every material of the row has stored market data in every data center of
+    /// <paramref name="scope"/>. Data covering only part of the scope (e.g. just after the scope
+    /// widened) would price the row as if the scope were narrower.
+    /// </summary>
+    public static bool HasMarketData(PreparedRow row, TradeMarginMarketScope? scope,
+        IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
     {
-        var priced = stored.Keys.Select(pair => pair.itemId).ToHashSet();
-        return row.Leaves.All(priced.Contains);
+        var pairs = Pairs(row, scope);
+        return pairs.Count > 0 && pairs.All(stored.ContainsKey);
     }
 
     /// <summary>
