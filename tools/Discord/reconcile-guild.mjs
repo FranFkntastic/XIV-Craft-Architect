@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 const DiscordApi = 'https://discord.com/api/v10';
 const Administrator = 1n << 3n;
+const ManageRoles = 1n << 28n;
 const RequiredPermissions =
   (1n << 4n) | // Manage Channels
   (1n << 10n) | // View Channels
@@ -164,8 +165,9 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     throw new Error('The bot lacks Manage Channels, View Channels, Send Messages, or Embed Links.');
   }
 
+  const canSetOverwrites = (permissions & (Administrator | ManageRoles)) !== 0n;
   const channels = await discordRequest(fetchImpl, token, `/guilds/${guildId}/channels`);
-  const reuseOrCreateTextChannel = async (name, topic) => {
+  const reuseOrCreateTextChannel = async (name, topic, permissionOverwrites = null) => {
     const matches = channels.filter(channel =>
       channel.name === name &&
       channel.parent_id === parentId &&
@@ -174,18 +176,23 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
       throw new Error(`More than one #${name} text channel exists under the configured category.`);
     }
 
+    const createBody = {
+      name,
+      type: 0,
+      parent_id: parentId,
+      topic
+    };
+    if (canSetOverwrites && Array.isArray(permissionOverwrites) && permissionOverwrites.length > 0) {
+      createBody.permission_overwrites = permissionOverwrites;
+    }
+
     return matches[0] ?? await discordRequest(
       fetchImpl,
       token,
       `/guilds/${guildId}/channels`,
       {
         method: 'POST',
-        body: JSON.stringify({
-          name,
-          type: 0,
-          parent_id: parentId,
-          topic
-        })
+        body: JSON.stringify(createBody)
       });
   };
 
@@ -194,7 +201,8 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     'Craft Architect commission briefs: scope, material responsibility, payment basis, and evidence in one place.');
   const logChannel = await reuseOrCreateTextChannel(
     logChannelName,
-    'Claimed and completed Craft Architect commissions.');
+    'Claimed and completed Craft Architect commissions.',
+    channel.permission_overwrites);
   if (logChannel.id === channel.id) {
     throw new Error('The commission log channel resolved to the open commission channel.');
   }
