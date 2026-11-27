@@ -38,7 +38,7 @@
                 <div id="margin-results" class="add-results @Glass("dropdown")" role="listbox" aria-label="Items">
                     @foreach (var match in _matches)
                     {
-                        <button type="button" role="option" aria-selected="@(match == _matches[_activeMatch])"
+                        <button @key="match.Id" type="button" role="option" aria-selected="@(match == _matches[_activeMatch])"
                                 @onclick="() => AddAsync(match)">
                             <ItemIcon IconId="@match.Object.IconId" Name="@match.Object.Name" />
                             @match.Object.Name
@@ -64,7 +64,7 @@
     <div @ref="_tableWrap" class="margins-table-wrap @Glass("table")">
         <WebDataTable TItem="MarginRow" TColumnId="Column" Items="@SortedRows" Columns="@Columns"
                       SortState="@_sort" SortChanged="value => _sort = value" GetRowKey="row => row.KeyText"
-                      IsRowExpanded="row => _expanded.Contains(row.Key) && row.Breakdown != null"
+                      IsRowExpanded="IsExpanded"
                       ExpandedContent="row => builder => RenderMaterials(builder, row)">
             <EmptyContent>No items yet.</EmptyContent>
         </WebDataTable>
@@ -88,7 +88,14 @@
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _ageLoop;
     private string _search = "";
-    private int _searchGeneration, _activeMatch;
+    private int _activeMatch;
+    // The pending search: debounced, and cancelled (request included) when a newer query supersedes it.
+    private CancellationTokenSource? _searchJob;
+    private Task _searchTask = Task.CompletedTask;
+    private string? _matchesQuery;
+    // Garland results per trimmed query this session, so backspacing or retyping is instant.
+    private readonly Dictionary<string, List<GarlandSearchResult>> _searchCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan SearchDebounce = TimeSpan.FromMilliseconds(150);
     // Sell or Source: which rows the table shows. Both modes stay priced so switching is instant.
     private TradeMarginMode _mode = TradeMarginMode.Sell;
     // The sale price (Sell) or manual buy price (Source) being typed.
@@ -119,6 +126,15 @@
     private CancellationTokenSource? _priceJob;
     private (Guid? Company, TradeMarginMarketScope? Scope) _priceJobScope;
     private bool _priceAgain;
+    // Rows the background job has prepared and priced from stored data in its current pass, and
+    // rows being prepared right now (by the job or on demand).
+    private readonly HashSet<RowKey> _staged = [];
+    private readonly Dictionary<RowKey, Task<bool>> _staging = [];
+    // Rows someone is waiting on (expanded or just added): they go first.
+    private readonly HashSet<RowKey> _urgent = [];
+    // Rows the current pass has brought up to date.
+    private readonly HashSet<RowKey> _updated = [];
+    private StoredPass? _storedPass;
     private bool Refreshing => _forceFetch.Count > 0;
     private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
     private TradeMarginPricing Pricing => new(Rate, _profile?.MaterialSources ?? []);
@@ -152,6 +168,8 @@
         public string ItemName { get; set; } = "Item";
         public TradeMarginCost? Cost { get; set; }
         public TradeMarginBreakdown? Breakdown { get; set; }
+        /// <summary>The cost and pricing the breakdown was described for; a match re-expands without work.</summary>
+        public (TradeMarginCost Cost, decimal Rate, IReadOnlyList<TradeMaterialSource> Sources)? BreakdownFor { get; set; }
         public TradeMarginCalculator.PreparedRow? Plan { get; set; }
         /// <summary>Market data this row is priced from, by item and data center.</summary>
         public Dictionary<(int itemId, string dataCenter), CachedMarketData>? Market { get; set; }
@@ -220,7 +238,7 @@
     }
     private IReadOnlyList<WebTableColumn<MarginRow, Column>> Columns =>
     [
-        new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (row.Cost?.Basis != null) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.Key) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
+        new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (ShowsExpander(row)) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.Key) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
         _mode == TradeMarginMode.Source
             ? new() { Id = Column.Sale, Header = "Buy price", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live buy price" aria-label="@($"Reset {row.Name} to live buy price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && VendorWins(row)) { <span class="sub">Vendor</span> } else if (row.Sale == null && row.Cost?.MarketBuy is { IsShortOfListings: true } thin) { <span class="sub short-listed">@ShortOfListings(thin)</span> } else if (row.Sale == null && row.Cost?.MarketBuy?.BuyAt is { } buyAt) { <span class="sub" title="@buyAt">@buyAt</span> }</div> }
             : new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
@@ -238,7 +256,11 @@
 
     private void RenderMaterials(RenderTreeBuilder __builder, MarginRow row)
     {
-        var breakdown = row.Breakdown!;
+        if (row.Breakdown is not { } breakdown)
+        {
+            <div class="margin-detail"><div class="margin-detail-loading">@(MaterialsPending(row) ? "Loading materials…" : "No prices yet")</div></div>
+            return;
+        }
         var costs = LineCosts(row, breakdown);
         var sold = breakdown.Lines.First(line => line.IsSoldItem);
         var precrafts = breakdown.Lines.Where(line => !line.IsSoldItem && line.IsCraftable).ToArray();
@@ -341,6 +363,8 @@
         </tr>
     }
 
+    // A breakdown is on its way while the row is being described, prepared or priced in the background.
+    private bool MaterialsPending(MarginRow row) => row.Cost is { Basis: not null } || _priceJob != null || _staging.ContainsKey(row.Key);
     private static decimal? StoredPrice(TradeMarginLine line) =>
         line.Route == TradeMaterialRoute.SetPrice ? line.Chosen?.UnitPrice : null;
     private TradeMaterialRoute DisplayedRoute(TradeMarginLine line) =>
@@ -551,15 +575,16 @@
             _revision = resolved.HostedRevision;
             _hosted = resolved.IsHosted;
             if (!unchanged) RebuildRows(previousRows, scopeChanged, preserveEdit: previous?.Id == _profile.Id);
-            if (previous?.Id != _profile.Id) { _expanded.Clear(); _pendingSetPrice.Clear(); _editingPrice = null; }
+            if (previous?.Id != _profile.Id) { _expanded.Clear(); _urgent.Clear(); _pendingSetPrice.Clear(); _editingPrice = null; }
             _loaded = true;
             _loadedCompany = null;
             if (Company != null) { Company = null; Navigation.NavigateTo("trade/margins", replace: true); }
             if (_rows.Any(row => row.Cost == null)) await RestoreFiguresAsync();
-            await CalculateAsync(false);
             if (previous != null && (previousRate != Rate ||
                 !(previous.MaterialSources ?? []).SequenceEqual(_profile.MaterialSources ?? [])))
                 await RepriceAllAsync();
+            // Rows are prepared and priced in the background, so nothing waits on a full-table load.
+            QueuePricing(false);
         }
         catch (Exception ex) { ReportError(ex); }
         finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
@@ -582,6 +607,7 @@
                 Cost = stale ? null : prior?.Cost,
                 Restored = !stale && prior?.Restored == true,
                 Breakdown = stale ? null : prior?.Breakdown,
+                BreakdownFor = stale ? null : prior?.BreakdownFor,
                 // A plan is prepared for one batch size; market data is the same for any.
                 Plan = stale ? null : prior?.Plan,
                 Market = scopeChanged ? null : prior?.Market
@@ -624,40 +650,57 @@
     private static TradeMarginCost Named(MarginRow row, TradeMarginCost cost) =>
         cost.Name == "Item unavailable" && row.ItemName != "Item" ? cost with { Name = row.ItemName } : cost;
     /// <summary>
-    /// Runs under _gate. Rows without a figure are priced at once from the market data the
-    /// browser holds, whatever its age; the background update then refetches what is due.
+    /// Stored market data read during one background pass: each item/data-center pair is read
+    /// from the browser's store at most once, however many rows share it (shards, crystals,
+    /// ingots, lumber). Entries fetched during the pass replace what was read.
     /// </summary>
-    private async Task CalculateAsync(bool refresh)
+    private sealed class StoredPass
     {
-        if (_disposed) return;
-        var scope = MarginScope;
-        var ct = _lifetime.Token;
-        if (refresh) foreach (var row in _rows) _forceFetch.Add(row.Key);
-        StateHasChanged();
-        foreach (var row in _rows.ToArray())
+        private readonly Dictionary<(int itemId, string dataCenter), CachedMarketData> _entries = [];
+        private readonly HashSet<(int itemId, string dataCenter)> _read = [];
+
+        public async Task<Dictionary<(int itemId, string dataCenter), CachedMarketData>> ReadAsync(
+            TradeMarginCalculator calculator, IReadOnlyList<(int itemId, string dataCenter)> pairs, CancellationToken ct)
         {
-            if (_disposed) return;
-            if (!NeedsPricing(row)) continue;
-            try
+            var missing = pairs.Where(pair => !_read.Contains(pair)).Distinct().ToArray();
+            if (missing.Length > 0)
             {
-                var plan = row.Plan != null && Unpriced(row) ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch,
-                    includeRootMarket: row.Mode == TradeMarginMode.Source);
-                row.Plan = plan;
-                row.Market = await Calculator.ReadStoredAsync(TradeMarginCalculator.Pairs(plan, scope), ct);
-                // A row without stored data for some material in some data center of the scope
-                // waits for the update rather than showing a figure priced from part of the scope.
-                if (TradeMarginCalculator.HasMarketData(plan, scope, row.Market))
-                {
-                    SetCost(row, Named(row, await TradeMarginCalculator.PriceAsync(plan, scope, row.Market, Pricing, ct)));
-                    StateHasChanged();
-                }
+                // A pair fetched while this read was in flight is newer: it is kept.
+                foreach (var (pair, entry) in await calculator.ReadStoredAsync(missing, ct)) _entries.TryAdd(pair, entry);
+                _read.UnionWith(missing);
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
+            return pairs.Distinct().Where(_entries.ContainsKey).ToDictionary(pair => pair, pair => _entries[pair]);
+        }
+
+        public void Landed(IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> fetched)
+        {
+            foreach (var (pair, entry) in fetched)
             {
-                row.Plan = null;
-                await ShowPricingFailureAsync(row, ex, ct);
+                _entries[pair] = entry;
+                _read.Add(pair);
             }
         }
+    }
+    /// <summary>Background order: rows someone waits on, then the mode on screen, then the other mode.</summary>
+    private int Priority(MarginRow row) => _urgent.Contains(row.Key) ? 0 : row.Mode == _mode ? 1 : 2;
+    private RowKey? NextToStage() => _rows
+        .Where(row => NeedsPricing(row) && !_staged.Contains(row.Key) && !_staging.ContainsKey(row.Key))
+        .OrderBy(Priority).ThenBy(row => row.Cost == null ? 0 : 1)
+        .Select(row => (RowKey?)row.Key).FirstOrDefault();
+    private RowKey? NextToUpdate() => _rows
+        .Where(row => !_updated.Contains(row.Key) && !_staging.ContainsKey(row.Key))
+        .OrderBy(Priority).ThenBy(row => Unpriced(row) ? 0 : 1)
+        .Select(row => (RowKey?)row.Key).FirstOrDefault();
+    /// <summary>
+    /// Queues every row without a figure to be prepared and priced from the market data the
+    /// browser holds, whatever its age, and the background update to refetch what is due. Never
+    /// waits on that work. With <paramref name="refresh"/>, every row refetches every pair.
+    /// </summary>
+    private void QueuePricing(bool refresh)
+    {
+        if (_disposed) return;
+        if (refresh) foreach (var row in _rows) _forceFetch.Add(row.Key);
+        _staged.Clear();
         StartPriceUpdate();
     }
     private void StartPriceUpdate()
@@ -674,9 +717,12 @@
         _ = RunPriceUpdateAsync(job);
     }
     /// <summary>
-    /// Brings stored prices up to date without holding _gate while Universalis answers. Each
-    /// item/data-center pair is fetched at most once per pass; rows reprice in place as their
-    /// data lands, keeping expanded rows and values being typed.
+    /// Prepares and prices rows from stored data, then brings stored prices up to date, never
+    /// holding _gate while a row is prepared or Universalis answers. The next row is chosen
+    /// before every step, so switching mode or expanding a row moves it ahead, and a row added
+    /// mid-pass is priced from stored data before the next fetch. Each stored pair is read once
+    /// and each item/data-center pair fetched at most once per pass; rows reprice in place as
+    /// their data lands, keeping expanded rows and values being typed.
     /// </summary>
     private async Task RunPriceUpdateAsync(CancellationTokenSource job)
     {
@@ -686,18 +732,36 @@
             do
             {
                 _priceAgain = false;
+                _staged.Clear();
+                _updated.Clear();
                 var (company, scope) = _priceJobScope;
                 var forcedPass = _forceFetch.Count > 0;
+                var pass = _storedPass = new StoredPass();
                 var attempted = new HashSet<(int itemId, string dataCenter)>();
                 var landed = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
-                // Rows still without a figure go first, then table order.
-                foreach (var key in _rows.OrderBy(row => Unpriced(row) ? 0 : 1).Select(row => row.Key).ToArray())
+                while (true)
                 {
                     ct.ThrowIfCancellationRequested();
+                    if (NextToStage() is { } next)
+                    {
+                        _staged.Add(next);
+                        if (!await StageAsync(next, company, scope, pass, ct)) return;
+                        await MainThreadYield.Async(ct);
+                        continue;
+                    }
+                    if (NextToUpdate() is not { } key)
+                    {
+                        // A row still being prepared (on demand, or by a cancelled pass) is updated once it lands.
+                        if (_staging.Count == 0) break;
+                        await Task.WhenAny(_staging.Values);
+                        continue;
+                    }
+                    _updated.Add(key);
                     var row = _rows.FirstOrDefault(candidate => candidate.Key == key);
                     if (row?.Plan is not { Issue: null } plan || row.Market is not { } stored)
                     {
                         _forceFetch.Remove(key);
+                        _urgent.Remove(key);
                         continue;
                     }
                     var forced = _forceFetch.Contains(key);
@@ -710,6 +774,7 @@
                         attempted.UnionWith(due);
                         var result = await Calculator.FetchAsync(due, ct);
                         foreach (var (pair, entry) in result.Stored) landed[pair] = entry;
+                        pass.Landed(result.Stored);
                         LogKeptPrices(result, stored);
                     }
                     var updated = pairs.Where(landed.ContainsKey).ToArray();
@@ -719,6 +784,7 @@
                         foreach (var pair in updated) market[pair] = landed[pair];
                         if (!await ApplyUpdateAsync(key, plan, market, company, scope, ct)) return;
                     }
+                    _urgent.Remove(key);
                     if (forced && _forceFetch.Remove(key) && !_disposed) StateHasChanged();
                 }
                 if (forcedPass && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
@@ -731,11 +797,96 @@
             if (ReferenceEquals(_priceJob, job))
             {
                 _priceJob = null;
+                _storedPass = null;
                 _forceFetch.Clear();
                 if (!_disposed) StateHasChanged();
             }
             job.Dispose();
         }
+    }
+    /// <summary>
+    /// Prepares one row and prices it from stored market data without holding _gate; the result
+    /// lands under _gate only while the company and scope match and the row still has no
+    /// figure priced this session. False when the company or scope changed.
+    /// </summary>
+    private Task<bool> StageAsync(RowKey key, Guid? company, TradeMarginMarketScope? scope, StoredPass pass,
+        CancellationToken ct)
+    {
+        if (_staging.TryGetValue(key, out var running)) return running;
+        if (_rows.FirstOrDefault(candidate => candidate.Key == key) is not { } row || !NeedsPricing(row)) return Task.FromResult(true);
+        var task = StageRowAsync(row, key, company, scope, pass, ct);
+        // Completion removes the entry, which can only happen after it is added here.
+        if (!task.IsCompleted) _staging[key] = task;
+        return task;
+    }
+    private async Task<bool> StageRowAsync(MarginRow row, RowKey key, Guid? company, TradeMarginMarketScope? scope,
+        StoredPass pass, CancellationToken ct)
+    {
+        try
+        {
+            var rate = Rate;
+            var sources = _profile?.MaterialSources ?? [];
+            TradeMarginCalculator.PreparedRow? plan = null;
+            Dictionary<(int itemId, string dataCenter), CachedMarketData>? market = null;
+            TradeMarginCost? cost = null;
+            Exception? failure = null;
+            try
+            {
+                plan = row.Plan != null && Unpriced(row) ? row.Plan : await Calculator.PrepareAsync(key.ItemId, scope, ct, row.Batch,
+                    includeRootMarket: key.Mode == TradeMarginMode.Source);
+                market = await pass.ReadAsync(Calculator, TradeMarginCalculator.Pairs(plan, scope), ct);
+                // A row without stored data for some material in some data center of the scope
+                // waits for the update rather than showing a figure priced from part of the scope.
+                if (TradeMarginCalculator.HasMarketData(plan, scope, market))
+                    cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, new TradeMarginPricing(rate, sources), ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested) { failure = ex; }
+            var name = failure != null && row.ItemName == "Item" ? await LookupNameAsync(key.ItemId, ct) : null;
+            await _gate.WaitAsync(ct);
+            try
+            {
+                if (_disposed || _profile?.Id != company || MarginScope != scope) return false;
+                if (_rows.FirstOrDefault(candidate => candidate.Key == key) is not { } current || !NeedsPricing(current)) return true;
+                if (failure != null)
+                {
+                    if (name != null && current.ItemName == "Item") current.ItemName = name;
+                    current.Plan = null;
+                    MarkPricingFailed(current, failure);
+                }
+                else
+                {
+                    current.Plan = plan;
+                    current.Market = market;
+                    if (cost != null) SetCost(current, Named(current, await ToCurrentPricingAsync(cost, rate, sources, current, ct)));
+                }
+                StateHasChanged();
+                return true;
+            }
+            finally { _gate.Release(); }
+        }
+        finally { _staging.Remove(key); }
+    }
+    /// <summary>
+    /// Prepares and prices one row from stored data at once, ahead of the background pass (a row
+    /// just added or expanded), and makes sure the background update fetches what it is due.
+    /// </summary>
+    private async Task StageNowAsync(RowKey key)
+    {
+        if (_disposed) return;
+        _urgent.Add(key);
+        _staged.Add(key);
+        try
+        {
+            await StageAsync(key, _profile?.Id, MarginScope, _storedPass ?? new StoredPass(), _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { return; }
+        // A pass cancelled for a company or scope change took the row with it; the new pass prices it.
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ReportError(ex); }
+        // A running pass updates the row in turn; otherwise a new pass starts.
+        _updated.Remove(key);
+        if (_priceJob == null) StartPriceUpdate();
+        if (!_disposed) StateHasChanged();
     }
     /// <summary>Reprices one row from updated market data; false when the company or scope changed.</summary>
     private async Task<bool> ApplyUpdateAsync(RowKey key, TradeMarginCalculator.PreparedRow plan,
@@ -745,7 +896,7 @@
         TradeMarginCost cost;
         var rate = Rate;
         var sources = _profile?.MaterialSources ?? [];
-        try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, Pricing, ct); }
+        try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, new TradeMarginPricing(rate, sources), ct); }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             Log.LogWarning(ex, "Margins could not price item {ItemId} ({Mode}) from updated market data; stored prices kept", key.ItemId, key.Mode);
@@ -757,20 +908,28 @@
             if (_disposed || _profile?.Id != company || MarginScope != scope) return false;
             var row = _rows.FirstOrDefault(candidate => candidate.Key == key);
             if (row == null) return true;
-            // Labor, material sources or the batch size may have changed while this row was priced.
-            while (cost.Basis != null && (rate != Rate || !sources.SequenceEqual(_profile?.MaterialSources ?? []) || cost.BatchSize != row.Batch))
-            {
-                rate = Rate;
-                sources = _profile?.MaterialSources ?? [];
-                cost = await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, ct);
-            }
             row.Plan = plan;
             row.Market = market;
-            SetCost(row, Named(row, cost));
+            SetCost(row, Named(row, await ToCurrentPricingAsync(cost, rate, sources, row, ct)));
             StateHasChanged();
             return true;
         }
         finally { _gate.Release(); }
+    }
+    /// <summary>
+    /// Runs under _gate. Labor, material sources or the batch size may have changed while a cost
+    /// was priced outside _gate: it is brought to the current ones from its evidence.
+    /// </summary>
+    private async Task<TradeMarginCost> ToCurrentPricingAsync(TradeMarginCost cost, decimal rate,
+        IReadOnlyList<TradeMaterialSource> sources, MarginRow row, CancellationToken ct)
+    {
+        while (cost.Basis != null && (rate != Rate || !sources.SequenceEqual(_profile?.MaterialSources ?? []) || cost.BatchSize != row.Batch))
+        {
+            rate = Rate;
+            sources = _profile?.MaterialSources ?? [];
+            cost = await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, ct);
+        }
+        return cost;
     }
     /// <summary>Names every pair Universalis did not answer, per data center, and what the row keeps.</summary>
     private void LogKeptPrices(MarketPairRefreshResult result, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
@@ -790,20 +949,35 @@
         row.Cost = cost;
         row.Restored = false;
         row.ItemName = cost.Name;
-        if (cost.Basis == null) row.Breakdown = null;
+        // An open row keeps its breakdown on screen until the new one is described; a closed
+        // row's is dropped, so it never reopens on figures it no longer matches.
+        if (cost.Basis == null || !_expanded.Contains(row.Key))
+        {
+            row.Breakdown = null;
+            row.BreakdownFor = null;
+        }
         if (!IsFailure(cost) && _profile != null && FiguresInputs(row, cost.BatchSize) is { } inputs)
             SavedFigures.Save(_profile.Id, row.Mode, row.ItemId, inputs, cost);
         _ = DescribeSafelyAsync(row);
     }
+    /// <summary>True when the row's breakdown was described for its current cost and pricing.</summary>
+    private bool HasCurrentBreakdown(MarginRow row) =>
+        row.Breakdown != null && row.BreakdownFor is { } basis && ReferenceEquals(basis.Cost, row.Cost) &&
+        basis.Rate == Rate && basis.Sources.SequenceEqual(_profile?.MaterialSources ?? []);
     /// <summary>Re-describes an expanded row from its current cost; a newer cost wins.</summary>
     private async Task DescribeSafelyAsync(MarginRow row)
     {
-        if (_disposed || !_expanded.Contains(row.Key) || row.Cost is not { Basis: not null } cost) return;
+        if (_disposed || !_expanded.Contains(row.Key) || row.Cost is not { Basis: not null } cost || HasCurrentBreakdown(row)) return;
+        var rate = Rate;
+        var sources = _profile?.MaterialSources ?? [];
         try
         {
-            var breakdown = await TradeMarginCalculator.DescribeAsync(cost, Pricing, _lifetime.Token);
-            if (_disposed || !ReferenceEquals(row.Cost, cost)) return;
-            row.Breakdown = breakdown;
+            var breakdown = await TradeMarginCalculator.DescribeAsync(cost, new TradeMarginPricing(rate, sources), _lifetime.Token);
+            // Rows are rebuilt on every sync: the breakdown lands on whichever row now shows this cost.
+            if (_disposed || _rows.FirstOrDefault(candidate => candidate.Key == row.Key) is not { } current ||
+                !ReferenceEquals(current.Cost, cost)) return;
+            current.Breakdown = breakdown;
+            current.BreakdownFor = (cost, rate, sources);
             StateHasChanged();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
@@ -824,59 +998,124 @@
         }
         if (!_disposed) StateHasChanged();
     }
+    /// <summary>A row opens once it has evidence to describe, or saved figures to price it from on demand.</summary>
+    private static bool Expandable(MarginRow row) => row.Cost is { Basis: not null } || row.Restored && row.Cost?.Issue == null;
+    // An open row waiting for its first figure stays open (and closable) instead of flickering shut.
+    private bool ShowsExpander(MarginRow row) => Expandable(row) || row.Cost == null && _expanded.Contains(row.Key);
+    private bool IsExpanded(MarginRow row) => _expanded.Contains(row.Key) && (row.Cost == null || Expandable(row));
+    /// <summary>
+    /// Opens at once. An unchanged breakdown is reused; otherwise the row shows a loading line
+    /// while it is described, or (saved figures only) prepared and priced ahead of the table.
+    /// </summary>
     private async Task ToggleExpandedAsync(MarginRow row)
     {
-        if (!_expanded.Remove(row.Key))
-        {
-            _expanded.Add(row.Key);
-            await DescribeSafelyAsync(row);
-        }
+        if (_expanded.Remove(row.Key) || _disposed) return;
+        _expanded.Add(row.Key);
+        if (HasCurrentBreakdown(row)) return;
+        row.Breakdown = null;
+        row.BreakdownFor = null;
+        StateHasChanged();
+        try { await MainThreadYield.Async(_lifetime.Token); }
+        catch (OperationCanceledException) { return; }
+        if (row.Cost is { Basis: not null }) await DescribeSafelyAsync(row);
+        // Pricing describes the open row as its cost lands.
+        else await StageNowAsync(row.Key);
+    }
+    private async Task<string?> LookupNameAsync(int itemId, CancellationToken ct)
+    {
+        try { return (await Garland.GetItemAsync(itemId, ct))?.Name; }
+        catch (Exception) when (!ct.IsCancellationRequested) { return null; /* Preserve the pricing error. */ }
     }
     private async Task ShowPricingFailureAsync(MarginRow row, Exception error, CancellationToken ct)
     {
-        if (row.ItemName == "Item")
-        {
-            try { row.ItemName = (await Garland.GetItemAsync(row.ItemId, ct))?.Name ?? "Item"; }
-            catch (Exception) when (!ct.IsCancellationRequested) { /* Preserve the pricing error. */ }
-        }
+        if (row.ItemName == "Item") row.ItemName = await LookupNameAsync(row.ItemId, ct) ?? "Item";
         ct.ThrowIfCancellationRequested();
+        MarkPricingFailed(row, error);
+    }
+    private void MarkPricingFailed(MarginRow row, Exception error)
+    {
         row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
         row.Restored = false;
         row.Breakdown = null;
+        row.BreakdownFor = null;
         ReportError(error);
     }
     private async Task RefreshAsync()
     {
         if (Refreshing) return;
         await _gate.WaitAsync();
-        try { if (!_disposed) await CalculateAsync(true); }
+        try { QueuePricing(true); }
         catch (Exception ex) { ReportError(ex); }
-        finally { _gate.Release(); }
+        finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
     }
-    private async Task SearchAsync(ChangeEventArgs e)
+    /// <summary>
+    /// Shows matches for the typed name. The current list stays up while the next query loads;
+    /// a query seen this session answers at once, others after a short pause, and a newer query
+    /// cancels the pending one, request included.
+    /// </summary>
+    private Task SearchAsync(ChangeEventArgs e)
     {
         _search = e.Value?.ToString() ?? "";
-        var generation = ++_searchGeneration;
-        _matches = [];
-        if (_search.Trim().Length < 2) return;
+        var query = _search.Trim();
+        CancelSearch();
+        if (query.Length < 2) { _matches = []; _matchesQuery = null; return Task.CompletedTask; }
+        if (_searchCache.TryGetValue(query, out var cached)) { ShowMatches(query, cached); return Task.CompletedTask; }
+        var job = _searchJob = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        return _searchTask = RunSearchAsync(query, job);
+    }
+    private async Task RunSearchAsync(string query, CancellationTokenSource job)
+    {
         try
         {
-            var matches = await Garland.SearchAsync(_search);
-            if (!_disposed && generation == _searchGeneration)
-            {
-                _activeMatch = 0;
-                _matches = matches.Where(item => item.Type == "item" && _rows.All(row => row.Key != new RowKey(item.Id, _mode))).Take(6).ToList();
-            }
+            await Task.Delay(SearchDebounce, job.Token);
+            var results = await Garland.SearchAsync(query, job.Token);
+            if (_disposed || job.IsCancellationRequested) return;
+            if (_searchCache.Count >= 64) _searchCache.Clear();
+            _searchCache[query] = results;
+            ShowMatches(query, results);
         }
-        catch (Exception ex) { if (generation == _searchGeneration) ReportError(ex); }
+        catch (OperationCanceledException) when (job.IsCancellationRequested) { }
+        catch (Exception ex) { if (!job.IsCancellationRequested) ReportError(ex); }
+        finally
+        {
+            if (ReferenceEquals(_searchJob, job)) _searchJob = null;
+            job.Dispose();
+        }
+    }
+    /// <summary>Up to six items not yet tracked in this mode; craftable items first, in Garland's order.</summary>
+    private void ShowMatches(string query, IEnumerable<GarlandSearchResult> results)
+    {
+        _activeMatch = 0;
+        _matchesQuery = query;
+        _matches = results.Where(item => item.Type == "item" && _rows.All(row => row.Key != new RowKey(item.Id, _mode)))
+            .OrderBy(item => item.Object.HasCrafts ? 0 : 1).Take(6).ToList();
+    }
+    private void CancelSearch()
+    {
+        _searchJob?.Cancel();
+        _searchJob = null;
+    }
+    private void CloseSearch()
+    {
+        CancelSearch();
+        _search = "";
+        _matches = [];
+        _matchesQuery = null;
     }
     private async Task SearchKeyAsync(KeyboardEventArgs e)
     {
-        if (e.Key == "Escape") { ++_searchGeneration; _matches = []; }
+        if (e.Key == "Escape") { CancelSearch(); _matches = []; _matchesQuery = null; return; }
+        if (e.Key == "Enter")
+        {
+            // Enter picks only from results produced for the current input, never a stale or failed query.
+            if (!_searchTask.IsCompleted) await _searchTask;
+            if (_matches.Count == 0 || !string.Equals(_matchesQuery, _search.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+            await AddAsync(_matches[_activeMatch]);
+            return;
+        }
         if (_matches.Count == 0) return;
         if (e.Key == "ArrowDown") _activeMatch = (_activeMatch + 1) % _matches.Count;
         if (e.Key == "ArrowUp") _activeMatch = (_activeMatch + _matches.Count - 1) % _matches.Count;
-        if (e.Key == "Enter") await AddAsync(_matches[_activeMatch]);
     }
     private Task SaveItemsAsync(Func<IReadOnlyList<TradeMarginItem>, IReadOnlyList<TradeMarginItem>> edit) =>
         SaveProfileAsync(profile => profile.MarginItems = edit(profile.MarginItems ?? []), marginItems: true);
@@ -912,7 +1151,7 @@
                 _profile = current.Profile;
                 if (scopeChanged) _lastCheckedUtc = null;
                 RebuildRows(_rows.ToDictionary(row => row.Key), scopeChanged);
-                await CalculateAsync(false);
+                QueuePricing(false);
                 if (pricingChanged) await RepriceAllAsync();
                 return;
             }
@@ -1021,15 +1260,16 @@
     {
         if (_mode == mode) return;
         _mode = mode;
-        // Search results were filtered for the other mode's rows.
-        ++_searchGeneration; _search = ""; _matches = [];
+        // Search results were filtered for the other mode's rows. Background pricing picks the
+        // newly shown mode's rows next.
+        CloseSearch();
     }
     private async Task AddAsync(GarlandSearchResult item)
     {
-        if (await AddItemAsync(item.Id, item.Object.Name, _mode, batch: 1))
-        {
-            ++_searchGeneration; _search = ""; _matches = [];
-        }
+        // The flyout closes at once; the row appears as soon as it is saved.
+        CloseSearch();
+        StateHasChanged();
+        await AddItemAsync(item.Id, item.Object.Name, _mode, batch: 1);
     }
     /// <summary>Tracks a precraft in Source, batched by the stack (999 when Garland does not say), staying in Sell.</summary>
     private async Task TrackInSourceAsync(TradeMarginLine line)
@@ -1046,6 +1286,7 @@
     private async Task<bool> AddItemAsync(int itemId, string name, TradeMarginMode mode, int batch)
     {
         var key = new RowKey(itemId, mode);
+        var added = false;
         await _gate.WaitAsync();
         try
         {
@@ -1057,11 +1298,14 @@
                 if (items.Count >= 500) throw new InvalidOperationException("Margins supports at most 500 items.");
                 return items.Append(new TradeMarginItem(itemId, null, Math.Clamp(batch, 1, TradeMarginItem.MaxBatchSize), mode)).ToArray();
             });
-            if (_rows.FirstOrDefault(row => row.Key == key) is { } added) added.ItemName = name;
-            return true;
+            if (_rows.FirstOrDefault(row => row.Key == key) is { } row) row.ItemName = name;
+            added = true;
         }
         catch (Exception ex) { ReportError(ex); return false; }
         finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
+        // Priced from stored data right away, not after the rows the background pass is fetching.
+        if (added) _ = StageNowAsync(key);
+        return added;
     }
     /// <summary>What a price input shows: the typed draft, the stored price, or (Source) the live market price.</summary>
     private string? SaleValue(MarginRow row) => _editingSale == row.Key ? _saleDraft
@@ -1171,7 +1415,7 @@
             row.Restored = false;
             row.Breakdown = null;
             row.Plan = null;
-            await CalculateAsync(false);
+            QueuePricing(false);
             return;
         }
         try { SetCost(row, await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, _lifetime.Token)); }
