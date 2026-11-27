@@ -29,15 +29,45 @@ public sealed record TradeMarginCost(
     /// <summary>The sold item's own cheapest NPC vendor gil price per unit; null when no vendor sells it.</summary>
     public decimal? RootVendorPrice { get; init; }
 
+    /// <summary>
+    /// When neither the market nor an NPC vendor can supply the whole run, the buy alternative:
+    /// listings cheaper than commissioning bought, the rest commissioned. Null otherwise.
+    /// </summary>
+    public TradeMarginShortfallBuy? ShortfallBuy { get; init; }
+
     public bool Equals(TradeMarginCost? other) =>
         other is not null && Name == other.Name && IconId == other.IconId && Materials == other.Materials &&
         Synths == other.Synths && OldestPriceUtc == other.OldestPriceUtc && Missing.SequenceEqual(other.Missing) &&
         Issue == other.Issue && Units == other.Units && UnknownPriceAge == other.UnknownPriceAge &&
-        Equals(MarketBuy, other.MarketBuy) && RootVendorPrice == other.RootVendorPrice;
+        Equals(MarketBuy, other.MarketBuy) && RootVendorPrice == other.RootVendorPrice &&
+        Equals(ShortfallBuy, other.ShortfallBuy);
 
     public override int GetHashCode() =>
         HashCode.Combine(HashCode.Combine(Name, IconId, Materials, Synths, OldestPriceUtc, Issue, Units, UnknownPriceAge),
-            MarketBuy, RootVendorPrice);
+            MarketBuy, RootVendorPrice, ShortfallBuy);
+}
+
+/// <summary>
+/// Buying a run the market cannot fully supply: whole listings priced under the commission cost
+/// per unit, cheapest first, from the one world where that leaves the run cheapest; every other
+/// unit is commissioned. Like the market route, the market part costs the average unit price of
+/// the listings bought. The commissioned part is priced live from the row's commission cost, so
+/// it has no age, and the shortfall adds nothing to savings.
+/// </summary>
+public sealed record TradeMarginShortfallBuy(
+    int MarketUnits, decimal MarketCost, int CommissionedUnits,
+    DateTime? ObservedAtUtc = null, string? WorldName = null, string? DataCenter = null)
+{
+    public int Units => MarketUnits + CommissionedUnits;
+
+    /// <summary>Per unit, with the commissioned units at <paramref name="commissionUnitCost"/>.</summary>
+    public decimal UnitPrice(decimal commissionUnitCost) => MarketUnits == 0 || Units <= 0
+        ? commissionUnitCost
+        : (MarketCost + CommissionedUnits * commissionUnitCost) / Units;
+
+    /// <summary>The one world the market part was bought on, as <c>World (Data center)</c>; null when nothing is bought.</summary>
+    public string? BuyAt => MarketUnits == 0 || string.IsNullOrWhiteSpace(WorldName) ? null
+        : string.IsNullOrWhiteSpace(DataCenter) ? WorldName : $"{WorldName} ({DataCenter})";
 }
 
 /// <summary>Company inputs to a Margins price: labor rate and explicit material sources.</summary>
@@ -456,14 +486,93 @@ public sealed class TradeMarginBasis
                 oldest = oldest == null || time < oldest ? time : oldest;
             }
         }
+        var marketBuy = _includeRootMarket ? await MarketOptionAsync(RootId, _units, ct) : null;
+        var rootVendor = _vendors.TryGetValue(RootId, out var vendor) && vendor > 0 ? vendor : (decimal?)null;
+        // A vendor's unlimited stock always covers the run, so only a vendorless short market
+        // leaves units that must be commissioned.
+        var shortfall = marketBuy is { IsShortOfListings: true } && rootVendor == null &&
+            Total(solved.Result, pricing.LaborGilPerSynth) is { } commission
+            ? await ShortfallBuyAsync(commission / _units, ct)
+            : null;
         return new TradeMarginCost(_tree.Root.Name, _tree.Root.IconId, solved.Result.Materials, solved.Result.Synths,
             unknownAge ? null : oldest, solved.Result.Missing, Units: _units, UnknownPriceAge: unknownAge)
         {
             Basis = this,
             BatchSize = BatchSize,
-            MarketBuy = _includeRootMarket ? await MarketOptionAsync(RootId, _units, ct) : null,
-            RootVendorPrice = _vendors.TryGetValue(RootId, out var rootVendor) && rootVendor > 0 ? rootVendor : null
+            MarketBuy = marketBuy,
+            RootVendorPrice = rootVendor,
+            ShortfallBuy = shortfall
         };
+    }
+
+    /// <summary>The run's buy alternative when the market is short; see <see cref="TradeMarginShortfallBuy"/>.</summary>
+    private async Task<TradeMarginShortfallBuy> ShortfallBuyAsync(decimal commissionUnitCost, CancellationToken ct)
+    {
+        var quote = await QuoteAsync(RootId, _units, ct);
+        if (quote.Analysis is not { } analysis || Fill(analysis, _units, commissionUnitCost) is not { } fill)
+        {
+            return new(0, 0, _units);
+        }
+
+        return new(fill.Units, fill.Cost, _units - fill.Units,
+            Uploaded(_evidence.GetEntriesForItem(RootId), fill.WorldName, fill.DataCenter), fill.WorldName, fill.DataCenter);
+    }
+
+    /// <summary>
+    /// The cheapest way to buy up to <paramref name="quantity"/> from one world's whole listings
+    /// priced strictly under <paramref name="cap"/>, with every unit not bought costing
+    /// <paramref name="cap"/>. Null when no world lists a unit under the cap. One buy world, as
+    /// the market route chooses; the walk is the analysis's cost-to-cover walk with a ceiling.
+    /// </summary>
+    private static (int Units, decimal Cost, string WorldName, string DataCenter)? Fill(
+        MarketItemAnalysis analysis, int quantity, decimal cap)
+    {
+        (int Units, decimal Cost, string WorldName, string DataCenter)? best = null;
+        decimal? bestTotal = null;
+        foreach (var world in analysis.Worlds
+            .OrderBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase))
+        {
+            long quoted = 0;
+            decimal gil = 0;
+            // Listings are price-ordered; whole listings are bought, as the market route buys them.
+            foreach (var listing in world.Listings)
+            {
+                if (quoted >= quantity || listing.PricePerUnit >= cap)
+                {
+                    break;
+                }
+
+                if (listing.Quantity > 0 && listing.PricePerUnit > 0)
+                {
+                    quoted += listing.Quantity;
+                    gil += listing.Quantity * (decimal)listing.PricePerUnit;
+                }
+            }
+            if (quoted == 0)
+            {
+                continue;
+            }
+
+            var units = (int)Math.Min(quoted, quantity);
+            var cost = gil / quoted * units;
+            var total = cost + (quantity - units) * cap;
+            if (bestTotal == null || total < bestTotal)
+            {
+                (best, bestTotal) = ((units, cost, world.WorldName, world.DataCenter), total);
+            }
+        }
+        return best;
+    }
+
+    /// <summary>When one world's listings were uploaded; null when that is not known.</summary>
+    private static DateTime? Uploaded(IEnumerable<CachedMarketData> entries, string worldName, string dataCenter)
+    {
+        var stamp = entries.Where(entry => entry.DataCenter == dataCenter)
+            .SelectMany(entry => entry.Worlds.Where(world => world.WorldName == worldName)
+                .Select(world => world.LastUploadTimeUnixMilliseconds ?? entry.LastUploadTimeUnixMilliseconds))
+            .FirstOrDefault(stamp => stamp > 0);
+        return stamp is { } value ? DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime : null;
     }
 
     /// <summary>The market route for <paramref name="qty"/> units of one item, as a line option shows it.</summary>
@@ -691,8 +800,9 @@ public sealed class TradeMarginBasis
         }
     }
 
+    /// <param name="Analysis">The ladder analysis, kept for the sold item only; a short market fills from it.</param>
     private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge,
-        string? World = null, string? DataCenter = null);
+        string? World = null, string? DataCenter = null, MarketItemAnalysis? Analysis = null);
 
     /// <summary>
     /// The market route for <paramref name="quantity"/> units. Listings that cannot cover the
@@ -714,6 +824,7 @@ public sealed class TradeMarginBasis
         DateTime? oldest = null;
         var unknownAge = false;
         string? buyWorld = null, buyDataCenter = null;
+        MarketItemAnalysis? kept = null;
         if (listings.Length > 0)
         {
             var analysis = (await new MarketPriceLadderAnalysisService().AnalyzeAsync(new MarketAnalysisRequest
@@ -721,6 +832,7 @@ public sealed class TradeMarginBasis
                 Evidence = _evidence,
                 Items = [new MaterialAggregate { ItemId = id, Name = _tree.Data[id].Name, TotalQuantity = quantity }]
             }, ct: ct)).Single(entry => entry.ItemId == id);
+            kept = id == RootId ? analysis : null;
             // One analysis is tens of milliseconds of listing work; let the page render between them.
             await MainThreadYield.Async(ct);
             var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
@@ -761,7 +873,7 @@ public sealed class TradeMarginBasis
             }
         }
 
-        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter);
+        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter, kept);
         _quotes[(id, quantity)] = quote;
         return quote;
     }

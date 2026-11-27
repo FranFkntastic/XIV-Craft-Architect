@@ -179,11 +179,19 @@
     /// </summary>
     private static bool VendorWins(MarginRow row) =>
         row.Cost?.RootVendorPrice is > 0 and var vendor && !(MarketBuyUnit(row) < vendor);
-    /// <summary>Buying one unit live: the cheaper of the NPC vendor and the full-run market price.</summary>
-    private static decimal? LiveBuy(MarginRow row) => VendorWins(row) ? row.Cost!.RootVendorPrice : MarketBuyUnit(row);
+    /// <summary>
+    /// Buying one unit live: the cheaper of the NPC vendor and the full-run market price. When
+    /// neither can supply the run, the listings cheaper than commissioning plus the rest
+    /// commissioned at this row's commission cost.
+    /// </summary>
+    private decimal? LiveBuy(MarginRow row) => VendorWins(row) ? row.Cost!.RootVendorPrice
+        : MarketBuyUnit(row) ?? (row.Cost?.ShortfallBuy is { } shortfall && Total(row) is { } commission ? shortfall.UnitPrice(commission) : null);
+    private static string? ShortfallSplit(MarginRow row) => row.Cost?.ShortfallBuy is { } shortfall
+        ? (shortfall.BuyAt is { } buyAt ? $"{shortfall.MarketUnits:N0} market at {buyAt} · " : "") + $"{shortfall.CommissionedUnits:N0} commissioned"
+        : null;
     /// <summary>Per unit: the sale price (Sell) or the buy price, manual or live (Source).</summary>
-    private static decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
-    private static decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.SavedSale ?? LiveBuy(row) : row.SavedSale;
+    private decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
+    private decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.SavedSale ?? LiveBuy(row) : row.SavedSale;
     /// <summary>Sell: margin (sale − cost). Source: savings (buy − commission cost); positive means commissioning is cheaper.</summary>
     private decimal? Delta(MarginRow row) => Price(row) is { } price && Total(row) is { } total ? price - total : null;
     private decimal? Percent(MarginRow row) => Price(row) is > 0 and var price && Delta(row) is { } delta ? delta / price * 100 : null;
@@ -222,7 +230,7 @@
     [
         new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (row.Cost?.Basis != null) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.Key) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
         _mode == TradeMarginMode.Source
-            ? new() { Id = Column.Sale, Header = "Buy price", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live buy price" aria-label="@($"Reset {row.Name} to live buy price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && VendorWins(row)) { <span class="sub">Vendor</span> } else if (row.Sale == null && row.Cost?.MarketBuy is { IsShortOfListings: true } thin) { <span class="sub short-listed">@ShortOfListings(thin)</span> } else if (row.Sale == null && row.Cost?.MarketBuy?.BuyAt is { } buyAt) { <span class="sub" title="@buyAt">@buyAt</span> }</div> }
+            ? new() { Id = Column.Sale, Header = "Buy price", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live buy price" aria-label="@($"Reset {row.Name} to live buy price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && VendorWins(row)) { <span class="sub">Vendor</span> } else if (row.Sale == null && row.Cost?.MarketBuy is { IsShortOfListings: true } thin) { <span class="sub short-listed" title="@ShortfallSplit(row)">@ShortOfListings(thin)</span> } else if (row.Sale == null && row.Cost?.MarketBuy?.BuyAt is { } buyAt) { <span class="sub" title="@buyAt">@buyAt</span> }</div> }
             : new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
         new() { Id = Column.Batch, Header = "Batch", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="batch-input" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="@(row.Name + " batch size")" value="@(_editingBatch == row.Key ? _batchDraft : row.Batch.ToString(CultureInfo.InvariantCulture))" @onfocus="() => BeginBatch(row)" @oninput="e => PreviewBatch(row, e)" @onblur="() => CommitBatchAsync(row.Key)" @onkeydown="e => BatchKeyAsync(e, row.Key)" /> },
         new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
@@ -434,10 +442,11 @@
 
     /// <summary>
     /// A Source row buying at the live market also prices from the item's own listings; a
-    /// vendor buy has no age.
+    /// vendor buy and commissioned units have no age.
     /// </summary>
     private static bool AgesWithMarketBuy(MarginRow row) =>
-        row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.MarketBuy != null && !VendorWins(row);
+        row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.MarketBuy != null && !VendorWins(row) &&
+        row.Cost.ShortfallBuy is not { MarketUnits: 0 };
     /// <summary>The oldest price a row's figures rest on: its materials, plus its live market buy.</summary>
     private static (DateTime? Oldest, bool Unknown) PriceAge(MarginRow row)
     {
@@ -446,7 +455,7 @@
         var oldest = cost.OldestPriceUtc;
         if (AgesWithMarketBuy(row))
         {
-            if (cost.MarketBuy!.ObservedAtUtc is { } observed) oldest = oldest == null || observed < oldest ? observed : oldest;
+            if ((cost.ShortfallBuy is { } shortfall ? shortfall.ObservedAtUtc : cost.MarketBuy!.ObservedAtUtc) is { } observed) oldest = oldest == null || observed < oldest ? observed : oldest;
             else unknown = true;
         }
         return (unknown ? null : oldest, unknown);
