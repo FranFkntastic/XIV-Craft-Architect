@@ -64,6 +64,7 @@
 .margins-table-wrap ::deep td.web-data-table-expanded-cell { position:static; padding:0; white-space:normal; overflow:visible; background:rgba(0,0,0,.18); }
 .margins-table-wrap ::deep tr:hover td.web-data-table-expanded-cell { background:rgba(0,0,0,.18); }
 .margins-table-wrap ::deep .margin-detail { padding:6px 12px 12px 44px; }
+.margins-table-wrap ::deep .margin-detail-loading { padding:5px 10px; color:#7d848c; font-size:12px; }
 .margins-table-wrap ::deep .margin-materials { width:100%; max-width:980px; table-layout:fixed; border-collapse:collapse; }
 .margins-table-wrap ::deep .margin-materials th,.margins-table-wrap ::deep .margin-materials td { position:static; padding:5px 10px; background:transparent; overflow:visible; }
 .margins-table-wrap ::deep .margin-materials th { font-weight:600; font-size:11px; color:#9aa1a9; }

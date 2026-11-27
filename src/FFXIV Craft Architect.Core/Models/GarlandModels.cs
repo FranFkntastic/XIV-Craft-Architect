@@ -58,19 +58,20 @@ public class GarlandSearchObject
     [JsonPropertyName("n")]
     public string Name { get; set; } = string.Empty;
 
+    // Garland search objects carry the item ID in "i" and the icon ID in "c".
     // Icon ID can be int, string, or missing
-    [JsonPropertyName("i")]
+    [JsonPropertyName("c")]
     public object? IconIdRaw { get; set; }
 
     [JsonIgnore]
     public int IconId => ConvertToInt(IconIdRaw);
 
-    // ClassJob can be int, string, or missing
-    [JsonPropertyName("c")]
-    public object? ClassJobRaw { get; set; }
+    // Recipes that craft the item (job recipes and company crafts); missing when nothing crafts it.
+    [JsonPropertyName("f")]
+    public JsonElement? CraftsRaw { get; set; }
 
     [JsonIgnore]
-    public int? ClassJob => ConvertToNullableInt(ClassJobRaw);
+    public bool HasCrafts => CraftsRaw is { ValueKind: JsonValueKind.Array } crafts && crafts.GetArrayLength() > 0;
 
     // Level can be int, string, or missing
     [JsonPropertyName("l")]
