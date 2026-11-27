@@ -105,12 +105,17 @@ public static class MarketCoverageBuilder
     /// combinatorial, so two heuristics run and the cheaper wins: forward selection, which adds
     /// the world that lowers that total most until no world helps or the limit is reached, and
     /// the cheapest-listings-first walk over every world that <see cref="BuildBoundedSplit"/> uses.
-    /// With one world allowed, forward selection is exact. Null when no listing is below the ceiling.
+    /// With one world allowed, forward selection is exact. Each world set either heuristic reaches
+    /// is a candidate, and <paramref name="travelTolerance"/> chooses among them as it chooses
+    /// routes: the cheapest total sets the bar, and the set with the fewest worlds within the
+    /// tolerance's premium of it wins (position 11, no premium, is simply the cheapest; position 0
+    /// is the fewest worlds). Null when no listing is below the ceiling.
     /// </summary>
     public static MarketCoverageFill? BuildCappedFill(
         DetailedShoppingPlan plan,
         int maxWorlds,
         decimal priceCeiling,
+        int travelTolerance,
         MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -149,8 +154,9 @@ public static class MarketCoverageBuilder
             .ToList();
         var chosen = new List<MarketCoverageListing>();
         var used = new bool[worlds.Count];
-        var best = new List<MarketCoverageListing>();
         var bestTotal = quantity * priceCeiling;
+        // Every set that lowers the total, in the order reached; the walk comes last.
+        var candidates = new List<(List<MarketCoverageListing> Selected, decimal Total)>();
         for (var step = 0; step < maxWorlds; step++)
         {
             (int World, List<MarketCoverageListing> Merged, List<MarketCoverageListing> Selected, decimal Total)? next = null;
@@ -177,20 +183,35 @@ public static class MarketCoverageBuilder
 
             used[add.World] = true;
             chosen = add.Merged;
-            best = add.Selected;
             bestTotal = add.Total;
+            candidates.Add((add.Selected, add.Total));
         }
 
         var walked = Walk(ordered, quantity, maxWorlds, out _);
-        if (Total(walked) < bestTotal)
+        var walkedTotal = Total(walked);
+        if (walked.Count > 0 && walkedTotal < quantity * priceCeiling)
         {
-            best = walked;
+            candidates.Add((walked, walkedTotal));
         }
 
-        if (best.Count == 0)
+        if (candidates.Count == 0)
         {
             return null;
         }
+
+        // Forward totals only fall, so with no premium allowed the order below keeps the last
+        // forward set unless the walk is strictly cheaper.
+        var premiumRate = MarketRouteScoring.GetMaximumPremiumRate(travelTolerance);
+        var cheapest = candidates.Min(candidate => candidate.Total);
+        var best = candidates
+            .Select((candidate, index) => (candidate.Selected, candidate.Total, Index: index,
+                Worlds: candidate.Selected.Select(listing => (listing.DataCenter, listing.WorldName)).Distinct().Count()))
+            .Where(candidate => MarketRouteScoring.IsWithinPremium(candidate.Total, cheapest, premiumRate))
+            .OrderBy(candidate => premiumRate == 0m ? 0 : candidate.Worlds)
+            .ThenBy(candidate => candidate.Total)
+            .ThenBy(candidate => candidate.Index)
+            .First()
+            .Selected;
 
         var coverageWorlds = ToWorlds(best);
         return new MarketCoverageFill(

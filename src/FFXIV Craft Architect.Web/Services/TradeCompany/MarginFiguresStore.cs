@@ -22,7 +22,9 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     // carry the material pricing policy; v3 records are dropped on read.
     // v5: price age is gil-weighted (known gil, weighted time, unknown gil) and each buy world
     // carries its cost; v4 records are dropped on read.
-    private const int RecordVersion = 5;
+    // v6: the route key carries the company travel tolerance and over-limit routes grow the
+    // world cap one world at a time; v5 records are dropped on read.
+    private const int RecordVersion = 6;
     private readonly Dictionary<string, string> _pending = [];
     private readonly Dictionary<string, string> _written = [];
     private bool _flushing;

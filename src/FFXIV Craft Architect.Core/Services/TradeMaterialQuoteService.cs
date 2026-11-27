@@ -84,36 +84,11 @@ public sealed class TradeMaterialQuoteService
 
         var input = PrepareOptimizationInput(plans, purchases, sources, policy, now);
         var routePolicy = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
-        var optimization = await shopping.OptimizeProcurementRouteWithDecisionAsync(
-            input, new MarketAnalysisConfig
-            {
-                MaxWorldsPerItem = routePolicy.MaximumWorldStops,
-                MaxRouteWorldStops = routePolicy.MaximumWorldStops,
-                EnableSplitWorld = routePolicy.AllowSplitPurchases,
-                TravelTolerance = 11
-            }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
-            executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
-        var result = Build(optimization, purchases, policy, now);
-        if (!result.IsComplete || result.Quote!.WorldStops > routePolicy.MaximumWorldStops)
+        var limit = routePolicy.MaximumWorldStops;
+        var result = Build(await SearchAsync(limit), purchases, policy, now);
+        if (!result.IsComplete || result.Quote!.WorldStops > limit)
         {
-            // Each route search is a long synchronous pass; let an interactive host render between them.
-            await MainThreadYield.Async(ct);
-            // The stop limit is advisory: when no capped route fits it, search again without the
-            // per-item and route caps so Build sees the purchases those caps excluded and can
-            // return the best route with a warning. Genuine shortfalls and unsupported sources
-            // still fail on this uncapped pass; a capped over-limit quote is kept if it does.
-            var uncapped = await shopping.OptimizeProcurementRouteWithDecisionAsync(
-                input, new MarketAnalysisConfig
-                {
-                    EnableSplitWorld = routePolicy.AllowSplitPurchases,
-                    TravelTolerance = 11
-                }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
-                executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
-            var uncappedResult = Build(uncapped, purchases, policy, now);
-            if (uncappedResult.IsComplete || !result.IsComplete)
-            {
-                result = uncappedResult;
-            }
+            result = await PriceOverLimitAsync(result);
         }
 
         return result.Quote is { } quote
@@ -126,7 +101,67 @@ public sealed class TradeMaterialQuoteService
                 RoutePlans = result.RoutePlans
             }
             : result;
+
+        // One route search capped at `cap` worlds per material and per route (null: uncapped).
+        async Task<ProcurementRouteOptimizationResult> SearchAsync(int? cap)
+        {
+            // Each route search is a long synchronous pass; let an interactive host render between them.
+            await MainThreadYield.Async(ct);
+            return await shopping.OptimizeProcurementRouteWithDecisionAsync(
+                input, new MarketAnalysisConfig
+                {
+                    MaxWorldsPerItem = cap,
+                    MaxRouteWorldStops = cap,
+                    EnableSplitWorld = routePolicy.AllowSplitPurchases,
+                    TravelTolerance = routePolicy.TravelTolerance
+                }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
+                executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
+        }
+
+        // The stop limit is advisory: when no route fits it, the cap grows one world at a time
+        // until a route fits, so a stricter limit never prices below a looser one. The uncapped
+        // search runs first. When it finds no complete route, no wider cap can: genuine
+        // shortfalls and unsupported sources fail there, and a capped over-limit quote is kept
+        // if one exists. Otherwise its fewest-stop complete route bounds the growth, and a cap
+        // reaching every listed world is the uncapped search itself, so it is not run again.
+        async Task<TradeMaterialQuoteResult> PriceOverLimitAsync(TradeMaterialQuoteResult capped)
+        {
+            var uncappedSearch = await SearchAsync(null);
+            var uncapped = Build(uncappedSearch, purchases, policy, now);
+            if (!uncapped.IsComplete)
+            {
+                return capped.IsComplete ? capped : uncapped;
+            }
+
+            var fewestStops = uncappedSearch.Decision!.ToleranceSelections
+                .Concat(uncappedSearch.Decision.BoundedRouteSelections)
+                .Where(IsCompleteSelection)
+                .Min(selection => selection.WorldStops);
+            var lastDistinctCap = Math.Min(fewestStops, CountMarketWorlds(input) - 1);
+            for (var cap = limit + 1; cap <= lastDistinctCap; cap++)
+            {
+                var attempt = BuildCore(await SearchAsync(cap), purchases, policy, now, selectionCap: cap);
+                if (attempt.IsComplete && attempt.Quote!.WorldStops <= cap)
+                {
+                    return attempt;
+                }
+            }
+
+            return uncapped;
+        }
     }
+
+    /// <summary>The distinct market worlds with listings across every plan: a cap this wide caps nothing.</summary>
+    private static int CountMarketWorlds(IReadOnlyList<DetailedShoppingPlan> plans) =>
+        plans.SelectMany(plan => plan.WorldOptions)
+            .Where(world => !string.Equals(
+                world.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(world => world.Listings.Any(listing => listing.Quantity > 0))
+            .Select(world => (world.DataCenter, world.WorldName))
+            .Distinct()
+            .Count();
 
     /// <summary>
     /// The company-value line for a provided material (all of its per-source demand for one
@@ -170,7 +205,7 @@ public sealed class TradeMaterialQuoteService
         var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
         return $"No complete executable route fits company policy and current listing evidence " +
                $"({policy.MaximumWorldStops} worlds, " +
-               $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium).";
+               $"travel preference: {MarketRouteScoring.GetToleranceLabel(policy.TravelTolerance)}).";
     }
 
     public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
@@ -218,7 +253,19 @@ public sealed class TradeMaterialQuoteService
         ProcurementRouteOptimizationResult optimization,
         IReadOnlyList<MaterialAggregate> demand,
         TradeMaterialPricingPolicy? requestedPolicy,
-        DateTime quotedAtUtc)
+        DateTime quotedAtUtc) =>
+        BuildCore(optimization, demand, requestedPolicy, quotedAtUtc, selectionCap: null);
+
+    /// <summary>
+    /// Chooses the quoted route. Routes within <paramref name="selectionCap"/> stops (the
+    /// company limit when null) win; the over-limit warning always names the company limit.
+    /// </summary>
+    private static TradeMaterialQuoteResult BuildCore(
+        ProcurementRouteOptimizationResult optimization,
+        IReadOnlyList<MaterialAggregate> demand,
+        TradeMaterialPricingPolicy? requestedPolicy,
+        DateTime quotedAtUtc,
+        int? selectionCap)
     {
         ArgumentNullException.ThrowIfNull(optimization);
         ArgumentNullException.ThrowIfNull(demand);
@@ -244,24 +291,25 @@ public sealed class TradeMaterialQuoteService
 
         // The stop limit is advisory. Routes within it win; when none exists, the best complete
         // route is quoted anyway and carries a warning naming the stops it actually needs.
+        var cap = selectionCap ?? policy.MaximumWorldStops;
         var bounded = complete
-            .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
+            .Where(candidate => candidate.WorldStops <= cap)
             .ToArray();
-        var overLimit = bounded.Length == 0;
-        var eligible = overLimit ? complete : bounded;
+        var eligible = bounded.Length == 0 ? complete : bounded;
 
-        // Premium is measured against the cheapest route overall. When that route needs more
-        // stops than policy allows and no eligible route lands inside its premium window, anchor
-        // the window to the cheapest eligible route instead of rejecting every eligible route.
-        var premiumFactor = 1m + policy.MaximumConsolidationPremiumPercent / 100m;
-        var maximumCost = decision.CheapestGilCost * premiumFactor;
-        if (!eligible.Any(candidate => candidate.GilCost <= maximumCost))
+        // The travel tolerance's premium is measured against the cheapest route overall. When
+        // that route needs more stops than the cap allows and no eligible route lands inside its
+        // premium window, anchor the window to the cheapest eligible route instead of rejecting
+        // every eligible route.
+        var premiumRate = MarketRouteScoring.GetMaximumPremiumRate(policy.TravelTolerance);
+        var cheapest = decision.CheapestGilCost;
+        if (!eligible.Any(candidate => MarketRouteScoring.IsWithinPremium(candidate.GilCost, cheapest, premiumRate)))
         {
-            maximumCost = eligible.Min(candidate => candidate.GilCost) * premiumFactor;
+            cheapest = eligible.Min(candidate => candidate.GilCost);
         }
 
         var selections = eligible
-            .Where(candidate => candidate.GilCost <= maximumCost)
+            .Where(candidate => MarketRouteScoring.IsWithinPremium(candidate.GilCost, cheapest, premiumRate))
             .OrderBy(candidate => candidate.WorldStops)
             .ThenBy(candidate => candidate.EvidencePenalty)
             .ThenBy(candidate => candidate.GilCost)
@@ -282,7 +330,7 @@ public sealed class TradeMaterialQuoteService
                 quotedAtUtc);
             if (result.IsComplete)
             {
-                return overLimit && result.Quote is { } quote
+                return result.Quote is { } quote && quote.WorldStops > policy.MaximumWorldStops
                     ? result with { Warnings = [DescribeOverStopLimit(policy, quote)] }
                     : result;
             }

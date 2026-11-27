@@ -353,7 +353,10 @@ public static class MarketRouteScoring
         return left.GilCost.CompareTo(right.GilCost);
     }
 
-    internal static bool IsWithinPremium(long cost, long cheapestCost, decimal? premiumRate)
+    internal static bool IsWithinPremium(long cost, long cheapestCost, decimal? premiumRate) =>
+        IsWithinPremium((decimal)cost, cheapestCost, premiumRate);
+
+    internal static bool IsWithinPremium(decimal cost, decimal cheapestCost, decimal? premiumRate)
     {
         if (premiumRate == null)
         {

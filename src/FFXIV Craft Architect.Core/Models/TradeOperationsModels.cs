@@ -408,9 +408,21 @@ public sealed record TradeMaterialPricingPolicy
 {
     public const int CurrentSchemaVersion = 1;
 
+    /// <summary>The travel tolerance a policy stored before the setting existed reads as: 5% more gil for fewer stops.</summary>
+    public const int DefaultTravelTolerance = 9;
+
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+
+    // Retired route dimension, replaced by TravelTolerance. Routing ignores it; it is kept so
+    // policies and quotes stored before its retirement keep their original fingerprints.
     public decimal MaximumConsolidationPremiumPercent { get; init; } = 5m;
     public int MaximumWorldStops { get; init; } = 8;
+
+    /// <summary>
+    /// How much more gil the company accepts for fewer world stops, as a
+    /// <see cref="MarketRouteScoring"/> position: 0 fewest stops, 11 lowest cost.
+    /// </summary>
+    public int TravelTolerance { get; init; } = DefaultTravelTolerance;
 
     // Retired route dimension. Routing ignores it; it is read only so policies and
     // quotes stored before its retirement keep their original fingerprints.

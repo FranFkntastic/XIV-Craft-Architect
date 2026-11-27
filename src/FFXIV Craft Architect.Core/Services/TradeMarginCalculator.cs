@@ -82,7 +82,7 @@ public sealed class TradeMarginPricing
     {
         var value = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
         return string.Create(CultureInfo.InvariantCulture,
-            $"{value.MaximumWorldStops}|{value.AllowSplitPurchases}|{value.MaximumConsolidationPremiumPercent}");
+            $"{value.MaximumWorldStops}|{value.AllowSplitPurchases}|{value.TravelTolerance}");
     }
 }
 
@@ -1033,13 +1033,14 @@ public sealed class TradeMarginBasis
 
     /// <summary>
     /// Listings priced below <paramref name="ceiling"/> within the world-stop limit, the rest
-    /// from <paramref name="remainder"/> at the ceiling; null when no listing is below it.
+    /// from <paramref name="remainder"/> at the ceiling, with worlds chosen under the company's
+    /// travel tolerance; null when no listing is below it.
     /// </summary>
     private static TradeMarginBuyPlan? Fill(DetailedShoppingPlan plan, TradeMaterialPricingPolicy policy, decimal ceiling,
         TradeMarginBuyRemainder remainder, IReadOnlyDictionary<string, DateTime?> ages)
     {
         var fill = MarketCoverageBuilder.BuildCappedFill(plan,
-            policy.AllowSplitPurchases ? policy.MaximumWorldStops : 1, ceiling);
+            policy.AllowSplitPurchases ? policy.MaximumWorldStops : 1, ceiling, policy.TravelTolerance);
         return fill == null ? null : BuildPlan(plan.QuantityNeeded,
             fill.Worlds.Select(world => (world.DataCenter, world.WorldName, world.QuantityCovered,
                 world.QuantityToPurchase, world.CashOutCost)),
