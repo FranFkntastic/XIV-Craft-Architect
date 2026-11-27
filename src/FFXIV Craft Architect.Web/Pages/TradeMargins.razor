@@ -399,12 +399,15 @@
                 (market is { IsShortOfListings: true } ? ShortOfListings(market) : "⚠ Partly commissioned", BuyTitle(plan), true),
             { MarketUnits: 0 } => ("Vendor", null, false),
             var plan when OverLimit(plan) is { } over => (over, BuyTitle(plan), true),
-            var plan => (PlanLabel(plan), BuyTitle(plan), false)
+            var plan => (PlanLabel(plan, compact: true), BuyTitle(plan), false)
         };
     }
-    /// <summary>The main world, how many more, and whether the vendor tops it up.</summary>
-    private static string PlanLabel(TradeMarginBuyPlan plan) =>
-        (plan.Worlds.Count > 0 ? plan.Worlds[0].Label : "") +
+    /// <summary>
+    /// The main world, how many more, and whether the vendor tops it up. Compact drops the data
+    /// center so the narrow buy column keeps "+ vendor" visible; the title still names it.
+    /// </summary>
+    private static string PlanLabel(TradeMarginBuyPlan plan, bool compact = false) =>
+        (plan.Worlds.Count > 0 ? (compact ? plan.Worlds[0].WorldName : plan.Worlds[0].Label) : "") +
         (plan.Worlds.Count > 1 ? $" +{plan.Worlds.Count - 1:N0} {(plan.Worlds.Count == 2 ? "world" : "worlds")}" : "") +
         (plan.Remainder == TradeMarginBuyRemainder.Vendor && plan.RemainderUnits > 0 ? " + vendor" : "");
     private static string PlanBasis(TradeMarginBuyPlan plan) =>
