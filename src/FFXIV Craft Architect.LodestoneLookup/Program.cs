@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
+using FFXIV_Craft_Architect.Core.Integrations.XivData;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
@@ -10,7 +11,6 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
-using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
 
 const string CorsPolicyName = "CraftArchitectWeb";
 const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private-Network";
@@ -46,21 +46,12 @@ builder.Services.AddCors(options =>
 });
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
 builder.Services.AddHttpClient<IGarlandService, GarlandService>();
-builder.Services.AddSingleton<IXivItemDataProvider, GarlandXivItemDataProvider>();
-var craftAppraisalOptions = CraftAppraisalApiOptions.FromConfiguration(
-    builder.Configuration,
+builder.Services.AddHostedCraftAppraisal(
+    CraftAppraisalApiOptions.FromConfiguration(
+        builder.Configuration,
+        builder.Environment.ContentRootPath),
     builder.Environment.ContentRootPath);
-craftAppraisalOptions.Validate();
-builder.Services.AddSingleton(craftAppraisalOptions);
-builder.Services.AddMemoryCache();
-builder.Services.AddWorkshopHostCraftAppraisal();
-builder.Services.AddSingleton<IMarketCacheService>(services =>
-    new JsonFileMarketCacheService(
-        services.GetRequiredService<UniversalisService>(),
-        craftAppraisalOptions.CacheDirectory));
 builder.Services.AddSingleton<ClaimMaterialPricing>();
-builder.Services.AddSingleton<CraftAppraisalPlanStore>();
-builder.Services.AddSingleton<IHostedCraftAppraisalCoordinator, HostedCraftAppraisalCoordinator>();
 builder.Services.AddSingleton(_ => new ProfileHostOptions
 {
     Enabled = builder.Configuration.GetValue("ProfileHost:Enabled", false),

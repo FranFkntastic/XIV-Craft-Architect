@@ -38,35 +38,14 @@ public static class CraftAppraisalEndpoints
         if (!coordinator.IsAvailable)
         {
             return Results.Json(
-                new { error = "craft_appraisal_unavailable" },
+                new { error = CraftAppraisalRequestValidation.Unavailable },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        if (request.SchemaVersion != 1)
+        var rejection = CraftAppraisalRequestValidation.GetRejection(request, options);
+        if (rejection != null)
         {
-            return Results.BadRequest(new { error = "unsupported_schema_version" });
-        }
-
-        if (request.ItemId == 0)
-        {
-            return Results.BadRequest(new { error = "item_id_required" });
-        }
-
-        if (request.Quantity == 0)
-        {
-            return Results.BadRequest(new { error = "quantity_required" });
-        }
-
-        if (request.Quantity > options.MaximumQuantity)
-        {
-            return Results.BadRequest(new { error = "quantity_exceeds_limit" });
-        }
-
-        if (!request.Options.PricingMode.Equals(
-                "CurrentMarketEvidence",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return Results.BadRequest(new { error = "unsupported_pricing_mode" });
+            return Results.BadRequest(new { error = rejection });
         }
 
         try
@@ -76,7 +55,7 @@ public static class CraftAppraisalEndpoints
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return Results.Json(
-                new { error = "craft_appraisal_timeout" },
+                new { error = CraftAppraisalRequestValidation.Timeout },
                 statusCode: StatusCodes.Status504GatewayTimeout);
         }
     }
@@ -88,7 +67,7 @@ public static class CraftAppraisalEndpoints
     {
         var planJson = await planStore.ReadAsync(planId, cancellationToken);
         return planJson == null
-            ? Results.NotFound(new { error = "craft_appraisal_plan_not_found" })
+            ? Results.NotFound(new { error = CraftAppraisalRequestValidation.PlanNotFound })
             : Results.Text(planJson, "application/json");
     }
 }

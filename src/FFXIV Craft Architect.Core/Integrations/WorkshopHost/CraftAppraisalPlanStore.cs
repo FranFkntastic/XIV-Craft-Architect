@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace FFXIV_Craft_Architect.LodestoneLookup.Services.CraftAppraisal;
+namespace FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 
 public sealed class CraftAppraisalPlanStore(CraftAppraisalApiOptions options)
 {
