@@ -29,15 +29,41 @@ public sealed record TradeMarginCost(
     /// <summary>The sold item's own cheapest NPC vendor gil price per unit; null when no vendor sells it.</summary>
     public decimal? RootVendorPrice { get; init; }
 
+    /// <summary>
+    /// Buying the whole run of the item itself when an NPC vendor sells it: market listings priced
+    /// under the vendor first, the rest from the vendor. Null when no vendor sells the item or the
+    /// row was prepared without the root market; <see cref="MarketBuy"/> is then the live buy.
+    /// </summary>
+    public TradeMarginLiveBuy? LiveBuy { get; init; }
+
     public bool Equals(TradeMarginCost? other) =>
         other is not null && Name == other.Name && IconId == other.IconId && Materials == other.Materials &&
         Synths == other.Synths && OldestPriceUtc == other.OldestPriceUtc && Missing.SequenceEqual(other.Missing) &&
         Issue == other.Issue && Units == other.Units && UnknownPriceAge == other.UnknownPriceAge &&
-        Equals(MarketBuy, other.MarketBuy) && RootVendorPrice == other.RootVendorPrice;
+        Equals(MarketBuy, other.MarketBuy) && RootVendorPrice == other.RootVendorPrice && Equals(LiveBuy, other.LiveBuy);
 
     public override int GetHashCode() =>
         HashCode.Combine(HashCode.Combine(Name, IconId, Materials, Synths, OldestPriceUtc, Issue, Units, UnknownPriceAge),
-            MarketBuy, RootVendorPrice);
+            MarketBuy, RootVendorPrice, LiveBuy);
+}
+
+/// <summary>
+/// A whole run bought the way a buyer would when an NPC vendor sells the item: whole listings
+/// priced below the vendor, cheapest first, from the one world where that leaves the run
+/// cheapest, then the remainder from the vendor's unlimited stock. Like the market route, the
+/// market part costs the average unit price of the listings bought. The vendor part has no age.
+/// </summary>
+public sealed record TradeMarginLiveBuy(
+    int MarketUnits, decimal MarketCost, int VendorUnits, decimal VendorCost,
+    DateTime? ObservedAtUtc = null, string? WorldName = null, string? DataCenter = null)
+{
+    public decimal Total => MarketCost + VendorCost;
+    public bool IsVendorOnly => MarketUnits == 0;
+    public bool IsBlended => MarketUnits > 0 && VendorUnits > 0;
+
+    /// <summary>The one world the market part was bought on, as <c>World (Data center)</c>; null for a vendor-only buy.</summary>
+    public string? BuyAt => MarketUnits == 0 || string.IsNullOrWhiteSpace(WorldName) ? null
+        : string.IsNullOrWhiteSpace(DataCenter) ? WorldName : $"{WorldName} ({DataCenter})";
 }
 
 /// <summary>Company inputs to a Margins price: labor rate and explicit material sources.</summary>
@@ -462,7 +488,8 @@ public sealed class TradeMarginBasis
             Basis = this,
             BatchSize = BatchSize,
             MarketBuy = _includeRootMarket ? await MarketOptionAsync(RootId, _units, ct) : null,
-            RootVendorPrice = _vendors.TryGetValue(RootId, out var rootVendor) && rootVendor > 0 ? rootVendor : null
+            RootVendorPrice = _vendors.TryGetValue(RootId, out var rootVendor) && rootVendor > 0 ? rootVendor : null,
+            LiveBuy = _includeRootMarket ? (await QuoteAsync(RootId, _units, ct)).LiveBuy : null
         };
     }
 
@@ -692,7 +719,7 @@ public sealed class TradeMarginBasis
     }
 
     private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge,
-        string? World = null, string? DataCenter = null);
+        string? World = null, string? DataCenter = null, TradeMarginLiveBuy? LiveBuy = null);
 
     /// <summary>
     /// The market route for <paramref name="quantity"/> units. Listings that cannot cover the
@@ -714,6 +741,8 @@ public sealed class TradeMarginBasis
         DateTime? oldest = null;
         var unknownAge = false;
         string? buyWorld = null, buyDataCenter = null;
+        var vendor = _vendors.TryGetValue(id, out var vendorPrice) && vendorPrice > 0 ? vendorPrice : (decimal?)null;
+        TradeMarginLiveBuy? liveBuy = vendor is { } onlyVendor ? new(0, 0, quantity, onlyVendor * quantity) : null;
         if (listings.Length > 0)
         {
             var analysis = (await new MarketPriceLadderAnalysisService().AnalyzeAsync(new MarketAnalysisRequest
@@ -723,6 +752,10 @@ public sealed class TradeMarginBasis
             }, ct: ct)).Single(entry => entry.ItemId == id);
             // One analysis is tens of milliseconds of listing work; let the page render between them.
             await MainThreadYield.Async(ct);
+            if (vendor is { } cap && Blend(analysis, quantity, cap) is { } blend)
+            {
+                liveBuy = blend with { ObservedAtUtc = Uploaded(entries, blend.WorldName!, blend.DataCenter!) };
+            }
             var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
             if (price > 0)
             {
@@ -761,8 +794,64 @@ public sealed class TradeMarginBasis
             }
         }
 
-        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter);
+        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter, liveBuy);
         _quotes[(id, quantity)] = quote;
         return quote;
+    }
+
+    /// <summary>
+    /// The cheapest way to buy <paramref name="quantity"/> from one world's listings priced under
+    /// <paramref name="vendor"/>, topped up from the vendor; null when no world lists any unit
+    /// under the vendor price. One buy world, as the market route chooses: the analysis's
+    /// cost-to-cover walk is the same walk with the vendor as the price ceiling.
+    /// </summary>
+    private static TradeMarginLiveBuy? Blend(MarketItemAnalysis analysis, int quantity, decimal vendor)
+    {
+        TradeMarginLiveBuy? best = null;
+        foreach (var world in analysis.Worlds
+            .OrderBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase))
+        {
+            long quoted = 0;
+            decimal gil = 0;
+            // Listings are price-ordered; whole listings are bought, as the market route buys them.
+            foreach (var listing in world.Listings)
+            {
+                if (quoted >= quantity || listing.PricePerUnit >= vendor)
+                {
+                    break;
+                }
+
+                if (listing.Quantity > 0 && listing.PricePerUnit > 0)
+                {
+                    quoted += listing.Quantity;
+                    gil += listing.Quantity * (decimal)listing.PricePerUnit;
+                }
+            }
+            if (quoted == 0)
+            {
+                continue;
+            }
+
+            var marketUnits = (int)Math.Min(quoted, quantity);
+            var vendorUnits = quantity - marketUnits;
+            var candidate = new TradeMarginLiveBuy(marketUnits, gil / quoted * marketUnits, vendorUnits, vendor * vendorUnits,
+                WorldName: world.WorldName, DataCenter: world.DataCenter);
+            if (best == null || candidate.Total < best.Total)
+            {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>When one world's listings were uploaded; null when that is not known.</summary>
+    private static DateTime? Uploaded(IEnumerable<CachedMarketData> entries, string worldName, string dataCenter)
+    {
+        var stamp = entries.Where(entry => entry.DataCenter == dataCenter)
+            .SelectMany(entry => entry.Worlds.Where(world => world.WorldName == worldName)
+                .Select(world => world.LastUploadTimeUnixMilliseconds ?? entry.LastUploadTimeUnixMilliseconds))
+            .FirstOrDefault(stamp => stamp > 0);
+        return stamp is { } value ? DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime : null;
     }
 }
