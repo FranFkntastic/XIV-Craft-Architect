@@ -2013,14 +2013,14 @@ public sealed partial class SqliteProfileHostStore
                 var marginItems = company?.MarginItems ?? [];
                 if (marginItems.Count > 500 ||
                     marginItems.Any(item => !TradeMarginItem.IsValid(item)) ||
-                    marginItems.Select(item => item.ItemId).Distinct().Count() != marginItems.Count)
+                    !TradeMarginItem.AreDistinct(marginItems))
                 {
                     await transaction.RollbackAsync(ct);
                     return new ProfileSyncPutResponse
                     {
                         Success = false,
                         ErrorCode = "invalid_margin_items",
-                        ErrorMessage = "Use at most 500 distinct positive item ids with non-negative sale prices and batch sizes from 1 to 9,999."
+                        ErrorMessage = "Use at most 500 items, each positive item id at most once per mode, with non-negative prices and batch sizes from 1 to 9,999."
                     };
                 }
                 if (!TradeCommissionTemplateValidator.IsValid(company?.CommissionTemplates, out var templateError))

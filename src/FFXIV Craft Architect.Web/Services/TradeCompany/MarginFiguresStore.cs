@@ -10,13 +10,14 @@ namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 /// <summary>
 /// The last figures Margins computed for each row, kept in this browser so the page can show
 /// them the moment it opens. A display cache only: a record is shown only while the inputs it
-/// was computed for still match, and nothing is ever priced from it. One record per company
-/// and item; writes are batched and never block or fail the page.
+/// was computed for still match, and nothing is ever priced from it. One record per company,
+/// mode and item; writes are batched and never block or fail the page.
 /// </summary>
 public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<MarginFiguresStore> log)
 {
     private const string Prefix = "margins.figures.";
-    private const int RecordVersion = 1;
+    // v2: keyed by mode and carrying the root market buy; v1 records are dropped on read.
+    private const int RecordVersion = 2;
     private readonly Dictionary<string, string> _pending = [];
     private readonly Dictionary<string, string> _written = [];
     private bool _flushing;
@@ -26,16 +27,54 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     /// <summary>Figures one row showed, with the inputs they were computed for.</summary>
     public sealed record SavedFigures(
         int Version, string Inputs, string Name, int IconId, decimal? Materials, int? Synths, int Units, int BatchSize,
-        string[] Missing, string? Issue, long? OldestPriceUnixMs, bool UnknownPriceAge)
+        string[] Missing, string? Issue, long? OldestPriceUnixMs, bool UnknownPriceAge,
+        bool HasMarketBuy = false, decimal? MarketBuyTotal = null, int MarketBuyListingCount = 0,
+        int MarketBuyListedQuantity = 0, int MarketBuyRequiredQuantity = 0, long? MarketBuyObservedAtUnixMs = null,
+        string? MarketBuyWorldName = null, string? MarketBuyDataCenter = null)
     {
-        public TradeMarginCost ToCost() => new(Name, IconId, Materials, Synths,
-            OldestPriceUnixMs is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime : null,
+        public TradeMarginCost ToCost() => new(Name, IconId, Materials, Synths, FromUnixMs(OldestPriceUnixMs),
             Missing, Issue, Units, UnknownPriceAge)
-        { BatchSize = BatchSize };
+        {
+            BatchSize = BatchSize,
+            MarketBuy = HasMarketBuy
+                ? new(TradeMaterialRoute.Market, MarketBuyTotal, ListingCount: MarketBuyListingCount,
+                    ListedQuantity: MarketBuyListedQuantity, RequiredQuantity: MarketBuyRequiredQuantity,
+                    ObservedAtUtc: FromUnixMs(MarketBuyObservedAtUnixMs),
+                    UnitPrice: MarketBuyTotal / Math.Max(1, MarketBuyRequiredQuantity),
+                    WorldName: MarketBuyWorldName, DataCenter: MarketBuyDataCenter)
+                : null
+        };
     }
 
+    private static DateTime? FromUnixMs(long? ms) =>
+        ms is { } value ? DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime : null;
+
+    private static long? ToUnixMs(DateTime? time) => time is { } value
+        ? new DateTimeOffset(value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : DateTime.SpecifyKind(value, DateTimeKind.Utc)).ToUnixTimeMilliseconds()
+        : null;
+
     private static string CompanyPrefix(Guid companyId) => $"{Prefix}{companyId:D}.";
-    private static string Key(Guid companyId, int itemId) => CompanyPrefix(companyId) + itemId.ToString(CultureInfo.InvariantCulture);
+
+    private static string Key(Guid companyId, TradeMarginMode mode, int itemId) =>
+        CompanyPrefix(companyId) + ((int)mode).ToString(CultureInfo.InvariantCulture) + "." +
+        itemId.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Reads <c>{mode}.{itemId}</c>; a v1 key (item id only) does not parse.</summary>
+    private static bool TryParseKey(string suffix, out (int ItemId, TradeMarginMode Mode) row)
+    {
+        row = default;
+        var dot = suffix.IndexOf('.');
+        if (dot <= 0 ||
+            !int.TryParse(suffix.AsSpan(0, dot), NumberStyles.None, CultureInfo.InvariantCulture, out var mode) ||
+            !Enum.IsDefined((TradeMarginMode)mode) ||
+            !int.TryParse(suffix.AsSpan(dot + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var itemId))
+        {
+            return false;
+        }
+
+        row = (itemId, (TradeMarginMode)mode);
+        return true;
+    }
 
     /// <summary>
     /// Everything a row's figures depend on besides the market data: company, Margins market
@@ -68,12 +107,13 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     }
 
     /// <summary>
-    /// Reads the company's saved figures in one read, by item. Records for items no longer on
-    /// the page, and unreadable or old-shape records, are dropped. Never throws.
+    /// Reads the company's saved figures in one read, by item and mode. Records for rows no
+    /// longer on the page, and unreadable or old-shape records, are dropped. Never throws.
     /// </summary>
-    public async Task<Dictionary<int, SavedFigures>> LoadAsync(Guid companyId, IReadOnlyCollection<int> itemIds)
+    public async Task<Dictionary<(int ItemId, TradeMarginMode Mode), SavedFigures>> LoadAsync(Guid companyId,
+        IReadOnlyCollection<(int ItemId, TradeMarginMode Mode)> rows)
     {
-        var figures = new Dictionary<int, SavedFigures>();
+        var figures = new Dictionary<(int ItemId, TradeMarginMode Mode), SavedFigures>();
         Dictionary<string, string> stored;
         try { stored = await indexedDb.LoadSettingsWithPrefixRequiredAsync(CompanyPrefix(companyId)); }
         catch (Exception ex)
@@ -82,12 +122,11 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
             return figures;
         }
 
-        var wanted = itemIds.ToHashSet();
+        var wanted = rows.ToHashSet();
         var discard = new List<string>();
         foreach (var (key, value) in stored)
         {
-            if (!int.TryParse(key.AsSpan(CompanyPrefix(companyId).Length), NumberStyles.None, CultureInfo.InvariantCulture, out var itemId) ||
-                !wanted.Contains(itemId))
+            if (!TryParseKey(key[CompanyPrefix(companyId).Length..], out var row) || !wanted.Contains(row))
             {
                 discard.Add(key);
                 continue;
@@ -97,15 +136,15 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
                 if (JsonSerializer.Deserialize<SavedFigures>(value) is { Version: RecordVersion, Inputs: not null, Name: not null, Missing: not null } record &&
                     record.Units >= 1 && record.BatchSize >= 1)
                 {
-                    figures[itemId] = record;
+                    figures[row] = record;
                     _written[key] = value;
                     continue;
                 }
-                log.LogWarning("Margins saved figures: ignored the record for item {ItemId} of company {CompanyId} (old or incomplete shape)", itemId, companyId);
+                log.LogWarning("Margins saved figures: ignored the record for item {ItemId} ({Mode}) of company {CompanyId} (old or incomplete shape)", row.ItemId, row.Mode, companyId);
             }
             catch (Exception ex) when (ex is JsonException or NotSupportedException or ArgumentException)
             {
-                log.LogWarning("Margins saved figures: ignored the record for item {ItemId} of company {CompanyId} ({Error})", itemId, companyId, ex.Message);
+                log.LogWarning("Margins saved figures: ignored the record for item {ItemId} ({Mode}) of company {CompanyId} ({Error})", row.ItemId, row.Mode, companyId, ex.Message);
             }
             discard.Add(key);
         }
@@ -118,13 +157,14 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     }
 
     /// <summary>Queues a row's displayed figures; written in one batch after the page next yields.</summary>
-    public void Save(Guid companyId, int itemId, string inputs, TradeMarginCost cost)
+    public void Save(Guid companyId, TradeMarginMode mode, int itemId, string inputs, TradeMarginCost cost)
     {
-        var key = Key(companyId, itemId);
+        var key = Key(companyId, mode, itemId);
+        var buy = cost.MarketBuy;
         var value = JsonSerializer.Serialize(new SavedFigures(RecordVersion, inputs, cost.Name, cost.IconId, cost.Materials,
-            cost.Synths, cost.Units, cost.BatchSize, cost.Missing.ToArray(), cost.Issue,
-            cost.OldestPriceUtc is { } oldest ? new DateTimeOffset(oldest.Kind == DateTimeKind.Local ? oldest.ToUniversalTime() : DateTime.SpecifyKind(oldest, DateTimeKind.Utc)).ToUnixTimeMilliseconds() : null,
-            cost.UnknownPriceAge));
+            cost.Synths, cost.Units, cost.BatchSize, cost.Missing.ToArray(), cost.Issue, ToUnixMs(cost.OldestPriceUtc),
+            cost.UnknownPriceAge, buy != null, buy?.Total, buy?.ListingCount ?? 0, buy?.ListedQuantity ?? 0,
+            buy?.RequiredQuantity ?? 0, ToUnixMs(buy?.ObservedAtUtc), buy?.WorldName, buy?.DataCenter));
         if (_written.TryGetValue(key, out var written) && written == value)
         {
             _pending.Remove(key);
@@ -141,11 +181,11 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     }
 
     /// <summary>Forgets a removed row's figures.</summary>
-    public void Delete(Guid companyId, int itemId)
+    public void Delete(Guid companyId, TradeMarginMode mode, int itemId)
     {
-        var key = Key(companyId, itemId);
+        var key = Key(companyId, mode, itemId);
         _pending.Remove(key);
-        _ = DeleteKeysAsync([key], $"item {itemId} of company {companyId:D}");
+        _ = DeleteKeysAsync([key], $"item {itemId} ({mode}) of company {companyId:D}");
     }
 
     private async Task FlushAsync()

@@ -29,17 +29,31 @@ public sealed class TradeCompanyDiscordInstallationBinding
     public DateTime? HealthCheckedAtUtc { get; set; }
 }
 
+/// <summary>Which question a Margins row answers: selling it, or sourcing it (buy vs. commission).</summary>
+public enum TradeMarginMode
+{
+    Sell = 0,
+    Source = 1
+}
+
 /// <summary>
 /// A Margins row. <see cref="BatchSize"/> is how many units one production run makes; an
-/// item stored without one reads as 1.
+/// item stored without one reads as 1, and one stored without a mode reads as
+/// <see cref="TradeMarginMode.Sell"/>. In <see cref="TradeMarginMode.Source"/> mode
+/// <see cref="SalePrice"/> holds the operator's manual buy-price override (null = live market).
+/// One item may be tracked once per mode.
 /// </summary>
-public sealed record TradeMarginItem(int ItemId, long? SalePrice = null, int BatchSize = 1)
+public sealed record TradeMarginItem(int ItemId, long? SalePrice = null, int BatchSize = 1, TradeMarginMode Mode = TradeMarginMode.Sell)
 {
     public const int MaxBatchSize = 9_999;
 
-    /// <summary>Whether a stored Margins item has a usable id, sale price and batch size.</summary>
+    /// <summary>Whether a stored Margins item has a usable id, price, batch size and mode.</summary>
     public static bool IsValid(TradeMarginItem? item) =>
-        item is { ItemId: > 0, SalePrice: not < 0, BatchSize: >= 1 and <= MaxBatchSize };
+        item is { ItemId: > 0, SalePrice: not < 0, BatchSize: >= 1 and <= MaxBatchSize } && Enum.IsDefined(item.Mode);
+
+    /// <summary>Whether <paramref name="items"/> tracks no item twice in the same mode.</summary>
+    public static bool AreDistinct(IReadOnlyCollection<TradeMarginItem> items) =>
+        items.Select(item => (item.ItemId, item.Mode)).Distinct().Count() == items.Count;
 }
 
 /// <summary>How the company acquires a material when Margins prices it.</summary>

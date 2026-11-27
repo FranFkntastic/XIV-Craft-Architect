@@ -159,6 +159,10 @@ public class GarlandItem
     [JsonPropertyName("description")]
     public string? Description { get; set; }
 
+    /// <summary>Most units one inventory slot holds; 0 when Garland did not say.</summary>
+    [JsonPropertyName("stackSize")]
+    public int StackSize { get; set; }
+
     /// <summary>
     /// Crafting recipes this item is used in (traditional crafting)
     /// </summary>

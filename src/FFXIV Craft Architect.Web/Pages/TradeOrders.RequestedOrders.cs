@@ -19,16 +19,19 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
-    // Margins "Create commission" handoff: /trade/orders?newOrderItem={id}&newOrderName={name}.
+    // Margins "Create commission" handoff: /trade/orders?newOrderItem={id}&newOrderName={name}&newOrderQuantity={batch}.
     [SupplyParameterFromQuery(Name = "newOrderItem")]
     public int? NewOrderItem { get; set; }
 
     [SupplyParameterFromQuery(Name = "newOrderName")]
     public string? NewOrderName { get; set; }
 
+    [SupplyParameterFromQuery(Name = "newOrderQuantity")]
+    public int? NewOrderQuantity { get; set; }
+
     private int? _consumedNewOrderItem;
 
-    private (int ItemId, string? Name)? TakeNewOrderSeed()
+    private (int ItemId, string? Name, int Quantity)? TakeNewOrderSeed()
     {
         if (NewOrderItem is not { } itemId || itemId <= 0 || itemId == _consumedNewOrderItem)
         {
@@ -36,10 +39,10 @@ public partial class TradeOrders
         }
 
         _consumedNewOrderItem = itemId;
-        return (itemId, NewOrderName);
+        return (itemId, NewOrderName, Math.Clamp(NewOrderQuantity ?? 1, 1, TradeMarginItem.MaxBatchSize));
     }
 
-    private async Task ApplyNewOrderSeedAsync(int itemId, string? name)
+    private async Task ApplyNewOrderSeedAsync(int itemId, string? name, int quantity)
     {
         if (NavigationManager.Uri.Contains("newOrderItem=", StringComparison.OrdinalIgnoreCase))
         {
@@ -69,7 +72,7 @@ public partial class TradeOrders
             {
                 ItemId = itemId,
                 Name = string.IsNullOrWhiteSpace(name) ? $"Item {itemId}" : name.Trim(),
-                Quantity = 1
+                Quantity = quantity
             });
         }
         SnapshotNewOrderScaleBase();
