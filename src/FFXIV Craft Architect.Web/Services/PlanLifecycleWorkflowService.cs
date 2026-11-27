@@ -25,7 +25,10 @@ public sealed record PlanDerivationRequest(
     IReadOnlyCollection<int>? TargetItemIds = null,
     // Trade pricing quotes its own executable route, so the planner procurement
     // route is not needed.
-    bool SkipProcurement = false);
+    bool SkipProcurement = false,
+    // Whole regions to analyze (e.g. a Margins row's scope); overrides the settings and
+    // company context. Null or empty keeps the context those resolve to.
+    IReadOnlyList<string>? MarketRegions = null);
 
 public sealed record PlanDerivationResult(
     bool MarketPublished,
@@ -229,6 +232,13 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             selectedRegion = companyScope.Region;
             selectedRegions = [companyScope.Region];
         }
+        if (request.MarketRegions is { Count: > 0 } regions)
+        {
+            marketScope = MarketFetchScope.EntireRegion;
+            selectedRegion = regions[0];
+            selectedDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(regions[0], selectedDataCenter);
+            selectedRegions = regions;
+        }
         var requestedDataCenters = MarketFetchScopeResolver.GetDataCenters(
             marketScope,
             selectedDataCenter,
@@ -249,8 +259,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                  .SetEquals(requestedDataCenters));
 
         if (!hadMarketCandidates &&
-            (request.UseCurrentSettingsContext || request.CompanyPricingScope != null) &&
-            (marketContextChanged || request.CompanyPricingScope != null))
+            (request.UseCurrentSettingsContext || request.CompanyPricingScope != null || request.MarketRegions is { Count: > 0 }) &&
+            (marketContextChanged || request.CompanyPricingScope != null || request.MarketRegions is { Count: > 0 }))
         {
             await _worker.MutateActiveContextAsync(
                 new WorkerActiveContextMutation(

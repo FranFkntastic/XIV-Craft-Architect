@@ -26,14 +26,18 @@ public sealed record TradeMarginCost(
     /// </summary>
     public TradeMarginRouteOption? MarketBuy { get; init; }
 
+    /// <summary>The sold item's own cheapest NPC vendor gil price per unit; null when no vendor sells it.</summary>
+    public decimal? RootVendorPrice { get; init; }
+
     public bool Equals(TradeMarginCost? other) =>
         other is not null && Name == other.Name && IconId == other.IconId && Materials == other.Materials &&
         Synths == other.Synths && OldestPriceUtc == other.OldestPriceUtc && Missing.SequenceEqual(other.Missing) &&
         Issue == other.Issue && Units == other.Units && UnknownPriceAge == other.UnknownPriceAge &&
-        Equals(MarketBuy, other.MarketBuy);
+        Equals(MarketBuy, other.MarketBuy) && RootVendorPrice == other.RootVendorPrice;
 
     public override int GetHashCode() =>
-        HashCode.Combine(HashCode.Combine(Name, IconId, Materials, Synths, OldestPriceUtc, Issue, Units, UnknownPriceAge), MarketBuy);
+        HashCode.Combine(HashCode.Combine(Name, IconId, Materials, Synths, OldestPriceUtc, Issue, Units, UnknownPriceAge),
+            MarketBuy, RootVendorPrice);
 }
 
 /// <summary>Company inputs to a Margins price: labor rate and explicit material sources.</summary>
@@ -195,7 +199,8 @@ public sealed class TradeMarginCalculator(
         return new(leaves, async (evidence, pricing, token) =>
         {
             var vendorPrices = new Dictionary<int, decimal>();
-            foreach (var id in items)
+            // The sold item's own vendor price sits beside its materials'; routes never buy the root.
+            foreach (var id in items.Append(itemId))
             {
                 var vendor = (await vendors.GetOrFetchAsync(id, token))?.CheapestGilPrice ?? 0;
                 if (vendor > 0)
@@ -456,7 +461,8 @@ public sealed class TradeMarginBasis
         {
             Basis = this,
             BatchSize = BatchSize,
-            MarketBuy = _includeRootMarket ? await MarketOptionAsync(RootId, _units, ct) : null
+            MarketBuy = _includeRootMarket ? await MarketOptionAsync(RootId, _units, ct) : null,
+            RootVendorPrice = _vendors.TryGetValue(RootId, out var rootVendor) && rootVendor > 0 ? rootVendor : null
         };
     }
 
