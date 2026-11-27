@@ -1,6 +1,6 @@
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
-namespace FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
+namespace FFXIV_Craft_Architect.Core.Integrations.XivData;
 
 public sealed class GarlandXivItemDataProvider : IXivItemDataProvider
 {

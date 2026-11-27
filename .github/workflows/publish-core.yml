@@ -1,0 +1,142 @@
+name: Publish Core Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Full 40-character commit SHA on main to publish'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-core-${{ inputs.commit }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Gooseworks.FFXIVCraftArchitect.Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PACKAGE_ID: Gooseworks.FFXIVCraftArchitect.Core
+      PROJECT_PATH: src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj
+      PACKAGE_DIR: artifacts/packages
+      NUGET_SOURCE: https://api.nuget.org/v3/index.json
+      FranthropySource: Package
+      COMMIT_INPUT: ${{ inputs.commit }}
+    steps:
+      - name: Validate commit input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$COMMIT_INPUT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Validate commit input::$PACKAGE_ID: commit must be a full lowercase 40-character SHA, got '$COMMIT_INPUT'."
+            exit 1
+          fi
+
+      - name: Checkout requested commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify commit is on main
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          step="Verify commit is on main"
+          if ! git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main; then
+            echo "::error title=$step::$PACKAGE_ID: could not fetch origin/main."
+            exit 1
+          fi
+          head_sha="$(git rev-parse HEAD)"
+          if [[ "$head_sha" != "$COMMIT_INPUT" ]]; then
+            echo "::error title=$step::$PACKAGE_ID: checked out $head_sha instead of $COMMIT_INPUT."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$COMMIT_INPUT" origin/main; then
+            echo "::error title=$step::$PACKAGE_ID: $COMMIT_INPUT is not an ancestor of origin/main; refusing to publish."
+            exit 1
+          fi
+          {
+            echo "sha=$COMMIT_INPUT"
+            echo "package_version=0.1.0-commit.$COMMIT_INPUT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore from nuget.org
+        shell: bash
+        run: |
+          set -euo pipefail
+          # RestoreAdditionalProjectSources is cleared so the local Franthropy feed is never consulted.
+          if ! dotnet restore "$PROJECT_PATH" \
+              --locked-mode \
+              --source "$NUGET_SOURCE" \
+              -p:FranthropySource=Package \
+              -p:RestoreAdditionalProjectSources=; then
+            echo "::error title=Restore from nuget.org::$PACKAGE_ID: restore from nuget.org failed. Check that eng/Franthropy.Version.props names a Franthropy version published on nuget.org."
+            exit 1
+          fi
+
+      - name: Pack
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.package_version }}
+          SOURCE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if ! dotnet pack "$PROJECT_PATH" \
+              --configuration Release \
+              --no-restore \
+              --output "$PACKAGE_DIR" \
+              -p:FranthropySource=Package \
+              -p:RestoreAdditionalProjectSources= \
+              "-p:Version=$PACKAGE_VERSION" \
+              "-p:InformationalVersion=$SOURCE_SHA" \
+              -p:IncludeSourceRevisionInInformationalVersion=false \
+              -p:ContinuousIntegrationBuild=true; then
+            echo "::error title=Pack::$PACKAGE_ID $PACKAGE_VERSION: dotnet pack failed."
+            exit 1
+          fi
+          package="$PACKAGE_DIR/$PACKAGE_ID.$PACKAGE_VERSION.nupkg"
+          if [[ ! -f "$package" ]]; then
+            echo "::error title=Pack::$PACKAGE_ID $PACKAGE_VERSION: expected $package was not produced."
+            ls -la "$PACKAGE_DIR" || true
+            exit 1
+          fi
+
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Publish to nuget.org
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          PACKAGE_VERSION: ${{ steps.version.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          package="$PACKAGE_DIR/$PACKAGE_ID.$PACKAGE_VERSION.nupkg"
+          if ! dotnet nuget push "$package" \
+              --api-key "$NUGET_API_KEY" \
+              --source "$NUGET_SOURCE" \
+              --skip-duplicate; then
+            echo "::error title=Publish to nuget.org::$PACKAGE_ID $PACKAGE_VERSION: dotnet nuget push failed."
+            exit 1
+          fi
+          echo "Published $PACKAGE_ID $PACKAGE_VERSION from $GITHUB_REPOSITORY." >> "$GITHUB_STEP_SUMMARY"

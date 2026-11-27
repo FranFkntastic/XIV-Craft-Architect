@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Services;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace FFXIV_Craft_Architect.LodestoneLookup.Services.CraftAppraisal;
+namespace FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 
 public interface IHostedCraftAppraisalCoordinator
 {
@@ -98,11 +98,11 @@ public sealed class HostedCraftAppraisalCoordinator : IHostedCraftAppraisalCoord
             {
                 var planJson = serializer.SerializePlan(quote.Plan, includeMarketPrices: true);
                 var planId = await planStore.SaveAsync(planJson, timeout.Token);
-                var snapshotUrl = $"{options.PublicApiOrigin}/craft/plans/{planId}";
+                var snapshotUrl = options.BuildPlanSnapshotUrl(planId);
                 quote = quote with
                 {
                     PlanId = planId,
-                    PlanUrl = $"{options.PublicAppOrigin}/?appraisalPlan={Uri.EscapeDataString(snapshotUrl)}",
+                    PlanUrl = options.BuildPlanUrl(snapshotUrl),
                 };
             }
 
