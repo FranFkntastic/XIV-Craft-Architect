@@ -351,10 +351,6 @@
                            @onfocus="() => BeginPrice(line)" @oninput="e => PreviewPrice(line, e)"
                            @onblur="() => CommitPriceAsync(line.ItemId)" @onkeydown="e => PriceKeyAsync(e, line.ItemId)" />
                 }
-                else if (route == TradeMaterialRoute.Craft && line.Synths > 0)
-                {
-                    <span class="blank">—</span>
-                }
                 else if (route == TradeMaterialRoute.Market && line.UnitCost == null && market != null)
                 {
                     <span class="short-listed">@ShortOfListings(market)</span>

@@ -72,6 +72,7 @@ public sealed record TradeMarginRouteOption(
 /// <summary>
 /// One distinct item of a Margins row with demand above zero. Quantity and Cost are for the
 /// whole production run; Cost is labor for a crafted line and the purchase for a bought line.
+/// A crafted line's UnitCost is its full craft option (materials plus labor) per unit.
 /// </summary>
 public sealed record TradeMarginLine(
     int ItemId, string Name, int IconId, bool IsSoldItem, bool IsCraftable, int Quantity,
@@ -516,7 +517,8 @@ public sealed class TradeMarginBasis
             if (route == TradeMaterialRoute.Craft && craftable)
             {
                 var synths = Crafts(qty, recipe!);
-                lines.Add(new(id, item.Name, item.IconId, false, true, qty, route, isExplicit, null,
+                var unitCost = chosen is { Total: { } craftTotal, Missing: null or { Count: 0 } } ? craftTotal / qty : (decimal?)null;
+                lines.Add(new(id, item.Name, item.IconId, false, true, qty, route, isExplicit, unitCost,
                     synths * rate, synths, chosen, options, delta));
             }
             else
