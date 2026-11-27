@@ -92,6 +92,7 @@
     // The pending search: debounced, and cancelled (request included) when a newer query supersedes it.
     private CancellationTokenSource? _searchJob;
     private Task _searchTask = Task.CompletedTask;
+    private string? _matchesQuery;
     // Garland results per trimmed query this session, so backspacing or retyping is instant.
     private readonly Dictionary<string, List<GarlandSearchResult>> _searchCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan SearchDebounce = TimeSpan.FromMilliseconds(150);
@@ -1057,8 +1058,8 @@
         _search = e.Value?.ToString() ?? "";
         var query = _search.Trim();
         CancelSearch();
-        if (query.Length < 2) { _matches = []; return Task.CompletedTask; }
-        if (_searchCache.TryGetValue(query, out var cached)) { ShowMatches(cached); return Task.CompletedTask; }
+        if (query.Length < 2) { _matches = []; _matchesQuery = null; return Task.CompletedTask; }
+        if (_searchCache.TryGetValue(query, out var cached)) { ShowMatches(query, cached); return Task.CompletedTask; }
         var job = _searchJob = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         return _searchTask = RunSearchAsync(query, job);
     }
@@ -1071,7 +1072,7 @@
             if (_disposed || job.IsCancellationRequested) return;
             if (_searchCache.Count >= 64) _searchCache.Clear();
             _searchCache[query] = results;
-            ShowMatches(results);
+            ShowMatches(query, results);
         }
         catch (OperationCanceledException) when (job.IsCancellationRequested) { }
         catch (Exception ex) { if (!job.IsCancellationRequested) ReportError(ex); }
@@ -1082,9 +1083,10 @@
         }
     }
     /// <summary>Up to six items not yet tracked in this mode; craftable items first, in Garland's order.</summary>
-    private void ShowMatches(IEnumerable<GarlandSearchResult> results)
+    private void ShowMatches(string query, IEnumerable<GarlandSearchResult> results)
     {
         _activeMatch = 0;
+        _matchesQuery = query;
         _matches = results.Where(item => item.Type == "item" && _rows.All(row => row.Key != new RowKey(item.Id, _mode)))
             .OrderBy(item => item.Object.HasCrafts ? 0 : 1).Take(6).ToList();
     }
@@ -1098,16 +1100,22 @@
         CancelSearch();
         _search = "";
         _matches = [];
+        _matchesQuery = null;
     }
     private async Task SearchKeyAsync(KeyboardEventArgs e)
     {
-        if (e.Key == "Escape") { CancelSearch(); _matches = []; }
-        // Enter picks from the results for what was typed, never from a list still showing an earlier query.
-        if (e.Key == "Enter" && !_searchTask.IsCompleted) await _searchTask;
+        if (e.Key == "Escape") { CancelSearch(); _matches = []; _matchesQuery = null; return; }
+        if (e.Key == "Enter")
+        {
+            // Enter picks only from results produced for the current input, never a stale or failed query.
+            if (!_searchTask.IsCompleted) await _searchTask;
+            if (_matches.Count == 0 || !string.Equals(_matchesQuery, _search.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+            await AddAsync(_matches[_activeMatch]);
+            return;
+        }
         if (_matches.Count == 0) return;
         if (e.Key == "ArrowDown") _activeMatch = (_activeMatch + 1) % _matches.Count;
         if (e.Key == "ArrowUp") _activeMatch = (_activeMatch + _matches.Count - 1) % _matches.Count;
-        if (e.Key == "Enter") await AddAsync(_matches[_activeMatch]);
     }
     private Task SaveItemsAsync(Func<IReadOnlyList<TradeMarginItem>, IReadOnlyList<TradeMarginItem>> edit) =>
         SaveProfileAsync(profile => profile.MarginItems = edit(profile.MarginItems ?? []), marginItems: true);
