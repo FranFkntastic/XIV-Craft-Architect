@@ -378,6 +378,32 @@ public partial class TradeOrders
         }
     }
 
+    private enum SelectedOrderPlanRestoreErrorKind
+    {
+        None,
+        ActivePlanSaveFailed,
+        OrderPlanUnavailable,
+        ProjectionUnavailable,
+        RestoreFailed
+    }
+
+    private void SetSelectedOrderPlanRestoreError(
+        SelectedOrderPlanRestoreErrorKind kind,
+        string message)
+    {
+        _selectedOrderPlanRestoreErrorKind = kind;
+        _selectedOrderPlanRestoreError = message;
+    }
+
+    // Reconstruction replaces the order's linked plan, so only offer it when that plan itself
+    // can't be loaded (or failed unexpectedly, which may mean it's corrupt), never for conflicts
+    // with the active planner session.
+    private bool SelectedOrderPlanRestoreOffersReconstruction =>
+        _selectedOrderPlanRestoreErrorKind is
+            SelectedOrderPlanRestoreErrorKind.OrderPlanUnavailable or
+            SelectedOrderPlanRestoreErrorKind.RestoreFailed &&
+        CanBeginSelectedOrderPlanReconstruction;
+
     private void InvalidateSelectedOrderPlanRestoration()
     {
         Interlocked.Increment(ref _selectedOrderPlanRestoreGeneration);
@@ -440,17 +466,10 @@ public partial class TradeOrders
             _selectedOrderPlanRestoreError = null;
             if (!IsSelectedOrderLinkedPlanActive())
             {
-                if (WorkerProjections.Shell.HasSession &&
-                    string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
-                {
-                    _selectedOrderPlanRestoreError =
-                        "Your unsaved active plan is being preserved. Save or discard it before editing this order's plan.";
-                    return;
-                }
-
                 var canReplaceActivePlan = await ConfirmActiveCraftPlanCanBeReplacedAsync(
                     "Opening this order plan",
-                    order.CraftPlanId);
+                    order.CraftPlanId,
+                    ActivePlanSaveMode.AutoName);
                 cancellation.Token.ThrowIfCancellationRequested();
                 if (!IsCurrentPlanRestoreRequest(request))
                 {
@@ -458,8 +477,9 @@ public partial class TradeOrders
                 }
                 if (!canReplaceActivePlan)
                 {
-                    _selectedOrderPlanRestoreError =
-                        "The active plan could not be saved, so this order's plan was not opened.";
+                    SetSelectedOrderPlanRestoreError(
+                        SelectedOrderPlanRestoreErrorKind.ActivePlanSaveFailed,
+                        "Saving your unsaved active plan failed, so this order's plan was not opened. Your unsaved plan is still in the planner.");
                     return;
                 }
 
@@ -484,8 +504,9 @@ public partial class TradeOrders
                         request,
                         read.Payload))
                 {
-                    _selectedOrderPlanRestoreError =
-                        "The exact saved craft plan revision is unavailable here. The order was left unchanged so its acquisition choices aren't replaced.";
+                    SetSelectedOrderPlanRestoreError(
+                        SelectedOrderPlanRestoreErrorKind.OrderPlanUnavailable,
+                        "The exact saved craft plan revision is unavailable here. The order was left unchanged so its acquisition choices aren't replaced.");
                     return;
                 }
 
@@ -535,8 +556,9 @@ public partial class TradeOrders
 
             if (GetCurrentLiveProcurementSnapshot() == null)
             {
-                _selectedOrderPlanRestoreError =
-                    "The linked craft plan loaded, but its complete procurement projection is unavailable.";
+                SetSelectedOrderPlanRestoreError(
+                    SelectedOrderPlanRestoreErrorKind.ProjectionUnavailable,
+                    "The linked craft plan loaded, but its complete procurement projection is unavailable.");
             }
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -562,8 +584,9 @@ public partial class TradeOrders
         }
         catch (Exception ex)
         {
-            _selectedOrderPlanRestoreError =
-                "The linked craft plan could not be restored. Saved order details are unchanged.";
+            SetSelectedOrderPlanRestoreError(
+                SelectedOrderPlanRestoreErrorKind.RestoreFailed,
+                "The linked craft plan could not be restored. Saved order details are unchanged.");
             Console.Error.WriteLine(
                 $"Linked Trade order plan restoration failed: {ex.Message}");
         }
