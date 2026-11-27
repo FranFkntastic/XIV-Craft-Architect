@@ -57,9 +57,9 @@ public sealed class TradeMarginPricing
 }
 
 /// <summary>
-/// One route for a material line, priced for the line's whole quantity. A market route for an
-/// item an NPC vendor sells buys <see cref="VendorQuantity"/> of it from the vendor, where the
-/// listings reach the vendor price.
+/// One route for a material line, priced for the line's whole quantity. A
+/// <see cref="TradeMaterialRoute.MarketVendor"/> route buys <see cref="VendorQuantity"/> of it
+/// from the NPC vendor and the rest from listings below the vendor price.
 /// </summary>
 public sealed record TradeMarginRouteOption(
     TradeMaterialRoute Route, decimal? Total, decimal? Materials = null, int Synths = 0,
@@ -67,9 +67,9 @@ public sealed record TradeMarginRouteOption(
     decimal? UnitPrice = null, IReadOnlyList<string>? Missing = null, string? WorldName = null, string? DataCenter = null,
     int VendorQuantity = 0)
 {
-    public bool IsShortOfListings => Route == TradeMaterialRoute.Market && VendorQuantity == 0 && ListedQuantity < RequiredQuantity;
+    public bool IsShortOfListings => Route == TradeMaterialRoute.Market && ListedQuantity < RequiredQuantity;
 
-    /// <summary>Units a market route buys from listings; the rest of the quantity comes from the vendor.</summary>
+    /// <summary>Units bought from listings; the rest of <see cref="RequiredQuantity"/> comes from the vendor.</summary>
     public int MarketQuantity => RequiredQuantity - VendorQuantity;
 
     /// <summary>The one world a market price was taken from, as <c>World (Data center)</c>; null when none was selected.</summary>
@@ -452,14 +452,18 @@ public sealed class TradeMarginBasis
         var unknownAge = false;
         foreach (var (id, cost) in solved.Result.BoughtCost)
         {
-            if (cost == null || solved.Routes[id] != TradeMaterialRoute.Market)
+            var route = solved.Routes[id];
+            if (cost == null || route is not (TradeMaterialRoute.Market or TradeMaterialRoute.MarketVendor))
             {
                 continue;
             }
 
             var quote = _quotes[(id, solved.Result.Demand[id])];
-            unknownAge |= quote.UnknownAge;
-            if (quote.Oldest is { } time)
+            // The vendor part of a Market + vendor buy has no age; only its listings do.
+            var (listingsOldest, listingsUnknown) = route == TradeMaterialRoute.Market ? (quote.Oldest, quote.UnknownAge)
+                : quote.Blend is { Buy.MarketQuantity: > 0 } blend ? (blend.Oldest, blend.UnknownAge) : (null, false);
+            unknownAge |= listingsUnknown;
+            if (listingsOldest is { } time)
             {
                 oldest = oldest == null || time < oldest ? time : oldest;
             }
@@ -480,7 +484,7 @@ public sealed class TradeMarginBasis
         var quote = await QuoteAsync(id, qty, ct);
         return new(TradeMaterialRoute.Market, quote.Unit * qty, ListingCount: quote.ListingCount,
             ListedQuantity: quote.Listed, RequiredQuantity: qty, ObservedAtUtc: quote.Oldest, UnitPrice: quote.Unit,
-            WorldName: quote.World, DataCenter: quote.DataCenter, VendorQuantity: quote.VendorUnits);
+            WorldName: quote.World, DataCenter: quote.DataCenter);
     }
 
     internal async Task<TradeMarginBreakdown> DescribeAsync(TradeMarginPricing pricing, CancellationToken ct)
@@ -587,7 +591,7 @@ public sealed class TradeMarginBasis
             }
 
             TradeMaterialRoute route;
-            if (sources.TryGetValue(id, out var choice) && IsUsable(choice, craftable))
+            if (sources.TryGetValue(id, out var choice) && IsUsable(id, choice, craftable))
             {
                 route = choice.Route;
                 explicitChoices.Add(id);
@@ -595,19 +599,18 @@ public sealed class TradeMarginBasis
             else
             {
                 var quote = await QuoteAsync(id, qty, ct);
-                var best = AcquisitionDefaultRule.Cheapest(
+                // Market only when listings alone cover the run; Market + vendor only when the
+                // cheapest one-world buy really uses both sources.
+                route = AcquisitionDefaultRule.Cheapest(
                 [
-                    (AcquisitionSource.Craft, craft),
-                    (AcquisitionSource.MarketBuyNq, quote.Covers(qty) ? quote.Unit * qty : null),
-                    (AcquisitionSource.VendorBuy, _vendors.TryGetValue(id, out var vendor) ? vendor * qty : (decimal?)null)
-                ]);
-                route = best switch
-                {
-                    AcquisitionSource.VendorBuy => TradeMaterialRoute.Vendor,
-                    AcquisitionSource.MarketBuyNq => TradeMaterialRoute.Market,
-                    AcquisitionSource.Craft => TradeMaterialRoute.Craft,
-                    _ => craftable ? TradeMaterialRoute.Craft : TradeMaterialRoute.Market
-                };
+                    (TradeMaterialRoute.Craft, AcquisitionDefaultRule.TieBreak(AcquisitionSource.Craft), craft),
+                    (TradeMaterialRoute.Market, AcquisitionDefaultRule.TieBreak(AcquisitionSource.MarketBuyNq),
+                        quote.Listed >= qty ? quote.Unit * qty : null),
+                    (TradeMaterialRoute.MarketVendor, AcquisitionDefaultRule.MarketWithVendorTopUpTieBreak,
+                        quote.Blend is { IsMixed: true } blend ? blend.Buy.Total : null),
+                    (TradeMaterialRoute.Vendor, AcquisitionDefaultRule.TieBreak(AcquisitionSource.VendorBuy),
+                        _vendors.TryGetValue(id, out var vendor) ? vendor * qty : null)
+                ]) ?? (craftable ? TradeMaterialRoute.Craft : TradeMaterialRoute.Market);
             }
 
             routes[id] = route;
@@ -629,11 +632,12 @@ public sealed class TradeMarginBasis
         return new(result, routes, explicitChoices);
     }
 
-    private static bool IsUsable(TradeMaterialSource choice, bool craftable) => choice.Route switch
+    private bool IsUsable(int id, TradeMaterialSource choice, bool craftable) => choice.Route switch
     {
         TradeMaterialRoute.Craft => craftable,
         TradeMaterialRoute.SetPrice => choice.UnitPrice is >= 0,
         TradeMaterialRoute.Market or TradeMaterialRoute.Vendor => true,
+        TradeMaterialRoute.MarketVendor => _vendors.ContainsKey(id),
         _ => false
     };
 
@@ -642,6 +646,7 @@ public sealed class TradeMarginBasis
         {
             TradeMaterialRoute.Market => (await QuoteAsync(id, qty, ct)).Unit * qty,
             TradeMaterialRoute.Vendor => _vendors.TryGetValue(id, out var vendor) ? vendor * qty : null,
+            TradeMaterialRoute.MarketVendor => (await QuoteAsync(id, qty, ct)).Blend?.Buy.Total,
             TradeMaterialRoute.SetPrice => sources.GetValueOrDefault(id)?.UnitPrice * (decimal)qty,
             _ => null
         };
@@ -669,6 +674,17 @@ public sealed class TradeMarginBasis
         }
 
         options.Add(await MarketOptionAsync(id, qty, ct));
+        // Offered when the cheapest one-world buy needs both sources: when listings below the
+        // vendor price cover the run it is a market-only buy, which Market already prices. A
+        // company that chose it keeps it on every row, priced as its one-source degenerate.
+        if ((await QuoteAsync(id, qty, ct)).Blend is { } blend &&
+            (blend.IsMixed || routes.GetValueOrDefault(id) == TradeMaterialRoute.MarketVendor))
+        {
+            options.Add(new(TradeMaterialRoute.MarketVendor, blend.Buy.Total, RequiredQuantity: qty,
+                ObservedAtUtc: blend.Buy.MarketQuantity > 0 ? blend.Oldest : null, UnitPrice: blend.Buy.UnitPrice,
+                WorldName: blend.World, DataCenter: blend.DataCenter, VendorQuantity: blend.Buy.VendorQuantity));
+        }
+
         if (_vendors.TryGetValue(id, out var vendor))
         {
             options.Add(new(TradeMaterialRoute.Vendor, vendor * qty, UnitPrice: vendor));
@@ -699,20 +715,25 @@ public sealed class TradeMarginBasis
         }
     }
 
-    /// <param name="VendorUnits">Units of the quantity the vendor fills once listings reach its price.</param>
+    /// <param name="Blend">The Market + vendor buy; null when no NPC vendor sells the material.</param>
     private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge,
-        string? World = null, string? DataCenter = null, int VendorUnits = 0)
+        string? World = null, string? DataCenter = null, VendorBlend? Blend = null);
+
+    /// <summary>
+    /// Listings below the vendor price on one world, cheapest first, and the rest from the vendor
+    /// (<see cref="VendorCappedLadder"/>). With no listing below the vendor price anywhere it is
+    /// the vendor alone. The age is the buy world's listings'.
+    /// </summary>
+    private sealed record VendorBlend(VendorCappedLadder.Buy Buy, string? World, string? DataCenter, DateTime? Oldest, bool UnknownAge)
     {
-        /// <summary>Listings, topped up from the vendor when it sells the item, fill <paramref name="quantity"/>.</summary>
-        public bool Covers(int quantity) => VendorUnits > 0 || Listed >= quantity;
+        /// <summary>Both sources are used, so it differs from a market-only and a vendor-only buy.</summary>
+        public bool IsMixed => Buy.MarketQuantity > 0 && Buy.VendorQuantity > 0;
     }
 
     /// <summary>
     /// The market route for <paramref name="quantity"/> units. Listings that cannot cover the
     /// whole quantity still give a directional unit price, so a material with no other route
     /// keeps a figure; such a route is never chosen as a default over another priced route.
-    /// A material an NPC vendor sells buys only listings below the vendor price, on one world,
-    /// and the vendor fills the rest (<see cref="VendorCappedLadder"/>); that route always covers.
     /// </summary>
     private async Task<MarketQuote> QuoteAsync(int id, int quantity, CancellationToken ct)
     {
@@ -728,8 +749,11 @@ public sealed class TradeMarginBasis
         decimal? unit = null;
         DateTime? oldest = null;
         var unknownAge = false;
-        var vendorUnits = 0;
         string? buyWorld = null, buyDataCenter = null;
+        // Materials only: the sold item's own buy is priced elsewhere.
+        var vendor = id != RootId && _vendors.TryGetValue(id, out var vendorPrice) && vendorPrice > 0 ? vendorPrice : (decimal?)null;
+        var blend = vendor is { } vendorOnly
+            ? new VendorBlend(new(0, quantity, 0, vendorOnly), null, null, null, false) : null;
         if (listings.Length > 0)
         {
             var analysis = (await new MarketPriceLadderAnalysisService().AnalyzeAsync(new MarketAnalysisRequest
@@ -739,22 +763,17 @@ public sealed class TradeMarginBasis
             }, ct: ct)).Single(entry => entry.ItemId == id);
             // One analysis is tens of milliseconds of listing work; let the page render between them.
             await MainThreadYield.Async(ct);
-            var worlds = entries.SelectMany(entry => entry.Worlds.Select(world => (entry, world)));
-            var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
-            // Nobody pays above an NPC vendor for what it sells without limit: a material's market
-            // buy stops at the vendor price on its one buy world, and the vendor fills the rest.
-            var capped = id != RootId && _vendors.TryGetValue(id, out var vendor)
-                ? VendorCappedLadder.BestWorld(analysis, quantity, vendor) : null;
-            if (capped is { } blend)
+            if (vendor is { } cap && VendorCappedLadder.BestWorld(analysis, quantity, cap) is { } capped)
             {
-                unit = blend.Buy.UnitPrice;
-                vendorUnits = blend.Buy.VendorQuantity;
-                worlds = worlds.Where(pair => pair.entry.DataCenter == blend.World.DataCenter && pair.world.WorldName == blend.World.WorldName);
-                (buyWorld, buyDataCenter) = (blend.World.WorldName, blend.World.DataCenter);
+                var (blendOldest, blendUnknown) = Age(entries, capped.World.DataCenter, capped.World.WorldName);
+                blend = new(capped.Buy, capped.World.WorldName, capped.World.DataCenter, blendOldest, blendUnknown);
             }
-            else if (price > 0)
+
+            var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
+            if (price > 0)
             {
                 unit = price;
+                var worlds = entries.SelectMany(entry => entry.Worlds.Select(world => (entry, world)));
                 if (analysis.CostToCoverUnitPrice > 0)
                 {
                     // Margins is per unit sold across repeated production, so a purchase costs what
@@ -776,10 +795,6 @@ public sealed class TradeMarginBasis
                     worlds = worlds.Where(pair => pair.entry.DataCenter == selected.DataCenter && pair.world.WorldName == selected.WorldName);
                     (buyWorld, buyDataCenter) = (selected.WorldName, selected.DataCenter);
                 }
-            }
-
-            if (unit != null)
-            {
                 var contributing = worlds.Where(pair => pair.world.Listings.Count > 0).ToArray();
                 unknownAge = contributing.Length == 0;
                 foreach (var (entry, world) in contributing)
@@ -792,8 +807,26 @@ public sealed class TradeMarginBasis
             }
         }
 
-        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter, vendorUnits);
+        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter, blend);
         _quotes[(id, quantity)] = quote;
         return quote;
+    }
+
+    /// <summary>The oldest upload among one world's listings, aged the way the market route ages its buy world.</summary>
+    private static (DateTime? Oldest, bool UnknownAge) Age(IEnumerable<CachedMarketData> entries, string dataCenter, string worldName)
+    {
+        var stamps = entries.Where(entry => entry.DataCenter == dataCenter)
+            .SelectMany(entry => entry.Worlds.Where(world => world.WorldName == worldName && world.Listings.Count > 0)
+                .Select(world => world.LastUploadTimeUnixMilliseconds ?? entry.LastUploadTimeUnixMilliseconds))
+            .ToArray();
+        DateTime? oldest = null;
+        var unknown = stamps.Length == 0;
+        foreach (var stamp in stamps)
+        {
+            if (stamp is not > 0) { unknown = true; continue; }
+            var time = DateTimeOffset.FromUnixTimeMilliseconds(stamp.Value).UtcDateTime;
+            oldest = oldest == null || time < oldest ? time : oldest;
+        }
+        return (oldest, unknown);
     }
 }

@@ -330,7 +330,8 @@
                 {
                     @unit.ToString("N0")
                     @if (route == TradeMaterialRoute.Market && market is { IsShortOfListings: true }) { <span class="sub short-listed">@ShortOfListings(market)</span> }
-                    else if (route == TradeMaterialRoute.Market && MarketBasis(market) is { Length: > 0 } basis) { <span class="sub" title="@VendorSplit(market!, breakdown)">@basis</span> }
+                    else if (route == TradeMaterialRoute.Market && MarketBasis(market) is { Length: > 0 } basis) { <span class="sub">@basis</span> }
+                    else if (route == TradeMaterialRoute.MarketVendor && line.Chosen is { } blend && BlendBasis(blend) is { Length: > 0 } blendBasis) { <span class="sub" title="@VendorSplit(blend, breakdown)">@blendBasis</span> }
                 }
                 else
                 {
@@ -369,18 +370,17 @@
                     ? $"Commission · {scope.Region}" : $"Commission · {scope.DataCenter}";
         }
     }
-    /// <summary>
-    /// The world a market price was taken from and the age of its listings, marked when the
-    /// vendor fills part of the quantity (that part has no price age).
-    /// </summary>
+    /// <summary>The world a market price was taken from and the age of its listings.</summary>
     private static string MarketBasis(TradeMarginRouteOption? market) => market == null ? "" :
         string.Join(" · ", new[] { market.BuyAt, market.ObservedAtUtc is { } observed ? RelativeAge(observed) : null }
-            .Where(part => !string.IsNullOrWhiteSpace(part))) + (market.VendorQuantity > 0 ? " + vendor" : "");
-    /// <summary>How a market line's quantity splits between listings and the vendor, per unit sold.</summary>
-    private static string? VendorSplit(TradeMarginRouteOption market, TradeMarginBreakdown breakdown) =>
-        market.VendorQuantity > 0
-            ? $"{PerUnit(market.MarketQuantity, breakdown)} market · {PerUnit(market.VendorQuantity, breakdown)} vendor"
-            : null;
+            .Where(part => !string.IsNullOrWhiteSpace(part)));
+    /// <summary>A Market + vendor line's listing basis, marked for the vendor part, which has no age.</summary>
+    private static string BlendBasis(TradeMarginRouteOption blend) =>
+        string.Join(" ", new[] { MarketBasis(blend), blend.VendorQuantity > 0 ? "+ vendor" : null }
+            .Where(part => !string.IsNullOrWhiteSpace(part)));
+    /// <summary>How a Market + vendor line's quantity splits between listings and the vendor, per unit sold.</summary>
+    private static string VendorSplit(TradeMarginRouteOption blend, TradeMarginBreakdown breakdown) =>
+        $"{PerUnit(blend.MarketQuantity, breakdown)} market · {PerUnit(blend.VendorQuantity, breakdown)} vendor";
 
     /// <summary>
     /// Each line's cost per unit sold, rounded so the column adds up to the row's Total cost
@@ -427,8 +427,14 @@
                     items.Add(new(value, "Market", string.Join(" · ", new[]
                     {
                         option.ListingCount == 1 ? "1 listing" : $"{option.ListingCount:N0} listings",
-                        option.BuyAt, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null,
-                        VendorSplit(option, breakdown)
+                        option.BuyAt, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null
+                    }.Where(part => !string.IsNullOrWhiteSpace(part))), Amount(option.Total)));
+                    break;
+                case TradeMaterialRoute.MarketVendor:
+                    items.Add(new(value, "Market + vendor", string.Join(" · ", new[]
+                    {
+                        VendorSplit(option, breakdown), option.BuyAt,
+                        option.ObservedAtUtc is { } blendObserved ? RelativeAge(blendObserved) : null
                     }.Where(part => !string.IsNullOrWhiteSpace(part))), Amount(option.Total)));
                     break;
                 case TradeMaterialRoute.Vendor:

@@ -62,7 +62,9 @@ public enum TradeMaterialRoute
     Craft = 0,
     Market = 1,
     Vendor = 2,
-    SetPrice = 3
+    SetPrice = 3,
+    /// <summary>Market listings below the NPC vendor price on one world, the rest from the vendor.</summary>
+    MarketVendor = 4
 }
 
 /// <summary>

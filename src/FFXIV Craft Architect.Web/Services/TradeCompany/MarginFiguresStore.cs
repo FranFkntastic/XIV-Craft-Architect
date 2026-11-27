@@ -18,8 +18,8 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     private const string Prefix = "margins.figures.";
     // v2: keyed by mode and carrying the root market buy; v1 records are dropped on read.
     // v3: carries the root item's NPC vendor price; v2 records are dropped on read.
-    // v4: same shape; materials a vendor sells now buy only listings below its price, so v3
-    // figures overstate them and are dropped on read.
+    // v4: same shape; a material a vendor sells can now default to Market + vendor, so v3
+    // figures may overstate it and are dropped on read.
     private const int RecordVersion = 4;
     private readonly Dictionary<string, string> _pending = [];
     private readonly Dictionary<string, string> _written = [];
