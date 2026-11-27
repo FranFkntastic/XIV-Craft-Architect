@@ -56,13 +56,21 @@ public sealed class TradeMarginPricing
     public IReadOnlyDictionary<int, TradeMaterialSource> Sources { get; }
 }
 
-/// <summary>One route for a material line, priced for the line's whole quantity.</summary>
+/// <summary>
+/// One route for a material line, priced for the line's whole quantity. A market route for an
+/// item an NPC vendor sells buys <see cref="VendorQuantity"/> of it from the vendor, where the
+/// listings reach the vendor price.
+/// </summary>
 public sealed record TradeMarginRouteOption(
     TradeMaterialRoute Route, decimal? Total, decimal? Materials = null, int Synths = 0,
     int ListingCount = 0, int ListedQuantity = 0, int RequiredQuantity = 0, DateTime? ObservedAtUtc = null,
-    decimal? UnitPrice = null, IReadOnlyList<string>? Missing = null, string? WorldName = null, string? DataCenter = null)
+    decimal? UnitPrice = null, IReadOnlyList<string>? Missing = null, string? WorldName = null, string? DataCenter = null,
+    int VendorQuantity = 0)
 {
-    public bool IsShortOfListings => Route == TradeMaterialRoute.Market && ListedQuantity < RequiredQuantity;
+    public bool IsShortOfListings => Route == TradeMaterialRoute.Market && VendorQuantity == 0 && ListedQuantity < RequiredQuantity;
+
+    /// <summary>Units a market route buys from listings; the rest of the quantity comes from the vendor.</summary>
+    public int MarketQuantity => RequiredQuantity - VendorQuantity;
 
     /// <summary>The one world a market price was taken from, as <c>World (Data center)</c>; null when none was selected.</summary>
     public string? BuyAt => string.IsNullOrWhiteSpace(WorldName) ? null
@@ -472,7 +480,7 @@ public sealed class TradeMarginBasis
         var quote = await QuoteAsync(id, qty, ct);
         return new(TradeMaterialRoute.Market, quote.Unit * qty, ListingCount: quote.ListingCount,
             ListedQuantity: quote.Listed, RequiredQuantity: qty, ObservedAtUtc: quote.Oldest, UnitPrice: quote.Unit,
-            WorldName: quote.World, DataCenter: quote.DataCenter);
+            WorldName: quote.World, DataCenter: quote.DataCenter, VendorQuantity: quote.VendorUnits);
     }
 
     internal async Task<TradeMarginBreakdown> DescribeAsync(TradeMarginPricing pricing, CancellationToken ct)
@@ -590,7 +598,7 @@ public sealed class TradeMarginBasis
                 var best = AcquisitionDefaultRule.Cheapest(
                 [
                     (AcquisitionSource.Craft, craft),
-                    (AcquisitionSource.MarketBuyNq, quote.Listed >= qty ? quote.Unit * qty : null),
+                    (AcquisitionSource.MarketBuyNq, quote.Covers(qty) ? quote.Unit * qty : null),
                     (AcquisitionSource.VendorBuy, _vendors.TryGetValue(id, out var vendor) ? vendor * qty : (decimal?)null)
                 ]);
                 route = best switch
@@ -691,13 +699,20 @@ public sealed class TradeMarginBasis
         }
     }
 
+    /// <param name="VendorUnits">Units of the quantity the vendor fills once listings reach its price.</param>
     private sealed record MarketQuote(decimal? Unit, int Listed, int ListingCount, DateTime? Oldest, bool UnknownAge,
-        string? World = null, string? DataCenter = null);
+        string? World = null, string? DataCenter = null, int VendorUnits = 0)
+    {
+        /// <summary>Listings, topped up from the vendor when it sells the item, fill <paramref name="quantity"/>.</summary>
+        public bool Covers(int quantity) => VendorUnits > 0 || Listed >= quantity;
+    }
 
     /// <summary>
     /// The market route for <paramref name="quantity"/> units. Listings that cannot cover the
     /// whole quantity still give a directional unit price, so a material with no other route
     /// keeps a figure; such a route is never chosen as a default over another priced route.
+    /// A material an NPC vendor sells buys only listings below the vendor price, on one world,
+    /// and the vendor fills the rest (<see cref="VendorCappedLadder"/>); that route always covers.
     /// </summary>
     private async Task<MarketQuote> QuoteAsync(int id, int quantity, CancellationToken ct)
     {
@@ -713,6 +728,7 @@ public sealed class TradeMarginBasis
         decimal? unit = null;
         DateTime? oldest = null;
         var unknownAge = false;
+        var vendorUnits = 0;
         string? buyWorld = null, buyDataCenter = null;
         if (listings.Length > 0)
         {
@@ -723,11 +739,22 @@ public sealed class TradeMarginBasis
             }, ct: ct)).Single(entry => entry.ItemId == id);
             // One analysis is tens of milliseconds of listing work; let the page render between them.
             await MainThreadYield.Async(ct);
+            var worlds = entries.SelectMany(entry => entry.Worlds.Select(world => (entry, world)));
             var price = CommissionCostBasisResolver.GetReferenceUnitCost(analysis);
-            if (price > 0)
+            // Nobody pays above an NPC vendor for what it sells without limit: a material's market
+            // buy stops at the vendor price on its one buy world, and the vendor fills the rest.
+            var capped = id != RootId && _vendors.TryGetValue(id, out var vendor)
+                ? VendorCappedLadder.BestWorld(analysis, quantity, vendor) : null;
+            if (capped is { } blend)
+            {
+                unit = blend.Buy.UnitPrice;
+                vendorUnits = blend.Buy.VendorQuantity;
+                worlds = worlds.Where(pair => pair.entry.DataCenter == blend.World.DataCenter && pair.world.WorldName == blend.World.WorldName);
+                (buyWorld, buyDataCenter) = (blend.World.WorldName, blend.World.DataCenter);
+            }
+            else if (price > 0)
             {
                 unit = price;
-                var worlds = entries.SelectMany(entry => entry.Worlds.Select(world => (entry, world)));
                 if (analysis.CostToCoverUnitPrice > 0)
                 {
                     // Margins is per unit sold across repeated production, so a purchase costs what
@@ -749,6 +776,10 @@ public sealed class TradeMarginBasis
                     worlds = worlds.Where(pair => pair.entry.DataCenter == selected.DataCenter && pair.world.WorldName == selected.WorldName);
                     (buyWorld, buyDataCenter) = (selected.WorldName, selected.DataCenter);
                 }
+            }
+
+            if (unit != null)
+            {
                 var contributing = worlds.Where(pair => pair.world.Listings.Count > 0).ToArray();
                 unknownAge = contributing.Length == 0;
                 foreach (var (entry, world) in contributing)
@@ -761,7 +792,7 @@ public sealed class TradeMarginBasis
             }
         }
 
-        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter);
+        var quote = new MarketQuote(unit, listed, listings.Length, oldest, unknownAge, buyWorld, buyDataCenter, vendorUnits);
         _quotes[(id, quantity)] = quote;
         return quote;
     }

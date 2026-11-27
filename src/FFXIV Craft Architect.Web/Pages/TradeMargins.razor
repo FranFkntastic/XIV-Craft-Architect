@@ -330,7 +330,7 @@
                 {
                     @unit.ToString("N0")
                     @if (route == TradeMaterialRoute.Market && market is { IsShortOfListings: true }) { <span class="sub short-listed">@ShortOfListings(market)</span> }
-                    else if (route == TradeMaterialRoute.Market && MarketBasis(market) is { Length: > 0 } basis) { <span class="sub">@basis</span> }
+                    else if (route == TradeMaterialRoute.Market && MarketBasis(market) is { Length: > 0 } basis) { <span class="sub" title="@VendorSplit(market!, breakdown)">@basis</span> }
                 }
                 else
                 {
@@ -345,8 +345,9 @@
         line.Route == TradeMaterialRoute.SetPrice ? line.Chosen?.UnitPrice : null;
     private TradeMaterialRoute DisplayedRoute(TradeMarginLine line) =>
         _pendingSetPrice.Contains(line.ItemId) ? TradeMaterialRoute.SetPrice : line.Route;
-    private static string Quantity(TradeMarginLine line, TradeMarginBreakdown breakdown) =>
-        ((decimal)line.Quantity / breakdown.Units).ToString(breakdown.Units > 1 ? "#,0.##" : "N0", CultureInfo.InvariantCulture);
+    private static string Quantity(TradeMarginLine line, TradeMarginBreakdown breakdown) => PerUnit(line.Quantity, breakdown);
+    private static string PerUnit(int quantity, TradeMarginBreakdown breakdown) =>
+        ((decimal)quantity / breakdown.Units).ToString(breakdown.Units > 1 ? "#,0.##" : "N0", CultureInfo.InvariantCulture);
     private static string Synths(TradeMarginLine line, TradeMarginBreakdown breakdown) => SynthCount(line.Synths, breakdown.Units);
     // Synths are counted for the whole run, so a run of several units names how many it makes.
     private static string SynthCount(int synths, int units) =>
@@ -368,10 +369,18 @@
                     ? $"Commission · {scope.Region}" : $"Commission · {scope.DataCenter}";
         }
     }
-    /// <summary>The world a market price was taken from and the age of its listings.</summary>
+    /// <summary>
+    /// The world a market price was taken from and the age of its listings, marked when the
+    /// vendor fills part of the quantity (that part has no price age).
+    /// </summary>
     private static string MarketBasis(TradeMarginRouteOption? market) => market == null ? "" :
         string.Join(" · ", new[] { market.BuyAt, market.ObservedAtUtc is { } observed ? RelativeAge(observed) : null }
-            .Where(part => !string.IsNullOrWhiteSpace(part)));
+            .Where(part => !string.IsNullOrWhiteSpace(part))) + (market.VendorQuantity > 0 ? " + vendor" : "");
+    /// <summary>How a market line's quantity splits between listings and the vendor, per unit sold.</summary>
+    private static string? VendorSplit(TradeMarginRouteOption market, TradeMarginBreakdown breakdown) =>
+        market.VendorQuantity > 0
+            ? $"{PerUnit(market.MarketQuantity, breakdown)} market · {PerUnit(market.VendorQuantity, breakdown)} vendor"
+            : null;
 
     /// <summary>
     /// Each line's cost per unit sold, rounded so the column adds up to the row's Total cost
@@ -418,7 +427,8 @@
                     items.Add(new(value, "Market", string.Join(" · ", new[]
                     {
                         option.ListingCount == 1 ? "1 listing" : $"{option.ListingCount:N0} listings",
-                        option.BuyAt, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null
+                        option.BuyAt, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null,
+                        VendorSplit(option, breakdown)
                     }.Where(part => !string.IsNullOrWhiteSpace(part))), Amount(option.Total)));
                     break;
                 case TradeMaterialRoute.Vendor:
