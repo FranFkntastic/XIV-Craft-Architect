@@ -96,6 +96,165 @@ public static class MarketCoverageBuilder
         return CreateOption(plan, tier, qualityPolicy, isDefaultEligible: false, selected);
     }
 
+    /// <summary>
+    /// Buys the plan's quantity from listings priced strictly below <paramref name="priceCeiling"/>
+    /// on at most <paramref name="maxWorlds"/> worlds, whole listings cheapest first, leaving the
+    /// rest to a source priced at the ceiling (an NPC vendor, or commissioning the units). The
+    /// worlds are chosen to minimize the listings' cost plus the rest at the ceiling, where each
+    /// world's units cost <see cref="CostOfUnitsUsed"/>. An exact choice of worlds is
+    /// combinatorial, so two heuristics run and the cheaper wins: forward selection, which adds
+    /// the world that lowers that total most until no world helps or the limit is reached, and
+    /// the cheapest-listings-first walk over every world that <see cref="BuildBoundedSplit"/> uses.
+    /// With one world allowed, forward selection is exact. Null when no listing is below the ceiling.
+    /// </summary>
+    public static MarketCoverageFill? BuildCappedFill(
+        DetailedShoppingPlan plan,
+        int maxWorlds,
+        decimal priceCeiling,
+        MarketCoverageQualityPolicy qualityPolicy = MarketCoverageQualityPolicy.NqOrHq)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        var quantity = plan.QuantityNeeded;
+        if (quantity <= 0 || maxWorlds < 1 || priceCeiling <= 0)
+        {
+            return null;
+        }
+
+        var ordered = EnumerateMarketListings(plan, qualityPolicy)
+            .Where(listing => listing.PricePerUnit < priceCeiling)
+            .ToList();
+        if (ordered.Count == 0)
+        {
+            return null;
+        }
+
+        // Exactly how the fill is priced: each world's units used at that world's bought-listing
+        // average, plus the rest at the ceiling.
+        decimal Total(List<MarketCoverageListing> selected)
+        {
+            var covered = 0;
+            decimal cost = 0;
+            foreach (var world in ToWorlds(selected))
+            {
+                covered += world.QuantityCovered;
+                cost += CostOfUnitsUsed(world.QuantityCovered, world.QuantityToPurchase, world.CashOutCost);
+            }
+            return cost + (quantity - covered) * priceCeiling;
+        }
+
+        // Each world's listings keep the global cheapest-first order.
+        var worlds = ordered
+            .GroupBy(listing => (listing.DataCenter, listing.WorldName))
+            .Select(group => group.ToList())
+            .ToList();
+        var chosen = new List<MarketCoverageListing>();
+        var used = new bool[worlds.Count];
+        var best = new List<MarketCoverageListing>();
+        var bestTotal = quantity * priceCeiling;
+        for (var step = 0; step < maxWorlds; step++)
+        {
+            (int World, List<MarketCoverageListing> Merged, List<MarketCoverageListing> Selected, decimal Total)? next = null;
+            for (var index = 0; index < worlds.Count; index++)
+            {
+                if (used[index])
+                {
+                    continue;
+                }
+
+                var merged = Merge(chosen, worlds[index]);
+                var selected = Walk(merged, quantity, maxWorlds: null, out _);
+                var total = Total(selected);
+                if (next == null || total < next.Value.Total)
+                {
+                    next = (index, merged, selected, total);
+                }
+            }
+
+            if (next is not { } add || add.Total >= bestTotal)
+            {
+                break;
+            }
+
+            used[add.World] = true;
+            chosen = add.Merged;
+            best = add.Selected;
+            bestTotal = add.Total;
+        }
+
+        var walked = Walk(ordered, quantity, maxWorlds, out _);
+        if (Total(walked) < bestTotal)
+        {
+            best = walked;
+        }
+
+        if (best.Count == 0)
+        {
+            return null;
+        }
+
+        var coverageWorlds = ToWorlds(best);
+        return new MarketCoverageFill(
+            quantity,
+            coverageWorlds.Sum(world => world.QuantityCovered),
+            coverageWorlds.Sum(world => world.QuantityToPurchase),
+            coverageWorlds.Sum(world => world.CashOutCost),
+            coverageWorlds);
+    }
+
+    /// <summary>
+    /// What the units used from one world cost when each unit is charged its bought listings'
+    /// average price: units used × (cash for every unit bought ÷ units bought). Costing per unit
+    /// keeps a 999-stack bought for five units from costing as if it were five units' worth.
+    /// </summary>
+    public static decimal CostOfUnitsUsed(int used, int purchased, decimal cash) =>
+        purchased > 0 ? used * cash / purchased : cash;
+
+    private static List<MarketCoverageWorld> ToWorlds(IEnumerable<MarketCoverageListing> listings) => listings
+        .GroupBy(listing => (listing.DataCenter, listing.WorldName))
+        .Select(group => new MarketCoverageWorld(
+            group.Key.DataCenter,
+            group.Key.WorldName,
+            group.Sum(listing => listing.QuantityUsed),
+            group.Sum(listing => listing.QuantityPurchased),
+            group.Sum(listing => listing.QuantityUsed * listing.PricePerUnit),
+            group.Sum(listing => listing.QuantityPurchased * listing.PricePerUnit)))
+        .ToList();
+
+    /// <summary>Two cheapest-first listing sequences as one, in the same order as <see cref="EnumerateMarketListings"/>.</summary>
+    private static List<MarketCoverageListing> Merge(List<MarketCoverageListing> left, List<MarketCoverageListing> right)
+    {
+        var merged = new List<MarketCoverageListing>(left.Count + right.Count);
+        int i = 0, j = 0;
+        while (i < left.Count || j < right.Count)
+        {
+            if (j >= right.Count || i < left.Count && CompareListings(left[i], right[j]) <= 0)
+            {
+                merged.Add(left[i++]);
+            }
+            else
+            {
+                merged.Add(right[j++]);
+            }
+        }
+        return merged;
+    }
+
+    private static int CompareListings(MarketCoverageListing left, MarketCoverageListing right)
+    {
+        var comparison = left.PricePerUnit.CompareTo(right.PricePerUnit);
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+        comparison = right.QuantityAvailable.CompareTo(left.QuantityAvailable);
+        if (comparison != 0)
+        {
+            return comparison;
+        }
+        comparison = Comparer<string>.Default.Compare(left.DataCenter, right.DataCenter);
+        return comparison != 0 ? comparison : Comparer<string>.Default.Compare(left.WorldName, right.WorldName);
+    }
+
     private static IEnumerable<MarketCoverageOption> BuildSingleWorldCandidates(
         DetailedShoppingPlan plan,
         MarketCoverageQualityPolicy qualityPolicy)
@@ -227,8 +386,29 @@ public static class MarketCoverageBuilder
         IReadOnlyList<MarketCoverageListing> orderedListings,
         out List<MarketCoverageListing> selectedListings)
     {
-        selectedListings = [];
-        var remaining = plan.QuantityNeeded;
+        selectedListings = Walk(orderedListings, plan.QuantityNeeded, maxWorlds, out var remaining);
+        if (remaining <= 0)
+        {
+            return true;
+        }
+
+        selectedListings.Clear();
+        return false;
+    }
+
+    /// <summary>
+    /// Whole listings in the given order until <paramref name="quantity"/> is covered, skipping
+    /// listings on a new world once <paramref name="maxWorlds"/> worlds are in use; what is still
+    /// needed when the listings run out is returned in <paramref name="remaining"/>.
+    /// </summary>
+    private static List<MarketCoverageListing> Walk(
+        IReadOnlyList<MarketCoverageListing> orderedListings,
+        int quantity,
+        int? maxWorlds,
+        out int remaining)
+    {
+        var selectedListings = new List<MarketCoverageListing>();
+        remaining = quantity;
         var selectedWorlds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var listing in orderedListings)
@@ -251,12 +431,11 @@ public static class MarketCoverageBuilder
             remaining -= used;
             if (remaining <= 0)
             {
-                return true;
+                break;
             }
         }
 
-        selectedListings.Clear();
-        return false;
+        return selectedListings;
     }
 
     private static List<MarketCoverageListing> EnumerateMarketListings(

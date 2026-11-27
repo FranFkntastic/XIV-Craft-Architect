@@ -41,6 +41,17 @@ public sealed record MarketCoverageWorld(
     decimal ExactNeededCost,
     decimal CashOutCost);
 
+/// <summary>
+/// A purchase that may cover only part of <see cref="QuantityNeeded"/>: the listings bought, as
+/// whole listings, and their worlds. <see cref="CashOutCost"/> is the gil for every unit bought.
+/// </summary>
+public sealed record MarketCoverageFill(
+    int QuantityNeeded,
+    int QuantityCovered,
+    int QuantityPurchased,
+    decimal CashOutCost,
+    IReadOnlyList<MarketCoverageWorld> Worlds);
+
 public sealed record MarketCoverageListing(
     string DataCenter,
     string WorldName,
