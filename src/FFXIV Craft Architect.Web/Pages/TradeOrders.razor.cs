@@ -86,6 +86,7 @@ public partial class TradeOrders
     private bool _selectedOrderPlanRestoreRetryRequested;
     private int _selectedOrderPlanRestoreStaleRetryCount;
     private string? _selectedOrderPlanRestoreError;
+    private SelectedOrderPlanRestoreErrorKind _selectedOrderPlanRestoreErrorKind;
     private long _selectedOrderPlanRestoreGeneration;
     private CancellationTokenSource? _selectedOrderPlanRestoreCancellation;
     private CancellationTokenSource? _selectedCommissionOwnerRefreshCancellation;

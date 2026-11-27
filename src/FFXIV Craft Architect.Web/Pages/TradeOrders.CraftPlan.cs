@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json;
 
 using FFXIV_Craft_Architect.Core.Helpers;
 using FFXIV_Craft_Architect.Core.Models;
@@ -708,9 +710,27 @@ public partial class TradeOrders
         }
     }
 
+    private enum ActivePlanSaveMode
+    {
+        /// <summary>Ask the user to name an unsaved active plan.</summary>
+        PromptForName,
+
+        /// <summary>
+        /// Save an unsaved active plan under a generated name without a dialog. Used by order-plan
+        /// restore/open, which can run automatically and must never pop a dialog.
+        /// </summary>
+        AutoName
+    }
+
+    // The Worker session keeps an empty PlanId after an export, so remember what was auto-saved:
+    // repeated restore attempts against the same unsaved session must not create more saved plans.
+    private StoredPlan? _autoPreservedScratchPlan;
+    private Task<bool>? _autoPreserveScratchPlanInFlight;
+
     private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync(
         string actionLabel,
-        string? targetPlanId)
+        string? targetPlanId,
+        ActivePlanSaveMode mode = ActivePlanSaveMode.PromptForName)
     {
         if (!WorkerProjections.Shell.HasSession ||
             string.Equals(
@@ -721,10 +741,11 @@ public partial class TradeOrders
             return true;
         }
 
-        return await SaveActiveCraftPlanBeforeTradeActionAsync();
+        return await SaveActiveCraftPlanBeforeTradeActionAsync(mode);
     }
 
-    private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync()
+    private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync(
+        ActivePlanSaveMode mode = ActivePlanSaveMode.PromptForName)
     {
         if (!WorkerProjections.Shell.HasSession)
         {
@@ -736,6 +757,11 @@ public partial class TradeOrders
         var planName = WorkerProjections.Shell.PlanName;
         if (string.IsNullOrWhiteSpace(planId))
         {
+            if (mode == ActivePlanSaveMode.AutoName)
+            {
+                return await AutoPreserveScratchPlanAsync();
+            }
+
             var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save Plan");
             var result = await dialog.Result;
             if (result?.Data is not string newName || string.IsNullOrWhiteSpace(newName))
@@ -780,6 +806,79 @@ public partial class TradeOrders
         return true;
     }
 
+    private Task<bool> AutoPreserveScratchPlanAsync()
+    {
+        // Restores are rescheduled by retries and Worker broadcasts; overlapping attempts share one save.
+        if (_autoPreserveScratchPlanInFlight is { IsCompleted: false } inFlight)
+        {
+            return inFlight;
+        }
+
+        var task = AutoPreserveScratchPlanCoreAsync();
+        _autoPreserveScratchPlanInFlight = task;
+        return task;
+    }
+
+    private async Task<bool> AutoPreserveScratchPlanCoreAsync()
+    {
+        try
+        {
+            if (_autoPreservedScratchPlan is { } prior)
+            {
+                var current = await WorkerSession.ExportStoredPlanAsync(
+                    prior.Id,
+                    prior.Name,
+                    includeSourcePlanIdentity: true);
+                if (current != null &&
+                    WebPlanPersistenceService.HasSameRevisionContent(prior, current))
+                {
+                    // An earlier attempt already saved this exact unsaved session.
+                    return true;
+                }
+            }
+
+            var planName =
+                $"Unsaved plan \u00b7 {DateTime.Now.ToString("MMM d HH:mm", CultureInfo.InvariantCulture)}";
+            var snapshot = await WorkerSession.ExportStoredPlanAsync(
+                Guid.NewGuid().ToString("D"),
+                planName,
+                includeSourcePlanIdentity: true);
+            if (snapshot == null)
+            {
+                Snackbar.Add(
+                    "Couldn't save your unsaved plan: the planner returned no plan to save.",
+                    Severity.Error);
+                return false;
+            }
+
+            var remembered = CloneStoredPlan(snapshot);
+            var preservation = await PlanPersistence.PreserveBeforeReplacementAsync(snapshot);
+            if (!preservation.Success)
+            {
+                Snackbar.Add(
+                    "Couldn't save your unsaved plan: browser plan storage rejected the save.",
+                    Severity.Error);
+                return false;
+            }
+
+            _autoPreservedScratchPlan = remembered;
+            Snackbar.Add(
+                $"Saved your unsaved plan as '{preservation.PlanName}'",
+                Severity.Success);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Snackbar.Add($"Couldn't save your unsaved plan: {ex.Message}", Severity.Error);
+            Console.Error.WriteLine($"Unsaved plan auto-save failed: {ex}");
+            return false;
+        }
+    }
+
+    private static StoredPlan CloneStoredPlan(StoredPlan plan) =>
+        JsonSerializer.Deserialize<StoredPlan>(JsonSerializer.Serialize(plan))
+        ?? throw new InvalidOperationException("Stored plan copy failed.");
+
     private async Task<bool> LoadExactOrderPlanAsync(
         TradeOrder order,
         string actionLabel)
@@ -810,15 +909,6 @@ public partial class TradeOrders
                 return false;
             }
 
-            if (WorkerProjections.Shell.HasSession &&
-                string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
-            {
-                Snackbar.Add(
-                    "Your unsaved active plan is being preserved. Save or discard it before opening this order's plan.",
-                    Severity.Warning);
-                return false;
-            }
-
             if (IsSelectedOrderLinkedPlanActive())
             {
                 return true;
@@ -826,7 +916,8 @@ public partial class TradeOrders
 
             var canReplaceActivePlan = await ConfirmActiveCraftPlanCanBeReplacedAsync(
                 actionLabel,
-                request.PlanId);
+                request.PlanId,
+                ActivePlanSaveMode.AutoName);
             cancellation.Token.ThrowIfCancellationRequested();
             if (!IsCurrentPlanRequest(request, requiredTab))
             {
@@ -867,7 +958,7 @@ public partial class TradeOrders
                 read.Payload,
                 requiredTab,
                 cancellation.Token,
-                SaveActiveCraftPlanBeforeTradeActionAsync);
+                () => SaveActiveCraftPlanBeforeTradeActionAsync(ActivePlanSaveMode.AutoName));
             return adoptedRequest.HasValue;
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
