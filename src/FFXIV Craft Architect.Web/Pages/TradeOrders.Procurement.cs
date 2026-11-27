@@ -396,9 +396,12 @@ public partial class TradeOrders
     }
 
     // Reconstruction replaces the order's linked plan, so only offer it when that plan itself
-    // can't be loaded, never for conflicts with the active planner session.
+    // can't be loaded (or failed unexpectedly, which may mean it's corrupt), never for conflicts
+    // with the active planner session.
     private bool SelectedOrderPlanRestoreOffersReconstruction =>
-        _selectedOrderPlanRestoreErrorKind == SelectedOrderPlanRestoreErrorKind.OrderPlanUnavailable &&
+        _selectedOrderPlanRestoreErrorKind is
+            SelectedOrderPlanRestoreErrorKind.OrderPlanUnavailable or
+            SelectedOrderPlanRestoreErrorKind.RestoreFailed &&
         CanBeginSelectedOrderPlanReconstruction;
 
     private void InvalidateSelectedOrderPlanRestoration()
