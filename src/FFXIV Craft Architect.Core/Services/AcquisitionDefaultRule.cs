@@ -10,14 +10,30 @@ namespace FFXIV_Craft_Architect.Core.Services;
 /// </summary>
 public static class AcquisitionDefaultRule
 {
+    /// <summary>
+    /// Tie-break for buying listings below the NPC vendor price and the rest from the vendor
+    /// (Trade Margins' Market + vendor route): after either single source, before crafting.
+    /// </summary>
+    public const int MarketWithVendorTopUpTieBreak = 3;
+
     /// <summary>The cheapest priced candidate; ties prefer vendor, then market, then craft.</summary>
     public static AcquisitionSource? Cheapest(IEnumerable<(AcquisitionSource Source, decimal? Cost)> candidates)
+    {
+        return Cheapest(candidates.Select(candidate => (candidate.Source, TieBreak(candidate.Source), candidate.Cost)));
+    }
+
+    /// <summary>
+    /// The cheapest priced candidate for a caller with its own route vocabulary; ties go to the
+    /// lower tie-break, taken from <see cref="TieBreak"/> or <see cref="MarketWithVendorTopUpTieBreak"/>.
+    /// </summary>
+    public static TRoute? Cheapest<TRoute>(IEnumerable<(TRoute Route, int TieBreak, decimal? Cost)> candidates)
+        where TRoute : struct
     {
         return candidates
             .Where(candidate => candidate.Cost.HasValue)
             .OrderBy(candidate => candidate.Cost!.Value)
-            .ThenBy(candidate => TieBreak(candidate.Source))
-            .Select(candidate => (AcquisitionSource?)candidate.Source)
+            .ThenBy(candidate => candidate.TieBreak)
+            .Select(candidate => (TRoute?)candidate.Route)
             .FirstOrDefault();
     }
 
@@ -37,8 +53,8 @@ public static class AcquisitionDefaultRule
             AcquisitionSource.VendorBuy => 0,
             AcquisitionSource.MarketBuyNq => 1,
             AcquisitionSource.MarketBuyHq => 2,
-            AcquisitionSource.Craft => 3,
-            _ => 4
+            AcquisitionSource.Craft => 4,
+            _ => 5
         };
     }
 }

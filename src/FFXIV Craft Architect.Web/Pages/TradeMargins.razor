@@ -148,7 +148,9 @@
     private const int ScopeFiguresLimit = 2000;
     private bool Refreshing => _forceFetch.Count > 0;
     private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
-    private TradeMarginPricing Pricing => new(Rate, _profile?.MaterialSources ?? []);
+    private TradeMarginPricing Pricing => new(Rate, _profile?.MaterialSources ?? [], _profile?.MaterialPricingPolicy);
+    /// <summary>The material pricing policy settings every market route depends on.</summary>
+    private string RouteKey => TradeMarginPricing.RouteKeyOf(_profile?.MaterialPricingPolicy);
     /// <summary>The market Margins prices from: whole regions, or the commission scope when none are chosen.</summary>
     private TradeMarginMarketScope? MarginScope => MarginScopeOf(_profile);
     private static TradeMarginMarketScope? MarginScopeOf(TradeCompanyProfile? profile) =>
@@ -180,7 +182,7 @@
         public TradeMarginCost? Cost { get; set; }
         public TradeMarginBreakdown? Breakdown { get; set; }
         /// <summary>The cost and pricing the breakdown was described for; a match re-expands without work.</summary>
-        public (TradeMarginCost Cost, decimal Rate, IReadOnlyList<TradeMaterialSource> Sources)? BreakdownFor { get; set; }
+        public (TradeMarginCost Cost, TradeMarginPricing Pricing)? BreakdownFor { get; set; }
         public TradeMarginCalculator.PreparedRow? Plan { get; set; }
         /// <summary>Market data this row is priced from, by item and data center.</summary>
         public Dictionary<(int itemId, string dataCenter), CachedMarketData>? Market { get; set; }
@@ -197,22 +199,18 @@
     private decimal? Labor(MarginRow row) => PerUnit(row, row.Cost?.Synths * Rate);
     private decimal? Total(MarginRow row) => Materials(row) is { } materials && Labor(row) is { } labor ? materials + labor : null;
     /// <summary>
-    /// Buying one unit at the live market: the whole-listing cost of the full run, per unit. Null
-    /// when the listings cannot cover the run, so no full-run price is ever made up.
+    /// Buying one unit live: the root buy plan for the full run, per unit. Units it commissions
+    /// cost exactly the row's commission cost, so they save nothing. Null when nothing can be
+    /// bought, so no full-run price is ever made up.
     /// </summary>
-    private static decimal? MarketBuyUnit(MarginRow row) =>
-        row.Cost?.MarketBuy is { IsShortOfListings: false, Total: { } total } ? total / Math.Max(1, row.Cost.Units) : null;
-    /// <summary>
-    /// The NPC vendor beats the market at a tie or when the market cannot cover the run: its
-    /// stock is unlimited and its price fixed.
-    /// </summary>
-    private static bool VendorWins(MarginRow row) =>
-        row.Cost?.RootVendorPrice is > 0 and var vendor && !(MarketBuyUnit(row) < vendor);
-    /// <summary>Buying one unit live: the cheaper of the NPC vendor and the full-run market price.</summary>
-    private static decimal? LiveBuy(MarginRow row) => VendorWins(row) ? row.Cost!.RootVendorPrice : MarketBuyUnit(row);
+    private decimal? LiveBuy(MarginRow row) => row.Cost is { LiveBuy: { } plan } cost
+        ? plan.Remainder == TradeMarginBuyRemainder.Commission
+            ? Total(row) is { } total ? (plan.MarketCost + plan.RemainderUnits * total) / Math.Max(1, cost.Units) : null
+            : plan.Total / Math.Max(1, cost.Units)
+        : null;
     /// <summary>Per unit: the sale price (Sell) or the buy price, manual or live (Source).</summary>
-    private static decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
-    private static decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.SavedSale ?? LiveBuy(row) : row.SavedSale;
+    private decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
+    private decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.SavedSale ?? LiveBuy(row) : row.SavedSale;
     /// <summary>Sell: margin (sale − cost). Source: savings (buy − commission cost); positive means commissioning is cheaper.</summary>
     private decimal? Delta(MarginRow row) => Price(row) is { } price && Total(row) is { } total ? price - total : null;
     private decimal? Percent(MarginRow row) => Price(row) is > 0 and var price && Delta(row) is { } delta ? delta / price * 100 : null;
@@ -235,7 +233,7 @@
         Column.Item => row.Name, Column.Sale => SavedPrice(row), Column.Batch => row.Batch, Column.Materials => Materials(row),
         Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => SavedPrice(row) - Total(row),
         Column.Percent => SavedPrice(row) is > 0 and var price ? (price - Total(row)) / price * 100 : null,
-        Column.Age => PriceAge(row).Oldest, _ => null
+        Column.Age => PriceAge(row).ObservedAtUtc, _ => null
     };
     private IReadOnlyList<MarginRow> SortedRows
     {
@@ -251,7 +249,7 @@
     [
         new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (ShowsExpander(row)) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.Key) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
         _mode == TradeMarginMode.Source
-            ? new() { Id = Column.Sale, Header = "Buy price", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live buy price" aria-label="@($"Reset {row.Name} to live buy price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && VendorWins(row)) { <span class="sub">Vendor</span> } else if (row.Sale == null && row.Cost?.MarketBuy is { IsShortOfListings: true } thin) { <span class="sub short-listed">@ShortOfListings(thin)</span> } else if (row.Sale == null && row.Cost?.MarketBuy?.BuyAt is { } buyAt) { <span class="sub" title="@buyAt">@buyAt</span> }</div> }
+            ? new() { Id = Column.Sale, Header = "Buy price", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live buy price" aria-label="@($"Reset {row.Name} to live buy price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && BuyLabel(row) is { } buy) { <span class="sub @(buy.Warning ? "short-listed" : null)" title="@buy.Title">@buy.Text</span> }</div> }
             : new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
         new() { Id = Column.Batch, Header = "Batch", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="batch-input" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="@(row.Name + " batch size")" value="@(_editingBatch == row.Key ? _batchDraft : row.Batch.ToString(CultureInfo.InvariantCulture))" @onfocus="() => BeginBatch(row)" @oninput="e => PreviewBatch(row, e)" @onblur="() => CommitBatchAsync(row.Key)" @onkeydown="e => BatchKeyAsync(e, row.Key)" /> },
         new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
@@ -359,7 +357,10 @@
                 {
                     @unit.ToString("N0")
                     @if (route == TradeMaterialRoute.Market && market is { IsShortOfListings: true }) { <span class="sub short-listed">@ShortOfListings(market)</span> }
-                    else if (route == TradeMaterialRoute.Market && MarketBasis(market) is { Length: > 0 } basis) { <span class="sub">@basis</span> }
+                    else if (route is TradeMaterialRoute.Market or TradeMaterialRoute.MarketVendor && line.Chosen?.Plan is { MarketUnits: > 0 } plan)
+                    {
+                        <span class="sub @(OverLimit(plan) != null ? "short-listed" : null)" title="@BuyTitle(plan)">@(OverLimit(plan) ?? PlanBasis(plan))</span>
+                    }
                 }
                 else
                 {
@@ -384,8 +385,48 @@
         (synths == 1 ? "1 synth" : $"{synths:N0} synths") + (units > 1 ? $" per {units:N0}" : "");
     private static string Gil(decimal value) => $"{Math.Ceiling(value):N0} gil";
     private static string Signed(decimal value) => (value < 0 ? "−" : "+") + Math.Abs(value).ToString("N0");
-    private static string ShortOfListings(TradeMarginRouteOption market) =>
-        market.ListedQuantity == 0 ? "⚠ None listed" : $"⚠ Only {market.ListedQuantity:N0} of {market.RequiredQuantity:N0} listed";
+    private TradeMaterialPricingPolicy Policy => TradeMaterialPricingPolicyNormalizer.Normalize(_profile?.MaterialPricingPolicy);
+    // Listed is the one best world when purchases may not split.
+    private string ShortOfListings(TradeMarginRouteOption market) =>
+        market.ListedQuantity == 0 ? "⚠ None listed"
+        : market.ListedQuantity >= market.RequiredQuantity ? "⚠ No route found"
+        : Policy.AllowSplitPurchases ? $"⚠ Only {market.ListedQuantity:N0} of {market.RequiredQuantity:N0} listed"
+        : "⚠ No one world has enough";
+    /// <summary>A plan over the world-stop limit, which is advisory: priced anyway, and flagged.</summary>
+    private string? OverLimit(TradeMarginBuyPlan plan) =>
+        plan.Worlds.Count > Policy.MaximumWorldStops ? $"⚠ {plan.Worlds.Count:N0} worlds (limit {Policy.MaximumWorldStops:N0})" : null;
+    /// <summary>The root buy under the buy price: where the live buy comes from, or why the market falls short.</summary>
+    private (string Text, string? Title, bool Warning)? BuyLabel(MarginRow row)
+    {
+        var market = row.Cost?.MarketBuy;
+        return row.Cost?.LiveBuy switch
+        {
+            null => market is { IsShortOfListings: true } ? (ShortOfListings(market), null, true) : null,
+            { Remainder: TradeMarginBuyRemainder.Commission } plan =>
+                (market is { IsShortOfListings: true } ? ShortOfListings(market) : "⚠ Partly commissioned", BuyTitle(plan), true),
+            { MarketUnits: 0 } => ("Vendor", null, false),
+            var plan when OverLimit(plan) is { } over => (over, BuyTitle(plan), true),
+            var plan => (PlanLabel(plan), BuyTitle(plan), false)
+        };
+    }
+    /// <summary>The main world, how many more, and whether the vendor tops it up.</summary>
+    private static string PlanLabel(TradeMarginBuyPlan plan) =>
+        (plan.Worlds.Count > 0 ? plan.Worlds[0].Label : "") +
+        (plan.Worlds.Count > 1 ? $" +{plan.Worlds.Count - 1:N0} {(plan.Worlds.Count == 2 ? "world" : "worlds")}" : "") +
+        (plan.Remainder == TradeMarginBuyRemainder.Vendor && plan.RemainderUnits > 0 ? " + vendor" : "");
+    private static string PlanBasis(TradeMarginBuyPlan plan) =>
+        string.Join(" · ", new[] { PlanLabel(plan), plan.ObservedAtUtc is { } observed ? RelativeAge(observed) : null }
+            .Where(part => !string.IsNullOrWhiteSpace(part)));
+    /// <summary>Units from each world with its upload age, then the vendor or commissioned rest.</summary>
+    private static string BuyTitle(TradeMarginBuyPlan plan)
+    {
+        var lines = plan.Worlds.Select(world => $"{world.Label} · {world.Quantity:N0}" +
+            (world.ObservedAtUtc is { } observed ? $" · {RelativeAge(observed)}" : " · age unknown")).ToList();
+        if (plan.RemainderUnits > 0 && plan.Remainder == TradeMarginBuyRemainder.Vendor) lines.Add($"Vendor · {plan.RemainderUnits:N0}");
+        if (plan.Remainder == TradeMarginBuyRemainder.Commission)
+            lines.Insert(0, $"{plan.MarketUnits:N0} market · {plan.RemainderUnits:N0} commissioned");
+        return string.Join("\n", lines);
+    }
     /// <summary>The closed scope control: the effective Margins scope.</summary>
     private string ScopeSummary
     {
@@ -399,11 +440,6 @@
                     ? $"Commission · {scope.Region}" : $"Commission · {scope.DataCenter}";
         }
     }
-    /// <summary>The world a market price was taken from and the age of its listings.</summary>
-    private static string MarketBasis(TradeMarginRouteOption? market) => market == null ? "" :
-        string.Join(" · ", new[] { market.BuyAt, market.ObservedAtUtc is { } observed ? RelativeAge(observed) : null }
-            .Where(part => !string.IsNullOrWhiteSpace(part)));
-
     /// <summary>
     /// Each line's cost per unit sold, rounded so the column adds up to the row's Total cost
     /// (largest remainder); a line without a price stays unavailable.
@@ -445,12 +481,16 @@
                 case TradeMaterialRoute.Market when option.IsShortOfListings || option.Total == null:
                     items.Add(new(value, "Market", ShortOfListings(option), "—", Disabled: true, IsWarning: true));
                     break;
+                case TradeMaterialRoute.Market when option.Plan is { } wide && OverLimit(wide) is { } over:
+                    items.Add(new(value, "Market", over, Amount(option.Total), IsWarning: true));
+                    break;
                 case TradeMaterialRoute.Market:
-                    items.Add(new(value, "Market", string.Join(" · ", new[]
-                    {
-                        option.ListingCount == 1 ? "1 listing" : $"{option.ListingCount:N0} listings",
-                        option.BuyAt, option.ObservedAtUtc is { } observed ? RelativeAge(observed) : null
-                    }.Where(part => !string.IsNullOrWhiteSpace(part))), Amount(option.Total)));
+                    items.Add(new(value, "Market", option.Plan is { } plan ? PlanBasis(plan) : null, Amount(option.Total)));
+                    break;
+                case TradeMaterialRoute.MarketVendor:
+                    items.Add(new(value, "Market + vendor", option.Plan is { MarketUnits: > 0 } blend
+                        ? $"{blend.MarketUnits:N0} listed · {blend.RemainderUnits:N0} vendor · {PlanBasis(blend)}"
+                        : "Vendor", Amount(option.Total)));
                     break;
                 case TradeMaterialRoute.Vendor:
                     items.Add(new(value, "Vendor", $"{option.UnitPrice:N0} gil each", Amount(option.Total)));
@@ -464,37 +504,30 @@
     }
 
     /// <summary>
-    /// A Source row buying at the live market also prices from the item's own listings; a
-    /// vendor buy has no age.
+    /// A Source row buying live also prices from the item's own listings; its vendor or
+    /// commissioned part has no age.
     /// </summary>
     private static bool AgesWithMarketBuy(MarginRow row) =>
-        row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.MarketBuy != null && !VendorWins(row);
-    /// <summary>The oldest price a row's figures rest on: its materials, plus its live market buy.</summary>
-    private static (DateTime? Oldest, bool Unknown) PriceAge(MarginRow row)
+        row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.LiveBuy is { MarketUnits: > 0 };
+    /// <summary>
+    /// When the prices a row's figures rest on were uploaded, weighted by their gil: its market
+    /// materials, plus its live market buy.
+    /// </summary>
+    private static TradeMarginPriceAge PriceAge(MarginRow row) => row.Cost is not { } cost ? TradeMarginPriceAge.None
+        : AgesWithMarketBuy(row) ? cost.MaterialsAge + cost.LiveBuy!.Age : cost.MaterialsAge;
+    private static bool IsStale(MarginRow row) =>
+        PriceAge(row) is var age && (age.IsUnknown || age.ObservedAtUtc <= DateTime.UtcNow.AddDays(-1));
+    private static string Age(MarginRow row) => PriceAge(row) switch
     {
-        if (row.Cost is not { } cost) return (null, false);
-        var unknown = cost.UnknownPriceAge;
-        var oldest = cost.OldestPriceUtc;
-        if (AgesWithMarketBuy(row))
-        {
-            if (cost.MarketBuy!.ObservedAtUtc is { } observed) oldest = oldest == null || observed < oldest ? observed : oldest;
-            else unknown = true;
-        }
-        return (unknown ? null : oldest, unknown);
-    }
-    private static bool IsStale(MarginRow row) => PriceAge(row) is var age && (age.Unknown || age.Oldest <= DateTime.UtcNow.AddDays(-1));
-    private static string Age(MarginRow row)
-    {
-        var (oldest, unknown) = PriceAge(row);
-        if (unknown) return "?";
-        if (oldest is not { } time) return "—";
-        return RelativeAge(time);
-    }
+        { IsUnknown: true } => "?",
+        { ObservedAtUtc: { } time } => RelativeAge(time),
+        _ => "—"
+    };
     private static string AgeTitle(MarginRow row)
     {
-        var (oldest, unknown) = PriceAge(row);
-        var label = AgesWithMarketBuy(row) ? "Oldest price" : "Oldest material price";
-        return unknown ? "Price age unknown" : oldest is { } time ? $"{label}: {time.ToLocalTime():f}" : label;
+        var age = PriceAge(row);
+        var label = AgesWithMarketBuy(row) ? "Price age, weighted by gil" : "Material price age, weighted by gil";
+        return age.IsUnknown ? "Price age unknown" : age.ObservedAtUtc is { } time ? $"{label}: {time.ToLocalTime():f}" : label;
     }
     private static string RelativeAge(DateTime time)
     {
@@ -573,6 +606,7 @@
             var resolved = await Profiles.ResolveAsync(selected.Id);
             var previous = _profile;
             var previousRate = Rate;
+            var previousRouteKey = RouteKey;
             var scopeChanged = previous?.Id != resolved.Profile.Id || MarginScopeOf(previous) != MarginScopeOf(resolved.Profile);
             if (scopeChanged) _lastCheckedUtc = null;
             var unchanged = !scopeChanged && _revision == resolved.HostedRevision &&
@@ -588,7 +622,7 @@
             _loadedCompany = null;
             if (Company != null) { Company = null; Navigation.NavigateTo("trade/margins", replace: true); }
             if (_rows.Any(row => row.Cost == null)) await RestoreFiguresAsync();
-            if (previous != null && (previousRate != Rate ||
+            if (previous != null && (previousRate != Rate || previousRouteKey != RouteKey ||
                 !(previous.MaterialSources ?? []).SequenceEqual(_profile.MaterialSources ?? [])))
                 await RepriceAllAsync();
             // Rows are prepared and priced in the background, so nothing waits on a full-table load.
@@ -670,7 +704,7 @@
     private static bool NeedsPricing(MarginRow row) => Unpriced(row) || IsFailure(row.Cost!);
     private string? FiguresInputs(MarginRow row, int batchSize) =>
         _profile != null && MarginScope is { } scope
-            ? SavedFigures.Inputs(_profile.Id, scope, row.ItemId, batchSize, Rate, _profile.MaterialSources ?? [])
+            ? SavedFigures.Inputs(_profile.Id, scope, row.ItemId, batchSize, Rate, _profile.MaterialSources ?? [], RouteKey)
             : null;
     /// <summary>
     /// Runs under _gate before any row is prepared or market data is read: shows the figures
@@ -889,8 +923,7 @@
     {
         try
         {
-            var rate = Rate;
-            var sources = _profile?.MaterialSources ?? [];
+            var pricing = Pricing;
             TradeMarginCalculator.PreparedRow? plan = null;
             Dictionary<(int itemId, string dataCenter), CachedMarketData>? market = null;
             TradeMarginCost? cost = null;
@@ -903,7 +936,7 @@
                 // A row without stored data for some material in some data center of the scope
                 // waits for the update rather than showing a figure priced from part of the scope.
                 if (TradeMarginCalculator.HasMarketData(plan, scope, market))
-                    cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, new TradeMarginPricing(rate, sources), ct);
+                    cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, pricing, ct);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested) { failure = ex; }
             var name = failure != null && row.ItemName == "Item" ? await LookupNameAsync(key.ItemId, ct) : null;
@@ -922,7 +955,7 @@
                 {
                     current.Plan = plan;
                     current.Market = market;
-                    if (cost != null) SetCost(current, Named(current, await ToCurrentPricingAsync(cost, rate, sources, current, ct)));
+                    if (cost != null) SetCost(current, Named(current, await ToCurrentPricingAsync(cost, pricing, current, ct)));
                 }
                 StateHasChanged();
                 return true;
@@ -959,9 +992,8 @@
         CancellationToken ct)
     {
         TradeMarginCost cost;
-        var rate = Rate;
-        var sources = _profile?.MaterialSources ?? [];
-        try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, new TradeMarginPricing(rate, sources), ct); }
+        var pricing = Pricing;
+        try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, pricing, ct); }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             Log.LogWarning(ex, "Margins could not price item {ItemId} ({Mode}) from updated market data; stored prices kept", key.ItemId, key.Mode);
@@ -975,27 +1007,31 @@
             if (row == null) return true;
             row.Plan = plan;
             row.Market = market;
-            SetCost(row, Named(row, await ToCurrentPricingAsync(cost, rate, sources, row, ct)));
+            SetCost(row, Named(row, await ToCurrentPricingAsync(cost, pricing, row, ct)));
             StateHasChanged();
             return true;
         }
         finally { _gate.Release(); }
     }
     /// <summary>
-    /// Runs under _gate. Labor, material sources or the batch size may have changed while a cost
-    /// was priced outside _gate: it is brought to the current ones from its evidence.
+    /// Runs under _gate. Labor, material sources, the pricing policy or the batch size may have
+    /// changed while a cost was priced outside _gate: it is brought to the current ones from its evidence.
     /// </summary>
-    private async Task<TradeMarginCost> ToCurrentPricingAsync(TradeMarginCost cost, decimal rate,
-        IReadOnlyList<TradeMaterialSource> sources, MarginRow row, CancellationToken ct)
+    private async Task<TradeMarginCost> ToCurrentPricingAsync(TradeMarginCost cost, TradeMarginPricing pricing,
+        MarginRow row, CancellationToken ct)
     {
-        while (cost.Basis != null && (rate != Rate || !sources.SequenceEqual(_profile?.MaterialSources ?? []) || cost.BatchSize != row.Batch))
+        while (cost.Basis != null && (!IsCurrent(pricing) || cost.BatchSize != row.Batch))
         {
-            rate = Rate;
-            sources = _profile?.MaterialSources ?? [];
-            cost = await TradeMarginCalculator.RepriceAsync(cost, Pricing, row.Batch, ct);
+            pricing = Pricing;
+            cost = await TradeMarginCalculator.RepriceAsync(cost, pricing, row.Batch, ct);
         }
         return cost;
     }
+    /// <summary>True when <paramref name="pricing"/> still matches the company's labor rate, sources and policy.</summary>
+    private bool IsCurrent(TradeMarginPricing pricing) =>
+        Pricing is var current && pricing.LaborGilPerSynth == current.LaborGilPerSynth && pricing.RouteKey == current.RouteKey &&
+        pricing.Sources.Count == current.Sources.Count &&
+        current.Sources.All(pair => pricing.Sources.TryGetValue(pair.Key, out var source) && source == pair.Value);
     /// <summary>Names every pair Universalis did not answer, per data center, and what the row keeps.</summary>
     private void LogKeptPrices(MarketPairRefreshResult result, IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData> stored)
     {
@@ -1031,27 +1067,26 @@
     /// <summary>True when the row's breakdown was described for its current cost and pricing.</summary>
     private bool HasCurrentBreakdown(MarginRow row) =>
         row.Breakdown != null && row.BreakdownFor is { } basis && ReferenceEquals(basis.Cost, row.Cost) &&
-        basis.Rate == Rate && basis.Sources.SequenceEqual(_profile?.MaterialSources ?? []);
+        IsCurrent(basis.Pricing);
     /// <summary>Re-describes an expanded row from its current cost; a newer cost wins.</summary>
     private async Task DescribeSafelyAsync(MarginRow row)
     {
         if (_disposed || !_expanded.Contains(row.Key) || row.Cost is not { Basis: not null } cost || HasCurrentBreakdown(row)) return;
-        var rate = Rate;
-        var sources = _profile?.MaterialSources ?? [];
+        var pricing = Pricing;
         try
         {
-            var breakdown = await TradeMarginCalculator.DescribeAsync(cost, new TradeMarginPricing(rate, sources), _lifetime.Token);
+            var breakdown = await TradeMarginCalculator.DescribeAsync(cost, pricing, _lifetime.Token);
             // Rows are rebuilt on every sync: the breakdown lands on whichever row now shows this cost.
             if (_disposed || _rows.FirstOrDefault(candidate => candidate.Key == row.Key) is not { } current ||
                 !ReferenceEquals(current.Cost, cost)) return;
             current.Breakdown = breakdown;
-            current.BreakdownFor = (cost, rate, sources);
+            current.BreakdownFor = (cost, pricing);
             StateHasChanged();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception ex) { ReportError(ex); }
     }
-    /// <summary>Reprices every row for the current labor rate and material sources, without fetching.</summary>
+    /// <summary>Reprices every row for the current labor rate, material sources and pricing policy, without fetching.</summary>
     private async Task RepriceAllAsync()
     {
         var pricing = Pricing;
@@ -1102,7 +1137,7 @@
     }
     private void MarkPricingFailed(MarginRow row, Exception error)
     {
-        row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
+        row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, [], "Pricing failed");
         row.Restored = false;
         row.Breakdown = null;
         row.BreakdownFor = null;
@@ -1215,6 +1250,7 @@
                 }
                 var scopeChanged = MarginScope != MarginScopeOf(current.Profile);
                 var pricingChanged = Rate != TradePaymentPolicyNormalizer.Normalize(current.Profile.PaymentPolicy).LaborGilPerSynth ||
+                    RouteKey != TradeMarginPricing.RouteKeyOf(current.Profile.MaterialPricingPolicy) ||
                     !(_profile.MaterialSources ?? []).SequenceEqual(current.Profile.MaterialSources ?? []);
                 _profile = current.Profile;
                 if (scopeChanged) _lastCheckedUtc = null;
