@@ -18,7 +18,9 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     private const string Prefix = "margins.figures.";
     // v2: keyed by mode and carrying the root market buy; v1 records are dropped on read.
     // v3: carries the root item's NPC vendor price; v2 records are dropped on read.
-    private const int RecordVersion = 3;
+    // v4: market buys are multi-world plans (worlds, vendor or commissioned rest) and the inputs
+    // carry the material pricing policy; v3 records are dropped on read.
+    private const int RecordVersion = 4;
     private readonly Dictionary<string, string> _pending = [];
     private readonly Dictionary<string, string> _written = [];
     private bool _flushing;
@@ -29,23 +31,47 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     public sealed record SavedFigures(
         int Version, string Inputs, string Name, int IconId, decimal? Materials, int? Synths, int Units, int BatchSize,
         string[] Missing, string? Issue, long? OldestPriceUnixMs, bool UnknownPriceAge,
-        bool HasMarketBuy = false, decimal? MarketBuyTotal = null, int MarketBuyListingCount = 0,
-        int MarketBuyListedQuantity = 0, int MarketBuyRequiredQuantity = 0, long? MarketBuyObservedAtUnixMs = null,
-        string? MarketBuyWorldName = null, string? MarketBuyDataCenter = null, decimal? RootVendorPrice = null)
+        SavedMarketBuy? MarketBuy = null, decimal? RootVendorPrice = null, SavedBuyPlan? LiveBuy = null)
     {
         public TradeMarginCost ToCost() => new(Name, IconId, Materials, Synths, FromUnixMs(OldestPriceUnixMs),
             Missing, Issue, Units, UnknownPriceAge)
         {
             BatchSize = BatchSize,
-            MarketBuy = HasMarketBuy
-                ? new(TradeMaterialRoute.Market, MarketBuyTotal, ListingCount: MarketBuyListingCount,
-                    ListedQuantity: MarketBuyListedQuantity, RequiredQuantity: MarketBuyRequiredQuantity,
-                    ObservedAtUtc: FromUnixMs(MarketBuyObservedAtUnixMs),
-                    UnitPrice: MarketBuyTotal / Math.Max(1, MarketBuyRequiredQuantity),
-                    WorldName: MarketBuyWorldName, DataCenter: MarketBuyDataCenter)
+            MarketBuy = MarketBuy is { } buy
+                ? new(TradeMaterialRoute.Market, buy.Total, ListedQuantity: buy.ListedQuantity,
+                    RequiredQuantity: buy.RequiredQuantity, ObservedAtUtc: FromUnixMs(buy.ObservedAtUnixMs),
+                    UnitPrice: buy.Total / Math.Max(1, buy.RequiredQuantity), Plan: buy.Plan?.ToPlan())
                 : null,
-            RootVendorPrice = RootVendorPrice is > 0 ? RootVendorPrice : null
+            RootVendorPrice = RootVendorPrice is > 0 ? RootVendorPrice : null,
+            LiveBuy = LiveBuy?.ToPlan()
         };
+    }
+
+    /// <summary>The root market route a row showed.</summary>
+    public sealed record SavedMarketBuy(
+        decimal? Total, int ListedQuantity, int RequiredQuantity, long? ObservedAtUnixMs, SavedBuyPlan? Plan)
+    {
+        public static SavedMarketBuy? From(TradeMarginRouteOption? option) => option == null ? null
+            : new(option.Total, option.ListedQuantity, option.RequiredQuantity, ToUnixMs(option.ObservedAtUtc),
+                SavedBuyPlan.From(option.Plan));
+    }
+
+    public sealed record SavedBuyWorld(string WorldName, string DataCenter, int Quantity, long? ObservedAtUnixMs);
+
+    public sealed record SavedBuyPlan(
+        int Quantity, int MarketUnits, decimal MarketCost, SavedBuyWorld[] Worlds,
+        TradeMarginBuyRemainder Remainder, decimal? RemainderUnitPrice, bool UnknownAge)
+    {
+        public TradeMarginBuyPlan ToPlan() => new(Quantity, MarketUnits, MarketCost,
+            Worlds.Select(world => new TradeMarginBuyWorld(world.WorldName, world.DataCenter, world.Quantity,
+                FromUnixMs(world.ObservedAtUnixMs))).ToArray(),
+            Enum.IsDefined(Remainder) ? Remainder : TradeMarginBuyRemainder.None, RemainderUnitPrice, UnknownAge);
+
+        public static SavedBuyPlan? From(TradeMarginBuyPlan? plan) => plan == null ? null
+            : new(plan.Quantity, plan.MarketUnits, plan.MarketCost,
+                plan.Worlds.Select(world => new SavedBuyWorld(world.WorldName, world.DataCenter, world.Quantity,
+                    ToUnixMs(world.ObservedAtUtc))).ToArray(),
+                plan.Remainder, plan.RemainderUnitPrice, plan.UnknownAge);
     }
 
     private static DateTime? FromUnixMs(long? ms) =>
@@ -80,14 +106,15 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
 
     /// <summary>
     /// Everything a row's figures depend on besides the market data: company, Margins market
-    /// scope, item, batch size, labor rate and the company's material sources. A scope that
-    /// follows the commission scope keeps the inputs it had before Margins had its own scope.
+    /// scope, item, batch size, labor rate, the company's material sources and the material
+    /// pricing policy's route settings. A scope that follows the commission scope keeps the
+    /// inputs it had before Margins had its own scope.
     /// </summary>
     public string Inputs(Guid companyId, TradeMarginMarketScope scope, int itemId, int batchSize, decimal laborRate,
-        IReadOnlyList<TradeMaterialSource> sources) =>
+        IReadOnlyList<TradeMaterialSource> sources, string routeKey) =>
         string.Join('|', companyId.ToString("D"), ScopeInputs(scope),
             itemId.ToString(CultureInfo.InvariantCulture), batchSize.ToString(CultureInfo.InvariantCulture),
-            laborRate.ToString("0.##########", CultureInfo.InvariantCulture), SourcesHash(sources));
+            laborRate.ToString("0.##########", CultureInfo.InvariantCulture), SourcesHash(sources), routeKey);
 
     private static string ScopeInputs(TradeMarginMarketScope scope) => scope.Commission is { } commission
         ? string.Join('|', commission.Region, commission.DataCenter ?? "", ((int)commission.MarketFetchScope).ToString(CultureInfo.InvariantCulture))
@@ -162,12 +189,9 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     public void Save(Guid companyId, TradeMarginMode mode, int itemId, string inputs, TradeMarginCost cost)
     {
         var key = Key(companyId, mode, itemId);
-        var buy = cost.MarketBuy;
         var value = JsonSerializer.Serialize(new SavedFigures(RecordVersion, inputs, cost.Name, cost.IconId, cost.Materials,
             cost.Synths, cost.Units, cost.BatchSize, cost.Missing.ToArray(), cost.Issue, ToUnixMs(cost.OldestPriceUtc),
-            cost.UnknownPriceAge, buy != null, buy?.Total, buy?.ListingCount ?? 0, buy?.ListedQuantity ?? 0,
-            buy?.RequiredQuantity ?? 0, ToUnixMs(buy?.ObservedAtUtc), buy?.WorldName, buy?.DataCenter,
-            cost.RootVendorPrice));
+            cost.UnknownPriceAge, SavedMarketBuy.From(cost.MarketBuy), cost.RootVendorPrice, SavedBuyPlan.From(cost.LiveBuy)));
         if (_written.TryGetValue(key, out var written) && written == value)
         {
             _pending.Remove(key);

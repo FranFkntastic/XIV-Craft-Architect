@@ -12,7 +12,17 @@ public sealed record TradeMaterialQuoteResult(
 
     /// <summary>Non-blocking route notes, such as a route that needs more worlds than policy.</summary>
     public IReadOnlyList<string> RouteWarnings => Warnings ?? [];
+
+    /// <summary>
+    /// The quoted route's shopping plans, one per purchased material; read each one with
+    /// <see cref="TradeMaterialQuoteService.ReadRoutePurchase"/>. Not part of the stored quote.
+    /// </summary>
+    public IReadOnlyList<DetailedShoppingPlan> RoutePlans { get; init; } = [];
 }
+
+/// <summary>What a quoted route buys of one material on one world: units used, units bought as whole listings, and their gil.</summary>
+public sealed record TradeMaterialRoutePurchase(
+    string DataCenter, string WorldName, int QuantityUsed, int QuantityPurchased, decimal Cash);
 
 public sealed class TradeMaterialQuoteService
 {
@@ -110,6 +120,9 @@ public sealed class TradeMaterialQuoteService
                 [.. result.MaterialLines, .. stockLines, .. providedLines],
                 null,
                 result.RouteWarnings)
+            {
+                RoutePlans = result.RoutePlans
+            }
             : result;
     }
 
@@ -472,7 +485,43 @@ public sealed class TradeMaterialQuoteService
             WorldStops = selection.WorldStops,
             Lines = lines
         };
-        return new TradeMaterialQuoteResult(quote, payrollLines, null);
+        return new TradeMaterialQuoteResult(quote, payrollLines, null) { RoutePlans = selection.ShoppingPlans };
+    }
+
+    /// <summary>
+    /// The market purchase a quoted route plan selects, per world; empty for a vendor plan or a
+    /// plan with no selected purchase. <paramref name="required"/> is the quantity the plan covers.
+    /// </summary>
+    public static IReadOnlyList<TradeMaterialRoutePurchase> ReadRoutePurchase(DetailedShoppingPlan plan, int required)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (string.Equals(plan.RecommendedWorld?.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        if (plan.CoverageSet?.AllCandidates.FirstOrDefault(candidate => candidate.IsDefaultEligible) is { } coverage)
+        {
+            return coverage.Worlds
+                .Select(world => new TradeMaterialRoutePurchase(world.DataCenter, world.WorldName,
+                    world.QuantityCovered, world.QuantityToPurchase, world.CashOutCost))
+                .ToArray();
+        }
+
+        if (plan.RecommendedSplit is { Count: > 0 } split)
+        {
+            // A split part carries its stacks' average unit price, so the whole listings it buys
+            // are its cash at that price.
+            return split
+                .Select(part => new TradeMaterialRoutePurchase(part.DataCenter, part.WorldName, part.QuantityToBuy,
+                    part.PricePerUnit > 0 ? Math.Max(part.QuantityToBuy, (int)Math.Round(part.TotalCost / part.PricePerUnit)) : part.QuantityToBuy,
+                    part.TotalCost))
+                .ToArray();
+        }
+
+        return plan.RecommendedWorld is { } world
+            ? [new(world.DataCenter, world.WorldName, required, Math.Max(required, world.TotalQuantityPurchased), world.TotalCost)]
+            : [];
     }
 
     private static bool TryReadSelectedPurchase(
