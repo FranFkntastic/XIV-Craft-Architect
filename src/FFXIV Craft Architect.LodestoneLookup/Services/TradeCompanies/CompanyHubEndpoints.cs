@@ -465,10 +465,10 @@ public sealed partial class CompanyHubService(
 
         if (!body.UpdateMarginItems || body.MarginItems == null || body.MarginItems.Count > 500 ||
             body.MarginItems.Any(item => !TradeMarginItem.IsValid(item)) ||
-            body.MarginItems.Select(item => item.ItemId).Distinct().Count() != body.MarginItems.Count)
+            !TradeMarginItem.AreDistinct(body.MarginItems))
         {
             return new(CompanyHubMutationStatus.Invalid, ErrorCode: "invalid_margin_items",
-                ErrorMessage: "Use at most 500 distinct positive item ids with non-negative sale prices and batch sizes from 1 to 9,999.");
+                ErrorMessage: "Use at most 500 items, each positive item id at most once per mode, with non-negative prices and batch sizes from 1 to 9,999.");
         }
 
         string? sourcesError = null;

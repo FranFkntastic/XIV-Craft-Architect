@@ -20,12 +20,20 @@ public sealed record TradeMarginCost(
     /// <summary>The batch size these figures were priced for.</summary>
     public int BatchSize { get; init; } = 1;
 
+    /// <summary>
+    /// Buying the whole run of the item itself on the market (whole-listing executable cost for
+    /// <see cref="Units"/>); only for rows prepared with the root market included.
+    /// </summary>
+    public TradeMarginRouteOption? MarketBuy { get; init; }
+
     public bool Equals(TradeMarginCost? other) =>
         other is not null && Name == other.Name && IconId == other.IconId && Materials == other.Materials &&
         Synths == other.Synths && OldestPriceUtc == other.OldestPriceUtc && Missing.SequenceEqual(other.Missing) &&
-        Issue == other.Issue && Units == other.Units && UnknownPriceAge == other.UnknownPriceAge;
+        Issue == other.Issue && Units == other.Units && UnknownPriceAge == other.UnknownPriceAge &&
+        Equals(MarketBuy, other.MarketBuy);
 
-    public override int GetHashCode() => HashCode.Combine(Name, IconId, Materials, Synths, OldestPriceUtc, Issue, Units, UnknownPriceAge);
+    public override int GetHashCode() =>
+        HashCode.Combine(HashCode.Combine(Name, IconId, Materials, Synths, OldestPriceUtc, Issue, Units, UnknownPriceAge), MarketBuy);
 }
 
 /// <summary>Company inputs to a Margins price: labor rate and explicit material sources.</summary>
@@ -75,7 +83,10 @@ public sealed class TradeMarginCalculator(
 {
     public sealed class PreparedRow
     {
-        /// <summary>Every item below the sold item; each needs market and vendor evidence.</summary>
+        /// <summary>
+        /// Every item below the sold item, each needing market and vendor evidence, plus the sold
+        /// item itself when its own market price is part of the row.
+        /// </summary>
         internal int[] Leaves { get; } = [];
         internal TradeMarginCost? Issue { get; }
         internal Func<MarketEvidenceSet, TradeMarginPricing, CancellationToken, Task<TradeMarginCost>> Price { get; }
@@ -94,8 +105,13 @@ public sealed class TradeMarginCalculator(
     }
 
     /// <param name="batchSize">Units one production run makes; quantities and listings are evaluated for the whole run.</param>
+    /// <param name="includeRootMarket">
+    /// Also price buying the whole run of the item itself on the market
+    /// (<see cref="TradeMarginCost.MarketBuy"/>); its market data is fetched with the materials'.
+    /// </param>
     public async Task<PreparedRow> PrepareAsync(
-        int itemId, TradeMarginMarketScope? scope, CancellationToken ct = default, int batchSize = 1)
+        int itemId, TradeMarginMarketScope? scope, CancellationToken ct = default, int batchSize = 1,
+        bool includeRootMarket = false)
     {
         var batch = MarginTree.ClampBatch(batchSize);
         PreparedRow Issue(TradeMarginCost issue) => new(issue with { BatchSize = batch });
@@ -175,7 +191,8 @@ public sealed class TradeMarginCalculator(
         }
 
         var items = order.Where(id => id != itemId).ToArray();
-        return new(items, async (evidence, pricing, token) =>
+        var leaves = includeRootMarket ? items.Append(itemId).ToArray() : items;
+        return new(leaves, async (evidence, pricing, token) =>
         {
             var vendorPrices = new Dictionary<int, decimal>();
             foreach (var id in items)
@@ -186,7 +203,7 @@ public sealed class TradeMarginCalculator(
                     vendorPrices[id] = vendor;
                 }
             }
-            return await new TradeMarginBasis(tree, evidence, vendorPrices, batch).PriceAsync(pricing, token);
+            return await new TradeMarginBasis(tree, evidence, vendorPrices, batch, includeRootMarket).PriceAsync(pricing, token);
         });
     }
 
@@ -386,19 +403,22 @@ public sealed class TradeMarginBasis
     private readonly IReadOnlyDictionary<int, decimal> _vendors;
     private readonly Dictionary<(int ItemId, int Quantity), MarketQuote> _quotes;
     private readonly int _units;
+    private readonly bool _includeRootMarket;
 
-    internal TradeMarginBasis(MarginTree tree, MarketEvidenceSet evidence, IReadOnlyDictionary<int, decimal> vendors, int batchSize)
-        : this(tree, evidence, vendors, batchSize, new())
+    internal TradeMarginBasis(MarginTree tree, MarketEvidenceSet evidence, IReadOnlyDictionary<int, decimal> vendors, int batchSize,
+        bool includeRootMarket = false)
+        : this(tree, evidence, vendors, batchSize, new(), includeRootMarket)
     {
     }
 
     private TradeMarginBasis(MarginTree tree, MarketEvidenceSet evidence, IReadOnlyDictionary<int, decimal> vendors,
-        int batchSize, Dictionary<(int ItemId, int Quantity), MarketQuote> quotes)
+        int batchSize, Dictionary<(int ItemId, int Quantity), MarketQuote> quotes, bool includeRootMarket)
     {
         _tree = tree;
         _evidence = evidence;
         _vendors = vendors;
         _quotes = quotes;
+        _includeRootMarket = includeRootMarket;
         BatchSize = MarginTree.ClampBatch(batchSize);
         _units = tree.UnitsFor(BatchSize);
     }
@@ -408,7 +428,7 @@ public sealed class TradeMarginBasis
 
     /// <summary>The same evidence priced for another batch size; quotes already walked are shared.</summary>
     internal TradeMarginBasis ForBatch(int batchSize) =>
-        MarginTree.ClampBatch(batchSize) == BatchSize ? this : new(_tree, _evidence, _vendors, batchSize, _quotes);
+        MarginTree.ClampBatch(batchSize) == BatchSize ? this : new(_tree, _evidence, _vendors, batchSize, _quotes, _includeRootMarket);
 
     private int RootId => _tree.RootId;
 
@@ -435,8 +455,18 @@ public sealed class TradeMarginBasis
             unknownAge ? null : oldest, solved.Result.Missing, Units: _units, UnknownPriceAge: unknownAge)
         {
             Basis = this,
-            BatchSize = BatchSize
+            BatchSize = BatchSize,
+            MarketBuy = _includeRootMarket ? await MarketOptionAsync(RootId, _units, ct) : null
         };
+    }
+
+    /// <summary>The market route for <paramref name="qty"/> units of one item, as a line option shows it.</summary>
+    private async Task<TradeMarginRouteOption> MarketOptionAsync(int id, int qty, CancellationToken ct)
+    {
+        var quote = await QuoteAsync(id, qty, ct);
+        return new(TradeMaterialRoute.Market, quote.Unit * qty, ListingCount: quote.ListingCount,
+            ListedQuantity: quote.Listed, RequiredQuantity: qty, ObservedAtUtc: quote.Oldest, UnitPrice: quote.Unit,
+            WorldName: quote.World, DataCenter: quote.DataCenter);
     }
 
     internal async Task<TradeMarginBreakdown> DescribeAsync(TradeMarginPricing pricing, CancellationToken ct)
@@ -624,10 +654,7 @@ public sealed class TradeMarginBasis
             options.Add(new(TradeMaterialRoute.Craft, Total(craft, rate), craft.Materials, craft.Synths, Missing: craft.Missing));
         }
 
-        var quote = await QuoteAsync(id, qty, ct);
-        options.Add(new(TradeMaterialRoute.Market, quote.Unit * qty, ListingCount: quote.ListingCount,
-            ListedQuantity: quote.Listed, RequiredQuantity: qty, ObservedAtUtc: quote.Oldest, UnitPrice: quote.Unit,
-            WorldName: quote.World, DataCenter: quote.DataCenter));
+        options.Add(await MarketOptionAsync(id, qty, ct));
         if (_vendors.TryGetValue(id, out var vendor))
         {
             options.Add(new(TradeMaterialRoute.Vendor, vendor * qty, UnitPrice: vendor));
