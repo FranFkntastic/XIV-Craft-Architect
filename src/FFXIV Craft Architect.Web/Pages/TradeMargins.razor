@@ -222,7 +222,7 @@
         Column.Item => row.Name, Column.Sale => SavedPrice(row), Column.Batch => row.Batch, Column.Materials => Materials(row),
         Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => SavedPrice(row) - Total(row),
         Column.Percent => SavedPrice(row) is > 0 and var price ? (price - Total(row)) / price * 100 : null,
-        Column.Age => PriceAge(row).Oldest, _ => null
+        Column.Age => PriceAge(row).ObservedAtUtc, _ => null
     };
     private IReadOnlyList<MarginRow> SortedRows
     {
@@ -350,7 +350,10 @@
                 {
                     @unit.ToString("N0")
                     @if (route == TradeMaterialRoute.Market && market is { IsShortOfListings: true }) { <span class="sub short-listed">@ShortOfListings(market)</span> }
-                    else if (route is TradeMaterialRoute.Market or TradeMaterialRoute.MarketVendor && line.Chosen?.Plan is { MarketUnits: > 0 } plan) { <span class="sub" title="@BuyTitle(plan)">@PlanBasis(plan)</span> }
+                    else if (route is TradeMaterialRoute.Market or TradeMaterialRoute.MarketVendor && line.Chosen?.Plan is { MarketUnits: > 0 } plan)
+                    {
+                        <span class="sub @(OverLimit(plan) != null ? "short-listed" : null)" title="@BuyTitle(plan)">@(OverLimit(plan) ?? PlanBasis(plan))</span>
+                    }
                 }
                 else
                 {
@@ -375,11 +378,16 @@
         (synths == 1 ? "1 synth" : $"{synths:N0} synths") + (units > 1 ? $" per {units:N0}" : "");
     private static string Gil(decimal value) => $"{Math.Ceiling(value):N0} gil";
     private static string Signed(decimal value) => (value < 0 ? "−" : "+") + Math.Abs(value).ToString("N0");
+    private TradeMaterialPricingPolicy Policy => TradeMaterialPricingPolicyNormalizer.Normalize(_profile?.MaterialPricingPolicy);
+    // Listed is the one best world when purchases may not split.
     private string ShortOfListings(TradeMarginRouteOption market) =>
         market.ListedQuantity == 0 ? "⚠ None listed"
-        : market.ListedQuantity < market.RequiredQuantity ? $"⚠ Only {market.ListedQuantity:N0} of {market.RequiredQuantity:N0} listed"
-        : TradeMaterialPricingPolicyNormalizer.Normalize(_profile?.MaterialPricingPolicy) is { AllowSplitPurchases: true, MaximumWorldStops: > 1 } policy
-            ? $"⚠ Needs over {policy.MaximumWorldStops:N0} worlds" : "⚠ No one world has enough";
+        : market.ListedQuantity >= market.RequiredQuantity ? "⚠ No route found"
+        : Policy.AllowSplitPurchases ? $"⚠ Only {market.ListedQuantity:N0} of {market.RequiredQuantity:N0} listed"
+        : "⚠ No one world has enough";
+    /// <summary>A plan over the world-stop limit, which is advisory: priced anyway, and flagged.</summary>
+    private string? OverLimit(TradeMarginBuyPlan plan) =>
+        plan.Worlds.Count > Policy.MaximumWorldStops ? $"⚠ {plan.Worlds.Count:N0} worlds (limit {Policy.MaximumWorldStops:N0})" : null;
     /// <summary>The root buy under the buy price: where the live buy comes from, or why the market falls short.</summary>
     private (string Text, string? Title, bool Warning)? BuyLabel(MarginRow row)
     {
@@ -390,6 +398,7 @@
             { Remainder: TradeMarginBuyRemainder.Commission } plan =>
                 (market is { IsShortOfListings: true } ? ShortOfListings(market) : "⚠ Partly commissioned", BuyTitle(plan), true),
             { MarketUnits: 0 } => ("Vendor", null, false),
+            var plan when OverLimit(plan) is { } over => (over, BuyTitle(plan), true),
             var plan => (PlanLabel(plan), BuyTitle(plan), false)
         };
     }
@@ -401,10 +410,11 @@
     private static string PlanBasis(TradeMarginBuyPlan plan) =>
         string.Join(" · ", new[] { PlanLabel(plan), plan.ObservedAtUtc is { } observed ? RelativeAge(observed) : null }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
-    /// <summary>Units from each world, then the vendor or commissioned rest.</summary>
+    /// <summary>Units from each world with its upload age, then the vendor or commissioned rest.</summary>
     private static string BuyTitle(TradeMarginBuyPlan plan)
     {
-        var lines = plan.Worlds.Select(world => $"{world.Label} · {world.Quantity:N0}").ToList();
+        var lines = plan.Worlds.Select(world => $"{world.Label} · {world.Quantity:N0}" +
+            (world.ObservedAtUtc is { } observed ? $" · {RelativeAge(observed)}" : " · age unknown")).ToList();
         if (plan.RemainderUnits > 0 && plan.Remainder == TradeMarginBuyRemainder.Vendor) lines.Add($"Vendor · {plan.RemainderUnits:N0}");
         if (plan.Remainder == TradeMarginBuyRemainder.Commission)
             lines.Insert(0, $"{plan.MarketUnits:N0} market · {plan.RemainderUnits:N0} commissioned");
@@ -464,6 +474,9 @@
                 case TradeMaterialRoute.Market when option.IsShortOfListings || option.Total == null:
                     items.Add(new(value, "Market", ShortOfListings(option), "—", Disabled: true, IsWarning: true));
                     break;
+                case TradeMaterialRoute.Market when option.Plan is { } wide && OverLimit(wide) is { } over:
+                    items.Add(new(value, "Market", over, Amount(option.Total), IsWarning: true));
+                    break;
                 case TradeMaterialRoute.Market:
                     items.Add(new(value, "Market", option.Plan is { } plan ? PlanBasis(plan) : null, Amount(option.Total)));
                     break;
@@ -489,32 +502,25 @@
     /// </summary>
     private static bool AgesWithMarketBuy(MarginRow row) =>
         row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.LiveBuy is { MarketUnits: > 0 };
-    /// <summary>The oldest price a row's figures rest on: its materials, plus its live market buy.</summary>
-    private static (DateTime? Oldest, bool Unknown) PriceAge(MarginRow row)
+    /// <summary>
+    /// When the prices a row's figures rest on were uploaded, weighted by their gil: its market
+    /// materials, plus its live market buy.
+    /// </summary>
+    private static TradeMarginPriceAge PriceAge(MarginRow row) => row.Cost is not { } cost ? TradeMarginPriceAge.None
+        : AgesWithMarketBuy(row) ? cost.MaterialsAge + cost.LiveBuy!.Age : cost.MaterialsAge;
+    private static bool IsStale(MarginRow row) =>
+        PriceAge(row) is var age && (age.IsUnknown || age.ObservedAtUtc <= DateTime.UtcNow.AddDays(-1));
+    private static string Age(MarginRow row) => PriceAge(row) switch
     {
-        if (row.Cost is not { } cost) return (null, false);
-        var unknown = cost.UnknownPriceAge;
-        var oldest = cost.OldestPriceUtc;
-        if (AgesWithMarketBuy(row))
-        {
-            if (cost.LiveBuy!.ObservedAtUtc is { } observed) oldest = oldest == null || observed < oldest ? observed : oldest;
-            else unknown = true;
-        }
-        return (unknown ? null : oldest, unknown);
-    }
-    private static bool IsStale(MarginRow row) => PriceAge(row) is var age && (age.Unknown || age.Oldest <= DateTime.UtcNow.AddDays(-1));
-    private static string Age(MarginRow row)
-    {
-        var (oldest, unknown) = PriceAge(row);
-        if (unknown) return "?";
-        if (oldest is not { } time) return "—";
-        return RelativeAge(time);
-    }
+        { IsUnknown: true } => "?",
+        { ObservedAtUtc: { } time } => RelativeAge(time),
+        _ => "—"
+    };
     private static string AgeTitle(MarginRow row)
     {
-        var (oldest, unknown) = PriceAge(row);
-        var label = AgesWithMarketBuy(row) ? "Oldest price" : "Oldest material price";
-        return unknown ? "Price age unknown" : oldest is { } time ? $"{label}: {time.ToLocalTime():f}" : label;
+        var age = PriceAge(row);
+        var label = AgesWithMarketBuy(row) ? "Price age, weighted by gil" : "Material price age, weighted by gil";
+        return age.IsUnknown ? "Price age unknown" : age.ObservedAtUtc is { } time ? $"{label}: {time.ToLocalTime():f}" : label;
     }
     private static string RelativeAge(DateTime time)
     {
@@ -1063,7 +1069,7 @@
     }
     private void MarkPricingFailed(MarginRow row, Exception error)
     {
-        row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
+        row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, [], "Pricing failed");
         row.Restored = false;
         row.Breakdown = null;
         row.BreakdownFor = null;

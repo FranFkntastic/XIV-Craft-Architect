@@ -20,7 +20,9 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     // v3: carries the root item's NPC vendor price; v2 records are dropped on read.
     // v4: market buys are multi-world plans (worlds, vendor or commissioned rest) and the inputs
     // carry the material pricing policy; v3 records are dropped on read.
-    private const int RecordVersion = 4;
+    // v5: price age is gil-weighted (known gil, weighted time, unknown gil) and each buy world
+    // carries its cost; v4 records are dropped on read.
+    private const int RecordVersion = 5;
     private readonly Dictionary<string, string> _pending = [];
     private readonly Dictionary<string, string> _written = [];
     private bool _flushing;
@@ -30,48 +32,54 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     /// <summary>Figures one row showed, with the inputs they were computed for.</summary>
     public sealed record SavedFigures(
         int Version, string Inputs, string Name, int IconId, decimal? Materials, int? Synths, int Units, int BatchSize,
-        string[] Missing, string? Issue, long? OldestPriceUnixMs, bool UnknownPriceAge,
+        string[] Missing, string? Issue, SavedPriceAge? MaterialsAge,
         SavedMarketBuy? MarketBuy = null, decimal? RootVendorPrice = null, SavedBuyPlan? LiveBuy = null)
     {
-        public TradeMarginCost ToCost() => new(Name, IconId, Materials, Synths, FromUnixMs(OldestPriceUnixMs),
-            Missing, Issue, Units, UnknownPriceAge)
+        public TradeMarginCost ToCost() => new(Name, IconId, Materials, Synths, Missing, Issue, Units)
         {
+            MaterialsAge = MaterialsAge?.ToAge() ?? TradeMarginPriceAge.None,
             BatchSize = BatchSize,
             MarketBuy = MarketBuy is { } buy
                 ? new(TradeMaterialRoute.Market, buy.Total, ListedQuantity: buy.ListedQuantity,
-                    RequiredQuantity: buy.RequiredQuantity, ObservedAtUtc: FromUnixMs(buy.ObservedAtUnixMs),
-                    UnitPrice: buy.Total / Math.Max(1, buy.RequiredQuantity), Plan: buy.Plan?.ToPlan())
+                    RequiredQuantity: buy.RequiredQuantity, UnitPrice: buy.Total / Math.Max(1, buy.RequiredQuantity),
+                    Plan: buy.Plan?.ToPlan())
                 : null,
             RootVendorPrice = RootVendorPrice is > 0 ? RootVendorPrice : null,
             LiveBuy = LiveBuy?.ToPlan()
         };
     }
 
-    /// <summary>The root market route a row showed.</summary>
-    public sealed record SavedMarketBuy(
-        decimal? Total, int ListedQuantity, int RequiredQuantity, long? ObservedAtUnixMs, SavedBuyPlan? Plan)
+    /// <summary>A gil-weighted price age, as its sums.</summary>
+    public sealed record SavedPriceAge(decimal KnownGil, decimal WeightedUnixMs, decimal UnknownGil)
     {
-        public static SavedMarketBuy? From(TradeMarginRouteOption? option) => option == null ? null
-            : new(option.Total, option.ListedQuantity, option.RequiredQuantity, ToUnixMs(option.ObservedAtUtc),
-                SavedBuyPlan.From(option.Plan));
+        public TradeMarginPriceAge ToAge() => new(KnownGil, WeightedUnixMs, UnknownGil);
+
+        public static SavedPriceAge From(TradeMarginPriceAge age) => new(age.KnownGil, age.WeightedUnixMs, age.UnknownGil);
     }
 
-    public sealed record SavedBuyWorld(string WorldName, string DataCenter, int Quantity, long? ObservedAtUnixMs);
+    /// <summary>The root market route a row showed.</summary>
+    public sealed record SavedMarketBuy(decimal? Total, int ListedQuantity, int RequiredQuantity, SavedBuyPlan? Plan)
+    {
+        public static SavedMarketBuy? From(TradeMarginRouteOption? option) => option == null ? null
+            : new(option.Total, option.ListedQuantity, option.RequiredQuantity, SavedBuyPlan.From(option.Plan));
+    }
+
+    public sealed record SavedBuyWorld(string WorldName, string DataCenter, int Quantity, decimal Cost, long? ObservedAtUnixMs);
 
     public sealed record SavedBuyPlan(
         int Quantity, int MarketUnits, decimal MarketCost, SavedBuyWorld[] Worlds,
-        TradeMarginBuyRemainder Remainder, decimal? RemainderUnitPrice, bool UnknownAge)
+        TradeMarginBuyRemainder Remainder, decimal? RemainderUnitPrice)
     {
         public TradeMarginBuyPlan ToPlan() => new(Quantity, MarketUnits, MarketCost,
             Worlds.Select(world => new TradeMarginBuyWorld(world.WorldName, world.DataCenter, world.Quantity,
-                FromUnixMs(world.ObservedAtUnixMs))).ToArray(),
-            Enum.IsDefined(Remainder) ? Remainder : TradeMarginBuyRemainder.None, RemainderUnitPrice, UnknownAge);
+                world.Cost, FromUnixMs(world.ObservedAtUnixMs))).ToArray(),
+            Enum.IsDefined(Remainder) ? Remainder : TradeMarginBuyRemainder.None, RemainderUnitPrice);
 
         public static SavedBuyPlan? From(TradeMarginBuyPlan? plan) => plan == null ? null
             : new(plan.Quantity, plan.MarketUnits, plan.MarketCost,
                 plan.Worlds.Select(world => new SavedBuyWorld(world.WorldName, world.DataCenter, world.Quantity,
-                    ToUnixMs(world.ObservedAtUtc))).ToArray(),
-                plan.Remainder, plan.RemainderUnitPrice, plan.UnknownAge);
+                    world.Cost, ToUnixMs(world.ObservedAtUtc))).ToArray(),
+                plan.Remainder, plan.RemainderUnitPrice);
     }
 
     private static DateTime? FromUnixMs(long? ms) =>
@@ -190,8 +198,8 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
     {
         var key = Key(companyId, mode, itemId);
         var value = JsonSerializer.Serialize(new SavedFigures(RecordVersion, inputs, cost.Name, cost.IconId, cost.Materials,
-            cost.Synths, cost.Units, cost.BatchSize, cost.Missing.ToArray(), cost.Issue, ToUnixMs(cost.OldestPriceUtc),
-            cost.UnknownPriceAge, SavedMarketBuy.From(cost.MarketBuy), cost.RootVendorPrice, SavedBuyPlan.From(cost.LiveBuy)));
+            cost.Synths, cost.Units, cost.BatchSize, cost.Missing.ToArray(), cost.Issue, SavedPriceAge.From(cost.MaterialsAge),
+            SavedMarketBuy.From(cost.MarketBuy), cost.RootVendorPrice, SavedBuyPlan.From(cost.LiveBuy)));
         if (_written.TryGetValue(key, out var written) && written == value)
         {
             _pending.Remove(key);
