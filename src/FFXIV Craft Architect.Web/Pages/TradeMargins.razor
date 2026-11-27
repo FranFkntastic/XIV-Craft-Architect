@@ -43,6 +43,13 @@
                 </div>
             }
         </div>
+        <div class="margins-mode" role="group" aria-label="Margins mode">
+            @foreach (var mode in Enum.GetValues<TradeMarginMode>())
+            {
+                <button type="button" class="@(_mode == mode ? "is-active" : null)" aria-pressed="@(_mode == mode ? "true" : "false")"
+                        @onclick="() => SetMode(mode)">@mode</button>
+            }
+        </div>
         <span class="toolbar-spacer"></span>
         <CompactMultiSelectField Id="margins-market-scope" Label="Prices from" Class="margins-scope"
                                  Values="@RegionValues" ValuesChanged="SaveRegionsAsync"
@@ -52,14 +59,15 @@
     </div>
     <div @ref="_tableWrap" class="margins-table-wrap @Glass("table")">
         <WebDataTable TItem="MarginRow" TColumnId="Column" Items="@SortedRows" Columns="@Columns"
-                      SortState="@_sort" SortChanged="value => _sort = value" GetRowKey="row => row.ItemId.ToString()"
-                      IsRowExpanded="row => _expanded.Contains(row.ItemId) && row.Breakdown != null"
+                      SortState="@_sort" SortChanged="value => _sort = value" GetRowKey="row => row.KeyText"
+                      IsRowExpanded="row => _expanded.Contains(row.Key) && row.Breakdown != null"
                       ExpandedContent="row => builder => RenderMaterials(builder, row)">
             <EmptyContent>No items yet.</EmptyContent>
         </WebDataTable>
     </div>
     <footer class="margins-summary @Glass("footer")">
-        <span><strong>@_rows.Count</strong> @(_rows.Count == 1 ? "item" : "items")</span>
+        @{ var shown = _rows.Count(row => row.Mode == _mode); }
+        <span><strong>@shown</strong> @(shown == 1 ? "item" : "items")</span>
         @if (_lastCheckedUtc is { } checkedAt) { <span title="@checkedAt.ToLocalTime().ToString("f")">checked @(RelativeAge(checkedAt) == "now" ? "just now" : RelativeAge(checkedAt) + " ago")</span> }
         <span><strong>@(_profile == null ? "—" : Rate.ToString("N0"))</strong> gil per synth</span>
     </footer>
@@ -77,7 +85,11 @@
     private Task? _ageLoop;
     private string _search = "";
     private int _searchGeneration, _activeMatch;
-    private int? _editingSale;
+    // Sell or Source: which rows the table shows. Both modes stay priced so switching is instant.
+    private TradeMarginMode _mode = TradeMarginMode.Sell;
+    // The sale price (Sell) or manual buy price (Source) being typed.
+    private RowKey? _editingSale;
+    private string _saleDraft = "";
     private string? _loadedCompany;
     private bool _loaded;
     private List<GarlandSearchResult> _matches = [];
@@ -89,17 +101,17 @@
     private WebTableSortState<Column> _sort = WebTableSortState<Column>.Unsorted;
     // Per-session view state: expanded rows, materials whose Set price is chosen but not yet
     // typed, and the unit cost being typed (kept through hosted syncs and re-renders).
-    private readonly HashSet<int> _expanded = [];
+    private readonly HashSet<RowKey> _expanded = [];
     private readonly HashSet<int> _pendingSetPrice = [];
     private int? _editingPrice;
     private string _priceDraft = "";
     private string? _focusPrice;
     // The batch size being typed, kept through hosted syncs and background repricing.
-    private int? _editingBatch;
+    private RowKey? _editingBatch;
     private string _batchDraft = "";
     // Background price update: one job at a time. Rows in _forceFetch refetch every pair
     // (Refresh prices); other rows refetch only pairs older than the Margins reuse window.
-    private readonly HashSet<int> _forceFetch = [];
+    private readonly HashSet<RowKey> _forceFetch = [];
     private CancellationTokenSource? _priceJob;
     private (Guid? Company, TradeMarginMarketScope? Scope) _priceJobScope;
     private bool _priceAgain;
@@ -118,9 +130,16 @@
         MarketFetchScopeResolver.GetRegions().Select(region => new CompactSelectOption(region, region)).ToArray();
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
     private enum Column { Item, Sale, Batch, Materials, Labor, Total, Margin, Percent, Age, Commission, Remove }
-    private sealed class MarginRow(int itemId, long? sale)
+    /// <summary>One Margins row: an item may be tracked once per mode.</summary>
+    private readonly record struct RowKey(int ItemId, TradeMarginMode Mode);
+    private static RowKey KeyOf(TradeMarginItem item) => new(item.ItemId, item.Mode);
+    private sealed class MarginRow(int itemId, TradeMarginMode mode, long? sale)
     {
         public int ItemId { get; } = itemId;
+        public TradeMarginMode Mode { get; } = mode;
+        public RowKey Key => new(ItemId, Mode);
+        public string KeyText => $"{(int)Mode}-{ItemId}";
+        /// <summary>Sell: the sale price. Source: the manual buy price; null buys at the live market.</summary>
         public long? Sale { get; set; } = sale;
         public long? SavedSale { get; set; } = sale;
         public int Batch { get; set; } = 1;
@@ -142,33 +161,64 @@
     private decimal? Materials(MarginRow row) => PerUnit(row, row.Cost?.Materials);
     private decimal? Labor(MarginRow row) => PerUnit(row, row.Cost?.Synths * Rate);
     private decimal? Total(MarginRow row) => Materials(row) is { } materials && Labor(row) is { } labor ? materials + labor : null;
-    private decimal? MarginGil(MarginRow row) => row.Sale is { } sale && Total(row) is { } total ? sale - total : null;
-    private decimal? Percent(MarginRow row) => row.Sale > 0 && MarginGil(row) is { } margin ? margin / row.Sale * 100 : null;
+    /// <summary>
+    /// Buying one unit at the live market: the whole-listing cost of the full run, per unit. Null
+    /// when the listings cannot cover the run, so no full-run price is ever made up.
+    /// </summary>
+    private static decimal? LiveBuy(MarginRow row) =>
+        row.Cost?.MarketBuy is { IsShortOfListings: false, Total: { } total } ? total / Math.Max(1, row.Cost.Units) : null;
+    /// <summary>Per unit: the sale price (Sell) or the buy price, manual or live (Source).</summary>
+    private static decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
+    private static decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.SavedSale ?? LiveBuy(row) : row.SavedSale;
+    /// <summary>Sell: margin (sale − cost). Source: savings (buy − commission cost); positive means commissioning is cheaper.</summary>
+    private decimal? Delta(MarginRow row) => Price(row) is { } price && Total(row) is { } total ? price - total : null;
+    private decimal? Percent(MarginRow row) => Price(row) is > 0 and var price && Delta(row) is { } delta ? delta / price * 100 : null;
     private static string Number(decimal? value) => value?.ToString("N0") ?? "—";
-    private string Sign(MarginRow row) => MarginGil(row) < 0 ? "is-loss" : "is-gain";
+    // Source savings carry their sign (color is never the only signal); Sell margins mark only losses.
+    private static string DeltaText(decimal value, TradeMarginMode mode, string format = "N0")
+    {
+        var rounded = Math.Round(value, format == "N1" ? 1 : 0, MidpointRounding.AwayFromZero);
+        var sign = rounded < 0 ? "−" : rounded > 0 && mode == TradeMarginMode.Source ? "+" : "";
+        return sign + Math.Abs(rounded).ToString(format, CultureInfo.InvariantCulture);
+    }
+    private string? DeltaRun(MarginRow row) => row.Batch > 1 && Delta(row) is { } delta && (row.Cost?.Units ?? row.Batch) is var units
+        ? $"{DeltaText(delta * units, row.Mode)} per {units:N0}" : null;
+    // Source: buying cheaper than commissioning is a plain fact, not a loss, so it stays calm.
+    private string Tone(MarginRow row) => row.Mode == TradeMarginMode.Source
+        ? Delta(row) switch { > 0 => "is-gain", null => "", _ => "is-neutral" }
+        : Delta(row) < 0 ? "is-loss" : "is-gain";
     private object? SortValue(MarginRow row) => _sort.Column switch
     {
-        Column.Item => row.Name, Column.Sale => row.SavedSale, Column.Batch => row.Batch, Column.Materials => Materials(row),
-        Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => row.SavedSale - Total(row),
-        Column.Percent => row.SavedSale > 0 ? (row.SavedSale - Total(row)) / row.SavedSale * 100 : null,
-        Column.Age => row.Cost?.OldestPriceUtc, _ => null
+        Column.Item => row.Name, Column.Sale => SavedPrice(row), Column.Batch => row.Batch, Column.Materials => Materials(row),
+        Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => SavedPrice(row) - Total(row),
+        Column.Percent => SavedPrice(row) is > 0 and var price ? (price - Total(row)) / price * 100 : null,
+        Column.Age => PriceAge(row).Oldest, _ => null
     };
-    private IReadOnlyList<MarginRow> SortedRows => _sort.Column == null ? _rows :
-        (_sort.Descending ? _rows.OrderBy(row => SortValue(row) == null).ThenByDescending(SortValue)
-            : _rows.OrderBy(row => SortValue(row) == null).ThenBy(SortValue)).ToArray();
+    private IReadOnlyList<MarginRow> SortedRows
+    {
+        get
+        {
+            var rows = _rows.Where(row => row.Mode == _mode).ToArray();
+            return _sort.Column == null ? rows :
+                (_sort.Descending ? rows.OrderBy(row => SortValue(row) == null).ThenByDescending(SortValue)
+                    : rows.OrderBy(row => SortValue(row) == null).ThenBy(SortValue)).ToArray();
+        }
+    }
     private IReadOnlyList<WebTableColumn<MarginRow, Column>> Columns =>
     [
-        new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (row.Cost?.Basis != null) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.ItemId) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
-new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@(_editingSale == row.ItemId ? row.Sale?.ToString(CultureInfo.InvariantCulture) : row.Sale?.ToString("N0", CultureInfo.InvariantCulture))" @onfocus="() => _editingSale = row.ItemId" @onblur="() => _editingSale = null" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
-        new() { Id = Column.Batch, Header = "Batch", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="batch-input" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="@(row.Name + " batch size")" value="@(_editingBatch == row.ItemId ? _batchDraft : row.Batch.ToString(CultureInfo.InvariantCulture))" @onfocus="() => BeginBatch(row)" @oninput="e => PreviewBatch(row, e)" @onblur="() => CommitBatchAsync(row.ItemId)" @onkeydown="e => BatchKeyAsync(e, row.ItemId)" /> },
+        new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (row.Cost?.Basis != null) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.Key) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
+        _mode == TradeMarginMode.Source
+            ? new() { Id = Column.Sale, Header = "Market buy", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live market price" aria-label="@($"Reset {row.Name} to live market price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " market buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && row.Cost?.MarketBuy is { IsShortOfListings: true } thin) { <span class="sub short-listed">@ShortOfListings(thin)</span> } else if (row.Sale == null && row.Cost?.MarketBuy?.BuyAt is { } buyAt) { <span class="sub" title="@buyAt">@buyAt</span> }</div> }
+            : new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
+        new() { Id = Column.Batch, Header = "Batch", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="batch-input" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="@(row.Name + " batch size")" value="@(_editingBatch == row.Key ? _batchDraft : row.Batch.ToString(CultureInfo.InvariantCulture))" @onfocus="() => BeginBatch(row)" @oninput="e => PreviewBatch(row, e)" @onblur="() => CommitBatchAsync(row.Key)" @onkeydown="e => BatchKeyAsync(e, row.Key)" /> },
         new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
         new() { Id = Column.Labor, Header = "Labor", Size = new(160), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Labor(row))<span class="sub">@(row.Cost?.Synths is { } synths ? SynthCount(synths, row.Cost.Units) : "")</span></span> },
-        WebTableColumn<MarginRow, Column>.Text(Column.Total, "Total cost", row => Number(Total(row)), 116, alignEnd: true, headerCssClass: "is-align-end"),
-        new() { Id = Column.Margin, Header = "Margin", Size = new(110), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@Number(MarginGil(row))</span> },
-        new() { Id = Column.Percent, Header = "Margin %", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@(Percent(row) is { } percent ? $"{percent:N1}%" : "—")</span> },
-        new() { Id = Column.Age, Header = "Prices", Size = new(74, 50), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span class="age @(row.Cost?.UnknownPriceAge == true || row.Cost?.OldestPriceUtc <= DateTime.UtcNow.AddDays(-1) ? "is-stale" : null)" title="@AgeTitle(row)">@Age(row)</span> },
-        new() { Id = Column.Commission, Header = "", Size = new(44, 44), Sortable = false, CellTemplate = row => @<button type="button" class="commission-btn" title="@("Create commission for " + row.Name)" aria-label="@("Create commission for " + row.Name)" @onclick="() => CreateCommission(row)"><MudIcon Icon="@Icons.Material.Filled.PostAdd" Size="Size.Small" /></button> },
-        new() { Id = Column.Remove, Header = "", Size = new(44, 44), Sortable = false, CellTemplate = row => @<button type="button" class="remove-btn" aria-label="@("Remove " + row.Name)" @onclick="() => RemoveAsync(row)">×</button> }
+        WebTableColumn<MarginRow, Column>.Text(Column.Total, _mode == TradeMarginMode.Source ? "Commission cost" : "Total cost", row => Number(Total(row)), 128, alignEnd: true, headerCssClass: "is-align-end"),
+        new() { Id = Column.Margin, Header = _mode == TradeMarginMode.Source ? "Savings" : "Margin", Size = new(140), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Tone, CellTemplate = row => @<span>@(Delta(row) is { } delta ? DeltaText(delta, row.Mode) : "—")@if (DeltaRun(row) is { } run) { <span class="sub">@run</span> }</span> },
+        new() { Id = Column.Percent, Header = _mode == TradeMarginMode.Source ? "Savings %" : "Margin %", Size = new(88), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Tone, CellTemplate = row => @<span>@(Percent(row) is { } percent ? DeltaText(percent, row.Mode, "N1") + "%" : "—")</span> },
+        new() { Id = Column.Age, Header = "Prices", Size = new(74, 50), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span class="age @(IsStale(row) ? "is-stale" : null)" title="@AgeTitle(row)">@Age(row)</span> },
+        new() { Id = Column.Commission, Header = "", Size = new(44, 44), Sortable = false, CellCssClass = "is-action", CellTemplate = row => @<button type="button" class="commission-btn" title="@("Create commission for " + row.Name)" aria-label="@("Create commission for " + row.Name)" @onclick="() => CreateCommission(row)"><MudIcon Icon="@Icons.Material.Filled.PostAdd" Size="Size.Small" /></button> },
+        new() { Id = Column.Remove, Header = "", Size = new(44, 44), Sortable = false, CellCssClass = "is-action", CellTemplate = row => @<button type="button" class="remove-btn" aria-label="@("Remove " + row.Name)" @onclick="() => RemoveAsync(row)">×</button> }
     ];
 
     private void RenderMaterials(RenderTreeBuilder __builder, MarginRow row)
@@ -193,7 +243,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     @if (precrafts.Length > 0)
                     {
                         <tr class="group"><td colspan="5">Precrafts</td></tr>
-                        @foreach (var line in precrafts) { RenderLine(__builder, row, breakdown, line, costs); }
+                        @foreach (var line in precrafts) { RenderLine(__builder, row, breakdown, line, costs, track: row.Mode == TradeMarginMode.Sell); }
                     }
                     @if (materials.Length > 0)
                     {
@@ -206,12 +256,27 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
 
     private void RenderLine(RenderTreeBuilder __builder, MarginRow row, TradeMarginBreakdown breakdown, TradeMarginLine line,
-        IReadOnlyDictionary<int, decimal?> costs)
+        IReadOnlyDictionary<int, decimal?> costs, bool track = false)
     {
         var route = DisplayedRoute(line);
         var market = line.Options.FirstOrDefault(option => option.Route == TradeMaterialRoute.Market);
+        var priceKey = $"{row.KeyText}-{line.ItemId}";
         <tr @key="line.ItemId">
-            <td><div class="material-cell"><ItemIcon IconId="@line.IconId" Name="@line.Name" /><span title="@line.Name">@line.Name</span></div></td>
+            <td>
+                <div class="material-cell">
+                    <ItemIcon IconId="@line.IconId" Name="@line.Name" /><span title="@line.Name">@line.Name</span>
+                    @if (track)
+                    {
+                        var tracked = _rows.Any(candidate => candidate.Key == new RowKey(line.ItemId, TradeMarginMode.Source));
+                        var full = !tracked && _rows.Count >= 500;
+                        var label = tracked ? "Already in Source" : full ? "Margins holds at most 500 items" : $"Track {line.Name} in Source";
+                        <button type="button" class="track-btn" disabled="@(tracked || full)" title="@label"
+                                aria-label="@(tracked ? $"{line.Name} already in Source" : label)" @onclick="() => TrackInSourceAsync(line)">
+                            <MudIcon Icon="@(tracked ? Icons.Material.Filled.PlaylistAddCheck : Icons.Material.Filled.PlaylistAdd)" Size="Size.Small" />
+                        </button>
+                    }
+                </div>
+            </td>
             <td class="is-align-end">@Quantity(line, breakdown)</td>
             <td>
                 <div class="material-source">
@@ -233,7 +298,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 @if (route == TradeMaterialRoute.SetPrice)
                 {
                     <input class="set-price-input" inputmode="numeric" maxlength="19" autocomplete="off"
-                           data-price-key="@($"{row.ItemId}-{line.ItemId}")" aria-label="@(line.Name + " unit cost")"
+                           data-price-key="@priceKey" aria-label="@(line.Name + " unit cost")"
                            value="@(_editingPrice == line.ItemId ? _priceDraft : StoredPrice(line)?.ToString("N0", CultureInfo.InvariantCulture))"
                            @onfocus="() => BeginPrice(line)" @oninput="e => PreviewPrice(line, e)"
                            @onblur="() => CommitPriceAsync(line.ItemId)" @onkeydown="e => PriceKeyAsync(e, line.ItemId)" />
@@ -352,14 +417,35 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         return items;
     }
 
+    /// <summary>A Source row buying at the live market also prices from the item's own listings.</summary>
+    private static bool AgesWithMarketBuy(MarginRow row) => row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.MarketBuy != null;
+    /// <summary>The oldest price a row's figures rest on: its materials, plus its live market buy.</summary>
+    private static (DateTime? Oldest, bool Unknown) PriceAge(MarginRow row)
+    {
+        if (row.Cost is not { } cost) return (null, false);
+        var unknown = cost.UnknownPriceAge;
+        var oldest = cost.OldestPriceUtc;
+        if (AgesWithMarketBuy(row))
+        {
+            if (cost.MarketBuy!.ObservedAtUtc is { } observed) oldest = oldest == null || observed < oldest ? observed : oldest;
+            else unknown = true;
+        }
+        return (unknown ? null : oldest, unknown);
+    }
+    private static bool IsStale(MarginRow row) => PriceAge(row) is var age && (age.Unknown || age.Oldest <= DateTime.UtcNow.AddDays(-1));
     private static string Age(MarginRow row)
     {
-        if (row.Cost?.UnknownPriceAge == true) return "?";
-        if (row.Cost?.OldestPriceUtc is not { } time) return "—";
+        var (oldest, unknown) = PriceAge(row);
+        if (unknown) return "?";
+        if (oldest is not { } time) return "—";
         return RelativeAge(time);
     }
-    private static string AgeTitle(MarginRow row) => row.Cost?.UnknownPriceAge == true ? "Price age unknown" :
-        row.Cost?.OldestPriceUtc is { } time ? $"Oldest material price: {time.ToLocalTime():f}" : "Oldest material price";
+    private static string AgeTitle(MarginRow row)
+    {
+        var (oldest, unknown) = PriceAge(row);
+        var label = AgesWithMarketBuy(row) ? "Oldest price" : "Oldest material price";
+        return unknown ? "Price age unknown" : oldest is { } time ? $"{label}: {time.ToLocalTime():f}" : label;
+    }
     private static string RelativeAge(DateTime time)
     {
         var age = DateTime.UtcNow - time;
@@ -387,7 +473,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         Snackbar.Add(ex switch
         {
             CompanyHubRequestException { ErrorCode: "invalid_margin_items" } =>
-                "Could not save margin items. Use at most 500 distinct items with non-negative sale prices and batch sizes from 1 to 9,999.",
+                "Could not save margin items. Use at most 500 items, each at most once per mode, with non-negative prices and batch sizes from 1 to 9,999.",
             CompanyHubRequestException { ErrorCode: TradeMaterialSourceValidator.ErrorCode } =>
                 "Could not save material sources.",
             CompanyHubRequestException { ErrorCode: TradeMarginMarketScope.ErrorCode } =>
@@ -441,7 +527,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             if (scopeChanged) _lastCheckedUtc = null;
             var unchanged = !scopeChanged && _revision == resolved.HostedRevision &&
                 (previous?.MarginItems ?? []).SequenceEqual(resolved.Profile.MarginItems ?? []);
-            var previousRows = _rows.ToDictionary(row => row.ItemId);
+            var previousRows = _rows.ToDictionary(row => row.Key);
             _profile = resolved.Profile;
             _revision = resolved.HostedRevision;
             _hosted = resolved.IsHosted;
@@ -459,18 +545,19 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         catch (Exception ex) { ReportError(ex); }
         finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
     }
-    private void RebuildRows(Dictionary<int, MarginRow> previousRows, bool scopeChanged, bool preserveEdit = true)
+    private void RebuildRows(Dictionary<RowKey, MarginRow> previousRows, bool scopeChanged, bool preserveEdit = true)
     {
         if (scopeChanged) _forceFetch.Clear();
-        _rows = (_profile?.MarginItems ?? []).DistinctBy(item => item.ItemId).Select(item =>
+        _rows = (_profile?.MarginItems ?? []).Where(item => Enum.IsDefined(item.Mode)).DistinctBy(KeyOf).Select(item =>
         {
-            previousRows.TryGetValue(item.ItemId, out var prior);
+            var key = KeyOf(item);
+            previousRows.TryGetValue(key, out var prior);
             var batch = Math.Clamp(item.BatchSize, 1, TradeMarginItem.MaxBatchSize);
             // A cost priced for another batch size (e.g. changed in another session) is recalculated.
             var stale = scopeChanged || prior?.Cost?.BatchSize != batch;
-            return new MarginRow(item.ItemId, item.SalePrice)
+            return new MarginRow(item.ItemId, item.Mode, item.SalePrice)
             {
-                Sale = preserveEdit && _editingSale == item.ItemId && prior != null ? prior.Sale : item.SalePrice,
+                Sale = preserveEdit && _editingSale == key && prior != null ? prior.Sale : item.SalePrice,
                 Batch = batch,
                 ItemName = prior?.Name ?? _itemNames.GetValueOrDefault(item.ItemId, "Item"),
                 Cost = stale ? null : prior?.Cost,
@@ -498,12 +585,12 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     {
         if (_profile == null || _disposed) return;
         var company = _profile.Id;
-        var saved = await SavedFigures.LoadAsync(company, _rows.Select(row => row.ItemId).ToArray());
+        var saved = await SavedFigures.LoadAsync(company, _rows.Select(row => (row.ItemId, row.Mode)).ToArray());
         if (_disposed || _profile?.Id != company || saved.Count == 0) return;
         var shown = 0;
         foreach (var row in _rows)
         {
-            if (row.Cost != null || !saved.TryGetValue(row.ItemId, out var figures) ||
+            if (row.Cost != null || !saved.TryGetValue((row.ItemId, row.Mode), out var figures) ||
                 figures.Inputs != FiguresInputs(row, row.Batch) || figures.BatchSize != row.Batch) continue;
             row.Cost = figures.ToCost();
             row.ItemName = row.Cost.Name;
@@ -526,7 +613,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         if (_disposed) return;
         var scope = MarginScope;
         var ct = _lifetime.Token;
-        if (refresh) foreach (var row in _rows) _forceFetch.Add(row.ItemId);
+        if (refresh) foreach (var row in _rows) _forceFetch.Add(row.Key);
         StateHasChanged();
         foreach (var row in _rows.ToArray())
         {
@@ -534,7 +621,8 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             if (!NeedsPricing(row)) continue;
             try
             {
-                var plan = row.Plan != null && Unpriced(row) ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch);
+                var plan = row.Plan != null && Unpriced(row) ? row.Plan : await Calculator.PrepareAsync(row.ItemId, scope, ct, row.Batch,
+                    includeRootMarket: row.Mode == TradeMarginMode.Source);
                 row.Plan = plan;
                 row.Market = await Calculator.ReadStoredAsync(TradeMarginCalculator.Pairs(plan, scope), ct);
                 // A row without stored data for some material in some data center of the scope
@@ -584,16 +672,16 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                 var attempted = new HashSet<(int itemId, string dataCenter)>();
                 var landed = new Dictionary<(int itemId, string dataCenter), CachedMarketData>();
                 // Rows still without a figure go first, then table order.
-                foreach (var itemId in _rows.OrderBy(row => Unpriced(row) ? 0 : 1).Select(row => row.ItemId).ToArray())
+                foreach (var key in _rows.OrderBy(row => Unpriced(row) ? 0 : 1).Select(row => row.Key).ToArray())
                 {
                     ct.ThrowIfCancellationRequested();
-                    var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
+                    var row = _rows.FirstOrDefault(candidate => candidate.Key == key);
                     if (row?.Plan is not { Issue: null } plan || row.Market is not { } stored)
                     {
-                        _forceFetch.Remove(itemId);
+                        _forceFetch.Remove(key);
                         continue;
                     }
-                    var forced = _forceFetch.Contains(itemId);
+                    var forced = _forceFetch.Contains(key);
                     var reuseCutoff = DateTime.UtcNow - MarketEvidencePolicyDefaults.AgingThreshold;
                     var pairs = TradeMarginCalculator.Pairs(plan, scope);
                     var due = pairs.Where(pair => !attempted.Contains(pair) &&
@@ -610,9 +698,9 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     {
                         var market = new Dictionary<(int itemId, string dataCenter), CachedMarketData>(stored);
                         foreach (var pair in updated) market[pair] = landed[pair];
-                        if (!await ApplyUpdateAsync(itemId, plan, market, company, scope, ct)) return;
+                        if (!await ApplyUpdateAsync(key, plan, market, company, scope, ct)) return;
                     }
-                    if (forced && _forceFetch.Remove(itemId) && !_disposed) StateHasChanged();
+                    if (forced && _forceFetch.Remove(key) && !_disposed) StateHasChanged();
                 }
                 if (forcedPass && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
             } while (_priceAgain && !ct.IsCancellationRequested);
@@ -631,7 +719,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         }
     }
     /// <summary>Reprices one row from updated market data; false when the company or scope changed.</summary>
-    private async Task<bool> ApplyUpdateAsync(int itemId, TradeMarginCalculator.PreparedRow plan,
+    private async Task<bool> ApplyUpdateAsync(RowKey key, TradeMarginCalculator.PreparedRow plan,
         Dictionary<(int itemId, string dataCenter), CachedMarketData> market, Guid? company, TradeMarginMarketScope? scope,
         CancellationToken ct)
     {
@@ -641,14 +729,14 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         try { cost = await TradeMarginCalculator.PriceAsync(plan, scope, market, Pricing, ct); }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            Log.LogWarning(ex, "Margins could not price item {ItemId} from updated market data; stored prices kept", itemId);
+            Log.LogWarning(ex, "Margins could not price item {ItemId} ({Mode}) from updated market data; stored prices kept", key.ItemId, key.Mode);
             return true;
         }
         await _gate.WaitAsync(ct);
         try
         {
             if (_disposed || _profile?.Id != company || MarginScope != scope) return false;
-            var row = _rows.FirstOrDefault(candidate => candidate.ItemId == itemId);
+            var row = _rows.FirstOrDefault(candidate => candidate.Key == key);
             if (row == null) return true;
             // Labor, material sources or the batch size may have changed while this row was priced.
             while (cost.Basis != null && (rate != Rate || !sources.SequenceEqual(_profile?.MaterialSources ?? []) || cost.BatchSize != row.Batch))
@@ -685,13 +773,13 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         row.ItemName = cost.Name;
         if (cost.Basis == null) row.Breakdown = null;
         if (!IsFailure(cost) && _profile != null && FiguresInputs(row, cost.BatchSize) is { } inputs)
-            SavedFigures.Save(_profile.Id, row.ItemId, inputs, cost);
+            SavedFigures.Save(_profile.Id, row.Mode, row.ItemId, inputs, cost);
         _ = DescribeSafelyAsync(row);
     }
     /// <summary>Re-describes an expanded row from its current cost; a newer cost wins.</summary>
     private async Task DescribeSafelyAsync(MarginRow row)
     {
-        if (_disposed || !_expanded.Contains(row.ItemId) || row.Cost is not { Basis: not null } cost) return;
+        if (_disposed || !_expanded.Contains(row.Key) || row.Cost is not { Basis: not null } cost) return;
         try
         {
             var breakdown = await TradeMarginCalculator.DescribeAsync(cost, Pricing, _lifetime.Token);
@@ -719,9 +807,9 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private async Task ToggleExpandedAsync(MarginRow row)
     {
-        if (!_expanded.Remove(row.ItemId))
+        if (!_expanded.Remove(row.Key))
         {
-            _expanded.Add(row.ItemId);
+            _expanded.Add(row.Key);
             await DescribeSafelyAsync(row);
         }
     }
@@ -758,7 +846,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
             if (!_disposed && generation == _searchGeneration)
             {
                 _activeMatch = 0;
-                _matches = matches.Where(item => item.Type == "item" && _rows.All(row => row.ItemId != item.Id)).Take(6).ToList();
+                _matches = matches.Where(item => item.Type == "item" && _rows.All(row => row.Key != new RowKey(item.Id, _mode))).Take(6).ToList();
             }
         }
         catch (Exception ex) { if (generation == _searchGeneration) ReportError(ex); }
@@ -804,7 +892,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     !(_profile.MaterialSources ?? []).SequenceEqual(current.Profile.MaterialSources ?? []);
                 _profile = current.Profile;
                 if (scopeChanged) _lastCheckedUtc = null;
-                RebuildRows(_rows.ToDictionary(row => row.ItemId), scopeChanged);
+                RebuildRows(_rows.ToDictionary(row => row.Key), scopeChanged);
                 await CalculateAsync(false);
                 if (pricingChanged) await RepriceAllAsync();
                 return;
@@ -871,7 +959,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         {
             // Set price is complete only with a number: nothing is stored until one is typed.
             _pendingSetPrice.Add(line.ItemId);
-            _focusPrice = $"{row.ItemId}-{line.ItemId}";
+            _focusPrice = $"{row.KeyText}-{line.ItemId}";
             return;
         }
         _pendingSetPrice.Remove(line.ItemId);
@@ -910,30 +998,79 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         else if (stored != null)
             await SaveSourcesAsync(sources => sources.Where(source => source.ItemId != itemId).ToArray());
     }
+    private void SetMode(TradeMarginMode mode)
+    {
+        if (_mode == mode) return;
+        _mode = mode;
+        // Search results were filtered for the other mode's rows.
+        ++_searchGeneration; _search = ""; _matches = [];
+    }
     private async Task AddAsync(GarlandSearchResult item)
     {
+        if (await AddItemAsync(item.Id, item.Object.Name, _mode, batch: 1))
+        {
+            ++_searchGeneration; _search = ""; _matches = [];
+        }
+    }
+    /// <summary>Tracks a precraft in Source, batched by the stack (999 when Garland does not say), staying in Sell.</summary>
+    private async Task TrackInSourceAsync(TradeMarginLine line)
+    {
+        var batch = 999;
+        try
+        {
+            if ((await Garland.GetItemAsync(line.ItemId, _lifetime.Token))?.StackSize is > 0 and var stack) batch = Math.Min(999, stack);
+        }
+        catch (Exception) when (!_lifetime.IsCancellationRequested) { /* Keep the default batch. */ }
+        await AddItemAsync(line.ItemId, line.Name, TradeMarginMode.Source, batch);
+    }
+    /// <summary>Adds one item to one mode; false when it was not added.</summary>
+    private async Task<bool> AddItemAsync(int itemId, string name, TradeMarginMode mode, int batch)
+    {
+        var key = new RowKey(itemId, mode);
         await _gate.WaitAsync();
         try
         {
-            if (_profile == null || _rows.Count >= 500 || _rows.Any(row => row.ItemId == item.Id)) return;
-            _itemNames[item.Id] = item.Object.Name;
+            if (_disposed || _profile == null || _rows.Count >= 500 || _rows.Any(row => row.Key == key)) return false;
+            _itemNames[itemId] = name;
             await SaveItemsAsync(items =>
             {
-                if (items.Any(existing => existing.ItemId == item.Id)) return items;
+                if (items.Any(existing => KeyOf(existing) == key)) return items;
                 if (items.Count >= 500) throw new InvalidOperationException("Margins supports at most 500 items.");
-                return items.Append(new TradeMarginItem(item.Id)).ToArray();
+                return items.Append(new TradeMarginItem(itemId, null, Math.Clamp(batch, 1, TradeMarginItem.MaxBatchSize), mode)).ToArray();
             });
-            var added = _rows.FirstOrDefault(row => row.ItemId == item.Id);
-            if (added != null) added.ItemName = item.Object.Name;
-            ++_searchGeneration; _search = ""; _matches = [];
+            if (_rows.FirstOrDefault(row => row.Key == key) is { } added) added.ItemName = name;
+            return true;
         }
-        catch (Exception ex) { ReportError(ex); }
-        finally { _gate.Release(); }
+        catch (Exception ex) { ReportError(ex); return false; }
+        finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
     }
-    private static void PreviewSale(MarginRow row, ChangeEventArgs e)
+    /// <summary>What a price input shows: the typed draft, the stored price, or (Source) the live market price.</summary>
+    private string? SaleValue(MarginRow row) => _editingSale == row.Key ? _saleDraft
+        : (row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale) is { } price
+            ? Math.Round(price, MidpointRounding.AwayFromZero).ToString("N0", CultureInfo.InvariantCulture) : null;
+    private void BeginSale(MarginRow row)
     {
-        var text = new string((e.Value?.ToString() ?? "").Where(char.IsAsciiDigit).ToArray());
-        row.Sale = long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 0 ? value : null;
+        if (_editingSale == row.Key) return;
+        _editingSale = row.Key;
+        var shown = row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
+        _saleDraft = shown is { } price ? Math.Round(price, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture) : "";
+    }
+    private void EndSale(MarginRow row)
+    {
+        if (_editingSale == row.Key) _editingSale = null;
+    }
+    // Typing (re)starts an edit even when focus never left the input. In Source, an empty price buys at the live market.
+    private void PreviewSale(MarginRow row, ChangeEventArgs e)
+    {
+        _editingSale = row.Key;
+        _saleDraft = new string((e.Value?.ToString() ?? "").Where(char.IsAsciiDigit).ToArray());
+        row.Sale = long.TryParse(_saleDraft, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 0 ? value : null;
+    }
+    private Task ResetBuyAsync(MarginRow row)
+    {
+        if (_editingSale == row.Key) _editingSale = null;
+        row.Sale = null;
+        return SaveSaleAsync(row);
     }
     private async Task SaveSaleAsync(MarginRow row)
     {
@@ -941,12 +1078,12 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         await _gate.WaitAsync();
         try
         {
-            await SaveItemsAsync(items => items.Select(item => item.ItemId == row.ItemId ? item with { SalePrice = sale } : item).ToArray());
+            await SaveItemsAsync(items => items.Select(item => KeyOf(item) == row.Key ? item with { SalePrice = sale } : item).ToArray());
         }
         catch (Exception ex)
         {
             row.Sale = row.SavedSale;
-            var displayed = _rows.FirstOrDefault(item => item.ItemId == row.ItemId);
+            var displayed = _rows.FirstOrDefault(item => item.Key == row.Key);
             if (displayed != null) displayed.Sale = displayed.SavedSale;
             ReportError(ex);
         }
@@ -954,27 +1091,27 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     }
     private void BeginBatch(MarginRow row)
     {
-        if (_editingBatch == row.ItemId) return;
-        _editingBatch = row.ItemId;
+        if (_editingBatch == row.Key) return;
+        _editingBatch = row.Key;
         _batchDraft = row.Batch.ToString(CultureInfo.InvariantCulture);
     }
     // Typing (re)starts an edit even when focus never left the input, e.g. after Enter.
     private void PreviewBatch(MarginRow row, ChangeEventArgs e)
     {
-        _editingBatch = row.ItemId;
+        _editingBatch = row.Key;
         _batchDraft = new string((e.Value?.ToString() ?? "").Where(char.IsAsciiDigit).ToArray());
     }
-    private async Task BatchKeyAsync(KeyboardEventArgs e, int itemId)
+    private async Task BatchKeyAsync(KeyboardEventArgs e, RowKey key)
     {
-        if (e.Key == "Enter") await CommitBatchAsync(itemId);
+        if (e.Key == "Enter") await CommitBatchAsync(key);
     }
     /// <summary>
     /// Reprices the row for the new batch size from its evidence, then saves it beside the sale
     /// price. Empty, zero or unparsable input keeps the previous batch size.
     /// </summary>
-    private async Task CommitBatchAsync(int itemId)
+    private async Task CommitBatchAsync(RowKey key)
     {
-        if (_editingBatch != itemId) return;
+        if (_editingBatch != key) return;
         var draft = _batchDraft;
         _editingBatch = null;
         _batchDraft = "";
@@ -983,17 +1120,17 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         await _gate.WaitAsync();
         try
         {
-            if (_disposed || _rows.FirstOrDefault(item => item.ItemId == itemId) is not { } row || row.Batch == batch) return;
+            if (_disposed || _rows.FirstOrDefault(item => item.Key == key) is not { } row || row.Batch == batch) return;
             var previous = row.Batch;
             row.Batch = batch;
             await RepriceBatchAsync(row);
             try
             {
-                await SaveItemsAsync(items => items.Select(item => item.ItemId == itemId ? item with { BatchSize = batch } : item).ToArray());
+                await SaveItemsAsync(items => items.Select(item => KeyOf(item) == key ? item with { BatchSize = batch } : item).ToArray());
             }
             catch (Exception ex)
             {
-                if (_rows.FirstOrDefault(item => item.ItemId == itemId) is { } displayed)
+                if (_rows.FirstOrDefault(item => item.Key == key) is { } displayed)
                 {
                     displayed.Batch = previous;
                     await RepriceBatchAsync(displayed);
@@ -1028,6 +1165,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         {
             ["newOrderItem"] = row.ItemId,
             ["newOrderName"] = row.Name is { Length: > 0 } name && name != "Item" ? name : null,
+            ["newOrderQuantity"] = row.Batch,
             ["company"] = _profile?.Id.ToString()
         };
         Navigation.NavigateTo(Navigation.GetUriWithQueryParameters("trade/orders", query));
@@ -1039,9 +1177,9 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
         try
         {
             var companyId = _profile?.Id;
-            var removed = new TradeMarginItem(row.ItemId, row.SavedSale, row.Batch);
-            await SaveItemsAsync(items => items.Where(item => item.ItemId != row.ItemId).ToArray());
-            if (companyId is { } company) SavedFigures.Delete(company, row.ItemId);
+            var removed = new TradeMarginItem(row.ItemId, row.SavedSale, row.Batch, row.Mode);
+            await SaveItemsAsync(items => items.Where(item => KeyOf(item) != row.Key).ToArray());
+            if (companyId is { } company) SavedFigures.Delete(company, row.Mode, row.ItemId);
             if (!_disposed) Snackbar.Add($"Removed {row.Name}.", Severity.Normal, options =>
             {
                 options.Action = "Undo";
@@ -1064,7 +1202,7 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
                     if (_profile?.Id != companyId) throw new InvalidOperationException("The active company changed; the item was not restored.");
                     await SaveItemsAsync(items =>
                     {
-                        if (items.Any(item => item.ItemId == removed.ItemId)) return items;
+                        if (items.Any(item => KeyOf(item) == KeyOf(removed))) return items;
                         if (items.Count >= 500) throw new InvalidOperationException("Margins supports at most 500 items.");
                         return items.Append(removed).ToArray();
                     });

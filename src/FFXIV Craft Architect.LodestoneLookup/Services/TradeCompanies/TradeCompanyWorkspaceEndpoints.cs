@@ -141,7 +141,7 @@ public static class TradeCompanyWorkspaceEndpoints
                 }
                 if (body.MarginItems is { } items &&
                     (items.Count > 500 || items.Any(item => !TradeMarginItem.IsValid(item)) ||
-                     items.Select(item => item.ItemId).Distinct().Count() != items.Count))
+                     !TradeMarginItem.AreDistinct(items)))
                 {
                     return Results.BadRequest(new { error = "invalid_margin_items" });
                 }

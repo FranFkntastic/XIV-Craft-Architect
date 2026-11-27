@@ -30,7 +30,7 @@ public partial class TradeOrders
     private TradeCompanyProfile? _companyProfile;
     private IReadOnlyList<CompanyHubRosterMember> _companyMembers = [];
     private string? _loadedCompanyQuery;
-    private (int ItemId, string? Name)? _pendingNewOrderSeed;
+    private (int ItemId, string? Name, int Quantity)? _pendingNewOrderSeed;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -44,7 +44,7 @@ public partial class TradeOrders
 
         if (newOrderSeed is { } seed)
         {
-            await ApplyNewOrderSeedAsync(seed.ItemId, seed.Name);
+            await ApplyNewOrderSeedAsync(seed.ItemId, seed.Name, seed.Quantity);
         }
     }
     private List<TradeCrafterProfile> _crafters = [];
