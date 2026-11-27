@@ -17,7 +17,8 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
 {
     private const string Prefix = "margins.figures.";
     // v2: keyed by mode and carrying the root market buy; v1 records are dropped on read.
-    private const int RecordVersion = 2;
+    // v3: carries the root item's NPC vendor price; v2 records are dropped on read.
+    private const int RecordVersion = 3;
     private readonly Dictionary<string, string> _pending = [];
     private readonly Dictionary<string, string> _written = [];
     private bool _flushing;
@@ -30,7 +31,7 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
         string[] Missing, string? Issue, long? OldestPriceUnixMs, bool UnknownPriceAge,
         bool HasMarketBuy = false, decimal? MarketBuyTotal = null, int MarketBuyListingCount = 0,
         int MarketBuyListedQuantity = 0, int MarketBuyRequiredQuantity = 0, long? MarketBuyObservedAtUnixMs = null,
-        string? MarketBuyWorldName = null, string? MarketBuyDataCenter = null)
+        string? MarketBuyWorldName = null, string? MarketBuyDataCenter = null, decimal? RootVendorPrice = null)
     {
         public TradeMarginCost ToCost() => new(Name, IconId, Materials, Synths, FromUnixMs(OldestPriceUnixMs),
             Missing, Issue, Units, UnknownPriceAge)
@@ -42,7 +43,8 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
                     ObservedAtUtc: FromUnixMs(MarketBuyObservedAtUnixMs),
                     UnitPrice: MarketBuyTotal / Math.Max(1, MarketBuyRequiredQuantity),
                     WorldName: MarketBuyWorldName, DataCenter: MarketBuyDataCenter)
-                : null
+                : null,
+            RootVendorPrice = RootVendorPrice is > 0 ? RootVendorPrice : null
         };
     }
 
@@ -164,7 +166,8 @@ public sealed class MarginFiguresStore(IndexedDbService indexedDb, ILogger<Margi
         var value = JsonSerializer.Serialize(new SavedFigures(RecordVersion, inputs, cost.Name, cost.IconId, cost.Materials,
             cost.Synths, cost.Units, cost.BatchSize, cost.Missing.ToArray(), cost.Issue, ToUnixMs(cost.OldestPriceUtc),
             cost.UnknownPriceAge, buy != null, buy?.Total, buy?.ListingCount ?? 0, buy?.ListedQuantity ?? 0,
-            buy?.RequiredQuantity ?? 0, ToUnixMs(buy?.ObservedAtUtc), buy?.WorldName, buy?.DataCenter));
+            buy?.RequiredQuantity ?? 0, ToUnixMs(buy?.ObservedAtUtc), buy?.WorldName, buy?.DataCenter,
+            cost.RootVendorPrice));
         if (_written.TryGetValue(key, out var written) && written == value)
         {
             _pending.Remove(key);
