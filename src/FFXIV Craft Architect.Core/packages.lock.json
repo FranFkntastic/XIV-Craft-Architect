@@ -4,11 +4,11 @@
     "net8.0": {
       "Franthropy.FFXIV": {
         "type": "Direct",
-        "requested": "[0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89, 0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89]",
-        "resolved": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
-        "contentHash": "6B2ndts3FZIsARrH7LkdvWgw06/b9lQRqOHV8X3PQs18fu77YDlo2Peo+bW5B0DsYOexwOEj188tfTTs+aD3oA==",
+        "requested": "[0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426, 0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426]",
+        "resolved": "0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426",
+        "contentHash": "fprDtfaFUxTnwgxpIR0kozU+8ox0zBk4nBHoItBtG5k3UQTomRY+tdsP+nbsNpdko+OotUzFNXj3JtSmDoJNtQ==",
         "dependencies": {
-          "Franthropy.Filtering": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89"
+          "Franthropy.Filtering": "0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426"
         }
       },
       "Microsoft.Extensions.Caching.Memory": {
@@ -76,8 +76,8 @@
       },
       "Franthropy.Filtering": {
         "type": "Transitive",
-        "resolved": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
-        "contentHash": "7vP9YuVkWcH7QHcJU8Nt485LvR+eFi+oMPIMwMzGaN+Mn5ivyj5LhGb8MMQYC5qW0k6qIJgenSjwIA+YQfao9Q=="
+        "resolved": "0.1.0-commit.1750985334d593f4432dd6df7d7f1c3c5d4df426",
+        "contentHash": "4YBivBsmgHclE+buTpL7UoWoiAEcQFx9R/e5Bkrr8jD20Yvb6emuMW+Oi7+xsfSLVzQdZK7Oo9obfI9OaTMouA=="
       },
       "Microsoft.Extensions.Caching.Abstractions": {
         "type": "Transitive",
