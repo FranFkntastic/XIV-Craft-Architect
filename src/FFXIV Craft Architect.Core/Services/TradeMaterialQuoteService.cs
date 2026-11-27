@@ -31,6 +31,10 @@ public sealed class TradeMaterialQuoteService
     /// zero cash, and company-provided materials keep their selected-source company value: they
     /// never join the route, so they cannot add world stops or block the crafter's quote.
     /// </summary>
+    /// <param name="retryUncapped">
+    /// Treat the world-stop limit as advisory: when no route fits it, search again without it and
+    /// return the wider route with a warning. False keeps the limit strict and skips that search.
+    /// </param>
     public async Task<TradeMaterialQuoteResult> PriceAsync(
         MarketShoppingService shopping,
         IReadOnlyList<DetailedShoppingPlan> plans,
@@ -40,6 +44,7 @@ public sealed class TradeMaterialQuoteService
         DateTime now,
         IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines,
         IReadOnlySet<(int ItemId, bool RequiresHq)>? companyProvided = null,
+        bool retryUncapped = true,
         CancellationToken ct = default)
     {
         var stock = demand.Where(item => sources.GetValueOrDefault((item.ItemId, item.RequiresHq)) == AcquisitionSource.OnHand).ToArray();
@@ -94,8 +99,10 @@ public sealed class TradeMaterialQuoteService
             }, includeSplitPurchases: routePolicy.AllowSplitPurchases,
             executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
         var result = Build(optimization, purchases, policy, now);
-        if (!result.IsComplete || result.Quote!.WorldStops > routePolicy.MaximumWorldStops)
+        if (retryUncapped && (!result.IsComplete || result.Quote!.WorldStops > routePolicy.MaximumWorldStops))
         {
+            // Each route search is a long synchronous pass; let an interactive host render between them.
+            await MainThreadYield.Async(ct);
             // The stop limit is advisory: when no capped route fits it, search again without the
             // per-item and route caps so Build sees the purchases those caps excluded and can
             // return the best route with a warning. Genuine shortfalls and unsupported sources

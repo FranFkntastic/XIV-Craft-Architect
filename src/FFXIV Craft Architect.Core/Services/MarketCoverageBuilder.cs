@@ -100,8 +100,8 @@ public static class MarketCoverageBuilder
     /// Buys the plan's quantity from listings priced strictly below <paramref name="priceCeiling"/>
     /// on at most <paramref name="maxWorlds"/> worlds, whole listings cheapest first, leaving the
     /// rest to a source priced at the ceiling (an NPC vendor, or commissioning the units). The
-    /// worlds are chosen to minimize the listings' cost plus the rest at the ceiling, where bought
-    /// listings cost their average unit price per unit covered. An exact choice of worlds is
+    /// worlds are chosen to minimize the listings' cost plus the rest at the ceiling, where each
+    /// world's units cost <see cref="CostOfUnitsUsed"/>. An exact choice of worlds is
     /// combinatorial, so two heuristics run and the cheaper wins: forward selection, which adds
     /// the world that lowers that total most until no world helps or the limit is reached, and
     /// the cheapest-listings-first walk over every world that <see cref="BuildBoundedSplit"/> uses.
@@ -128,18 +128,18 @@ public static class MarketCoverageBuilder
             return null;
         }
 
+        // Exactly how the fill is priced: each world's units used at that world's bought-listing
+        // average, plus the rest at the ceiling.
         decimal Total(List<MarketCoverageListing> selected)
         {
             var covered = 0;
-            var purchased = 0;
-            decimal cash = 0;
-            foreach (var listing in selected)
+            decimal cost = 0;
+            foreach (var world in ToWorlds(selected))
             {
-                covered += listing.QuantityUsed;
-                purchased += listing.QuantityPurchased;
-                cash += listing.QuantityPurchased * listing.PricePerUnit;
+                covered += world.QuantityCovered;
+                cost += CostOfUnitsUsed(world.QuantityCovered, world.QuantityToPurchase, world.CashOutCost);
             }
-            return (purchased > 0 ? covered * cash / purchased : 0) + (quantity - covered) * priceCeiling;
+            return cost + (quantity - covered) * priceCeiling;
         }
 
         // Each world's listings keep the global cheapest-first order.
@@ -192,16 +192,7 @@ public static class MarketCoverageBuilder
             return null;
         }
 
-        var coverageWorlds = best
-            .GroupBy(listing => (listing.DataCenter, listing.WorldName))
-            .Select(group => new MarketCoverageWorld(
-                group.Key.DataCenter,
-                group.Key.WorldName,
-                group.Sum(listing => listing.QuantityUsed),
-                group.Sum(listing => listing.QuantityPurchased),
-                group.Sum(listing => listing.QuantityUsed * listing.PricePerUnit),
-                group.Sum(listing => listing.QuantityPurchased * listing.PricePerUnit)))
-            .ToList();
+        var coverageWorlds = ToWorlds(best);
         return new MarketCoverageFill(
             quantity,
             coverageWorlds.Sum(world => world.QuantityCovered),
@@ -209,6 +200,25 @@ public static class MarketCoverageBuilder
             coverageWorlds.Sum(world => world.CashOutCost),
             coverageWorlds);
     }
+
+    /// <summary>
+    /// What the units used from one world cost when each unit is charged its bought listings'
+    /// average price: units used × (cash for every unit bought ÷ units bought). Costing per unit
+    /// keeps a 999-stack bought for five units from costing as if it were five units' worth.
+    /// </summary>
+    public static decimal CostOfUnitsUsed(int used, int purchased, decimal cash) =>
+        purchased > 0 ? used * cash / purchased : cash;
+
+    private static List<MarketCoverageWorld> ToWorlds(IEnumerable<MarketCoverageListing> listings) => listings
+        .GroupBy(listing => (listing.DataCenter, listing.WorldName))
+        .Select(group => new MarketCoverageWorld(
+            group.Key.DataCenter,
+            group.Key.WorldName,
+            group.Sum(listing => listing.QuantityUsed),
+            group.Sum(listing => listing.QuantityPurchased),
+            group.Sum(listing => listing.QuantityUsed * listing.PricePerUnit),
+            group.Sum(listing => listing.QuantityPurchased * listing.PricePerUnit)))
+        .ToList();
 
     /// <summary>Two cheapest-first listing sequences as one, in the same order as <see cref="EnumerateMarketListings"/>.</summary>
     private static List<MarketCoverageListing> Merge(List<MarketCoverageListing> left, List<MarketCoverageListing> right)

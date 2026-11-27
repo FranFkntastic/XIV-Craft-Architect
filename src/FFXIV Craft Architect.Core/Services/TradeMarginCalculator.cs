@@ -59,28 +59,34 @@ public sealed class TradeMarginPricing
 {
     public static TradeMarginPricing None { get; } = new(0, []);
 
+    /// <param name="advisoryWorldStops">
+    /// Accept a market route over the world-stop limit, as commission quotes do (with a warning).
+    /// False keeps the limit strict: an item that needs more worlds is reported short.
+    /// </param>
     public TradeMarginPricing(decimal laborGilPerSynth, IEnumerable<TradeMaterialSource> sources,
-        TradeMaterialPricingPolicy? policy = null)
+        TradeMaterialPricingPolicy? policy = null, bool advisoryWorldStops = false)
     {
         LaborGilPerSynth = Math.Max(0, laborGilPerSynth);
         Sources = sources.Where(source => source != null).GroupBy(source => source.ItemId)
             .ToDictionary(group => group.Key, group => group.Last());
         Policy = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
-        RouteKey = RouteKeyOf(Policy);
+        AdvisoryWorldStops = advisoryWorldStops;
+        RouteKey = RouteKeyOf(Policy, advisoryWorldStops);
     }
 
     public decimal LaborGilPerSynth { get; }
     public IReadOnlyDictionary<int, TradeMaterialSource> Sources { get; }
     public TradeMaterialPricingPolicy Policy { get; }
+    public bool AdvisoryWorldStops { get; }
 
     /// <summary>The policy settings a market route depends on, for change detection and saved figures.</summary>
     public string RouteKey { get; }
 
-    public static string RouteKeyOf(TradeMaterialPricingPolicy? policy)
+    public static string RouteKeyOf(TradeMaterialPricingPolicy? policy, bool advisoryWorldStops = false)
     {
         var value = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
         return string.Create(CultureInfo.InvariantCulture,
-            $"{value.MaximumWorldStops}|{value.AllowSplitPurchases}|{value.MaximumConsolidationPremiumPercent}");
+            $"{value.MaximumWorldStops}|{value.AllowSplitPurchases}|{value.MaximumConsolidationPremiumPercent}|{(advisoryWorldStops ? "advisory" : "strict")}");
     }
 }
 
@@ -934,18 +940,26 @@ public sealed class TradeMarginBasis
                 Items = [new MaterialAggregate { ItemId = id, Name = name, TotalQuantity = quantity }]
             }, ct: ct)).Single(entry => entry.ItemId == id);
             var plan = await ladder.ProjectToShoppingPlanAsync(analysis, MarketAcquisitionLens.MinimumUpfrontCost, ct: ct);
-            // One analysis and one route search are tens of milliseconds; let the page render between them.
-            await MainThreadYield.Async(ct);
-            var quote = await new TradeMaterialQuoteService().PriceAsync(_shopping, [plan],
-                [new MaterialAggregate { ItemId = id, Name = name, TotalQuantity = quantity }],
-                new Dictionary<(int ItemId, bool RequiresHq), AcquisitionSource> { [(id, false)] = AcquisitionSource.MarketBuyNq },
-                policy, DateTime.UtcNow, [], ct: ct);
+            // One analysis and one route search are tens of milliseconds each; let the page render between them.
             await MainThreadYield.Async(ct);
 
             TradeMarginBuyPlan? covering = null;
-            // The commission quote treats the stop limit as advisory and may return a wider
-            // route with a warning; Margins buys within the limit or reports the market short.
-            if (quote is { IsComplete: true, Quote.WorldStops: var stops } && stops <= policy.MaximumWorldStops &&
+            // Listings that cannot cover the quantity have no route; the analysis already gives
+            // the directional price, so the route search is skipped.
+            TradeMaterialQuoteResult? quote = null;
+            if (listed >= quantity)
+            {
+                quote = await new TradeMaterialQuoteService().PriceAsync(_shopping, [plan],
+                    [new MaterialAggregate { ItemId = id, Name = name, TotalQuantity = quantity }],
+                    new Dictionary<(int ItemId, bool RequiresHq), AcquisitionSource> { [(id, false)] = AcquisitionSource.MarketBuyNq },
+                    policy, DateTime.UtcNow, [], retryUncapped: pricing.AdvisoryWorldStops, ct: ct);
+                await MainThreadYield.Async(ct);
+            }
+
+            // With a strict limit Margins buys within it or reports the market short; with an
+            // advisory one it accepts the wider route, as the commission quote does.
+            if (quote is { IsComplete: true, Quote.WorldStops: var stops } &&
+                (pricing.AdvisoryWorldStops || stops <= policy.MaximumWorldStops) &&
                 quote.RoutePlans.FirstOrDefault(candidate => candidate.ItemId == id) is { } routePlan)
             {
                 var purchases = TradeMaterialQuoteService.ReadRoutePurchase(routePlan, quantity);
@@ -972,9 +986,13 @@ public sealed class TradeMarginBasis
                 oldest = unknownAge ? null : ages.Values.Min();
             }
 
-            var vendorBlend = _vendors.TryGetValue(id, out var vendor)
-                ? Fill(plan, policy, vendor, TradeMarginBuyRemainder.Vendor, ages)
-                : null;
+            TradeMarginBuyPlan? vendorBlend = null;
+            if (_vendors.TryGetValue(id, out var vendor))
+            {
+                vendorBlend = Fill(plan, policy, vendor, TradeMarginBuyRemainder.Vendor, ages);
+                await MainThreadYield.Async(ct);
+            }
+
             route = new(covering, directional, listed, oldest, unknownAge, vendorBlend, id == RootId ? plan : null, ages);
         }
 
@@ -1007,11 +1025,11 @@ public sealed class TradeMarginBasis
         var unknownAge = false;
         foreach (var world in purchases.Where(purchase => purchase.Used > 0).GroupBy(purchase => (purchase.DataCenter, purchase.WorldName)))
         {
-            // Margins is per unit sold across repeated production, so a purchase costs what each
-            // unit in the bought listings costs. Charging the whole listing to the units used
-            // makes a 999-stack of shards the price of five.
-            cost += world.Sum(purchase => purchase.Purchased > 0 ? purchase.Used * purchase.Cash / purchase.Purchased : purchase.Cash);
+            // Margins is per unit sold across repeated production, so each world's units cost its
+            // bought listings' average price: the same rule the capped fill chooses worlds by.
             var used = world.Sum(purchase => purchase.Used);
+            cost += MarketCoverageBuilder.CostOfUnitsUsed(used, world.Sum(purchase => purchase.Purchased),
+                world.Sum(purchase => purchase.Cash));
             units += used;
             var age = ages.GetValueOrDefault(WorldKey(world.Key.DataCenter, world.Key.WorldName));
             unknownAge |= age == null;

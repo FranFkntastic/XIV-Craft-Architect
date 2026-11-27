@@ -80,7 +80,7 @@ public sealed class ClaimMaterialPricing(
         var result = await new TradeMaterialQuoteService().PriceAsync(new MarketShoppingService(cache),
             plans, items, sources, old.AppliedPolicy, now,
             new CommissionCostBasisResolver().BuildSelectedSourceLines(demand.ActiveProcurementDemand, [], plans),
-            companyProvided, ct);
+            companyProvided, ct: ct);
         var quote = result.Quote ?? throw new InvalidOperationException(result.FailureReason);
         if (string.IsNullOrWhiteSpace(quote.RouteSelectionKey))
         {
