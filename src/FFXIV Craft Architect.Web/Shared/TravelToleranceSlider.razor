@@ -1,0 +1,83 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+@* The 12-position travel tolerance clutch, shared by the Procurement Plan and company material pricing. *@
+<div class="pp-travel-heading">
+    <label id="@LabelId" class="pp-travel-label" for="@InputId">
+        <span>Travel preference</span>
+        <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
+    </label>
+    @HeadingContent
+</div>
+
+<div class="pp-clutch-shell @ShellClass">
+    <div class="pp-clutch-axis" aria-hidden="true">
+        <span><strong>Travel</strong><small>Fewer stops</small></span>
+        <span><strong>Price</strong><small>Lower cost</small></span>
+    </div>
+    <div class="pp-clutch-control">
+        <div class="pp-clutch-rail" aria-hidden="true"></div>
+        <div class="pp-clutch-track" aria-label="Travel preference positions">
+            @foreach (var tolerance in Enumerable.Range(0, 12))
+            {
+                <button type="button"
+                        disabled="@Disabled"
+                        class="pp-clutch-tick @(tolerance == TravelTolerance ? "is-active" : null)"
+                        style="@GetTrackRowStyle(tolerance)"
+                        aria-label="Set travel preference to position @tolerance"
+                        @onclick="() => TravelToleranceCommitted.InvokeAsync(tolerance)">
+                    <span class="pp-clutch-tick-mark"></span>
+                </button>
+            }
+            <span class="pp-clutch-handle"
+                  style="@GetTrackRowStyle(TravelTolerance)"
+                  aria-hidden="true">@TravelTolerance</span>
+        </div>
+        <input id="@InputId"
+               class="pp-clutch-input"
+               type="range"
+               min="0"
+               max="11"
+               step="1"
+               value="@TravelTolerance"
+               disabled="@Disabled"
+               aria-labelledby="@LabelId"
+               aria-describedby="@DescribedBy"
+               aria-valuetext="@MarketRouteScoring.GetToleranceLabel(TravelTolerance)"
+               @oninput="OnSliderInput"
+               @onchange="OnSliderCommit" />
+    </div>
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public int TravelTolerance { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter, EditorRequired] public string InputId { get; set; } = "";
+    [Parameter, EditorRequired] public string LabelId { get; set; } = "";
+    [Parameter] public string? DescribedBy { get; set; }
+
+    /// <summary>Extra classes on the clutch shell: <c>has-routes</c>, <c>is-empty</c> or <c>is-standalone</c>.</summary>
+    [Parameter] public string? ShellClass { get; set; }
+
+    /// <summary>Rendered beside the label, such as an explanation toggle.</summary>
+    [Parameter] public RenderFragment? HeadingContent { get; set; }
+
+    /// <summary>Rendered in the shell's third column, beside the clutch.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
+    [Parameter] public EventCallback<int> TravelToleranceCommitted { get; set; }
+
+    private Task OnSliderInput(ChangeEventArgs args) =>
+        int.TryParse(args.Value?.ToString(), out var value)
+            ? TravelToleranceChanged.InvokeAsync(Math.Clamp(value, 0, 11))
+            : Task.CompletedTask;
+
+    private Task OnSliderCommit(ChangeEventArgs args) =>
+        int.TryParse(args.Value?.ToString(), out var value)
+            ? TravelToleranceCommitted.InvokeAsync(Math.Clamp(value, 0, 11))
+            : Task.CompletedTask;
+
+    private static string GetTrackRowStyle(int tolerance) =>
+        $"grid-row: {Math.Clamp(tolerance, 0, 11) + 1};";
+}

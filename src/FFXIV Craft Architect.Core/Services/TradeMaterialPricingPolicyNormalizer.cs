@@ -21,6 +21,7 @@ public static class TradeMaterialPricingPolicyNormalizer
                 0m,
                 100m),
             MaximumWorldStops = Math.Clamp(policy.MaximumWorldStops, 1, 32),
+            TravelTolerance = Math.Clamp(policy.TravelTolerance, 0, 11),
             SafetyAllowancePercent = Math.Clamp(policy.SafetyAllowancePercent, 0m, 100m),
             MinimumSafetyAllowanceGil = minimum,
             MaximumSafetyAllowanceGil = maximum,
@@ -39,10 +40,16 @@ public static class TradeMaterialPricingPolicyNormalizer
                 Math.Clamp(legacyTransfers, 0, 8).ToString(CultureInfo.InvariantCulture)
             }
             : [value.MaximumWorldStops.ToString(CultureInfo.InvariantCulture)];
+        // Policies and quotes stored before the travel tolerance existed read it as the default,
+        // so the default adds nothing and their stored fingerprints stay valid.
+        string[] toleranceDimension = value.TravelTolerance == TradeMaterialPricingPolicy.DefaultTravelTolerance
+            ? []
+            : ["t" + value.TravelTolerance.ToString(CultureInfo.InvariantCulture)];
         var canonical = string.Join('|', [
             value.SchemaVersion.ToString(CultureInfo.InvariantCulture),
             value.MaximumConsolidationPremiumPercent.ToString(CultureInfo.InvariantCulture),
             .. routeDimensions,
+            .. toleranceDimension,
             value.AllowSplitPurchases ? "1" : "0",
             value.SafetyAllowancePercent.ToString(CultureInfo.InvariantCulture),
             value.MinimumSafetyAllowanceGil.ToString(CultureInfo.InvariantCulture),

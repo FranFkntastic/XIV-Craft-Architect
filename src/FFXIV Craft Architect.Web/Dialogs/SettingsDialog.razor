@@ -435,8 +435,15 @@
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
                         Trade quotes one executable current-region shopping route. These limits define what this company considers reasonable procurement.
                     </MudText>
-                    <MudNumericField T="decimal" @bind-Value="_materialMaximumPremiumPercent" Label="Maximum consolidation premium" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="int" @bind-Value="_materialMaximumWorldStops" Label="Maximum world stops" Min="1" Max="32" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <div class="company-travel-tolerance my-2">
+                        <TravelToleranceSlider TravelTolerance="_materialTravelTolerance"
+                                               InputId="company-travel-clutch"
+                                               LabelId="company-travel-label"
+                                               ShellClass="is-standalone"
+                                               TravelToleranceChanged="SetMaterialTravelTolerance"
+                                               TravelToleranceCommitted="SetMaterialTravelTolerance" />
+                    </div>
                     <MudCheckBox T="bool" @bind-Value="_materialAllowSplitPurchases" Label="Allow split purchases" Color="Color.Primary" Class="my-2" />
                     <MudNumericField T="decimal" @bind-Value="_materialSafetyAllowancePercent" Label="Shopping allowance" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="decimal" @bind-Value="_materialMinimumAllowanceGil" Label="Minimum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
@@ -1168,8 +1175,10 @@
     private long? _companyProfileRevision;
     private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
+    // Retired from the form (the travel tolerance replaced it); carried so a save keeps the stored value.
     private decimal _materialMaximumPremiumPercent = 5m;
     private int _materialMaximumWorldStops = 8;
+    private int _materialTravelTolerance = TradeMaterialPricingPolicy.DefaultTravelTolerance;
     private bool _materialAllowSplitPurchases = true;
     private decimal _materialSafetyAllowancePercent = 10m;
     private decimal _materialMinimumAllowanceGil = 10_000m;
@@ -1935,6 +1944,7 @@
         var materialPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(profile.MaterialPricingPolicy);
         _materialMaximumPremiumPercent = materialPolicy.MaximumConsolidationPremiumPercent;
         _materialMaximumWorldStops = materialPolicy.MaximumWorldStops;
+        _materialTravelTolerance = materialPolicy.TravelTolerance;
         _materialAllowSplitPurchases = materialPolicy.AllowSplitPurchases;
         _materialSafetyAllowancePercent = materialPolicy.SafetyAllowancePercent;
         _materialMinimumAllowanceGil = materialPolicy.MinimumSafetyAllowanceGil;
@@ -1976,11 +1986,14 @@
             _companyLaborGilPerSynth);
     }
 
+    private void SetMaterialTravelTolerance(int tolerance) => _materialTravelTolerance = tolerance;
+
     private TradeMaterialPricingPolicy BuildCompanyMaterialPricingPolicy() =>
         TradeMaterialPricingPolicyNormalizer.Normalize(new TradeMaterialPricingPolicy
         {
             MaximumConsolidationPremiumPercent = _materialMaximumPremiumPercent,
             MaximumWorldStops = _materialMaximumWorldStops,
+            TravelTolerance = _materialTravelTolerance,
             AllowSplitPurchases = _materialAllowSplitPurchases,
             SafetyAllowancePercent = _materialSafetyAllowancePercent,
             MinimumSafetyAllowanceGil = _materialMinimumAllowanceGil,

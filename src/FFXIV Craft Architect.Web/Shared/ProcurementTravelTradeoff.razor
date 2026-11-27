@@ -1,148 +1,115 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
 
-<div class="pp-travel-heading">
-    <label id="procurement-travel-label" class="pp-travel-label" for="procurement-travel-clutch">
-        <span>Travel preference</span>
-        <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
-    </label>
-    <div class="pp-tradeoff-anchor">
-        <MudIconButton Icon="@Icons.Material.Outlined.Info"
-                       Size="Size.Small"
-                       Color="Color.Info"
-                       OnClick="Toggle"
-                       aria-label="Explain the gil cost and travel tradeoff"
-                       aria-expanded="@_open.ToString().ToLowerInvariant()"
-                       aria-controls="procurement-travel-explainer" />
-        <MudPopover Open="@_open"
-                    AnchorOrigin="Origin.BottomLeft"
-                    TransformOrigin="Origin.TopLeft"
-                    OverflowBehavior="OverflowBehavior.FlipOnOpen"
-                    Paper="true"
-                    Class="pp-tradeoff-popover">
-            <section id="procurement-travel-explainer"
-                     class="pp-tradeoff-card"
-                     aria-label="Travel preference explanation">
-                <header>
-                    <div>
-                        <span>Cost versus travel</span>
-                        <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
-                    </div>
-                    <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                   Size="Size.Small"
-                                   OnClick="Close"
-                                   aria-label="Close travel preference explanation" />
-                </header>
+<TravelToleranceSlider TravelTolerance="TravelTolerance"
+                       Disabled="Disabled"
+                       InputId="procurement-travel-clutch"
+                       LabelId="procurement-travel-label"
+                       DescribedBy="procurement-travel-help"
+                       ShellClass="@(HasCurrentRouteFrontier() ? "has-routes" : "is-empty")"
+                       TravelToleranceChanged="TravelToleranceChanged"
+                       TravelToleranceCommitted="TravelToleranceCommitted">
+    <HeadingContent>
+        <div class="pp-tradeoff-anchor">
+            <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                           Size="Size.Small"
+                           Color="Color.Info"
+                           OnClick="Toggle"
+                           aria-label="Explain the gil cost and travel tradeoff"
+                           aria-expanded="@_open.ToString().ToLowerInvariant()"
+                           aria-controls="procurement-travel-explainer" />
+            <MudPopover Open="@_open"
+                        AnchorOrigin="Origin.BottomLeft"
+                        TransformOrigin="Origin.TopLeft"
+                        OverflowBehavior="OverflowBehavior.FlipOnOpen"
+                        Paper="true"
+                        Class="pp-tradeoff-popover">
+                <section id="procurement-travel-explainer"
+                         class="pp-tradeoff-card"
+                         aria-label="Travel preference explanation">
+                    <header>
+                        <div>
+                            <span>Cost versus travel</span>
+                            <strong>@MarketRouteScoring.GetToleranceLabel(TravelTolerance)</strong>
+                        </div>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                       Size="Size.Small"
+                                       OnClick="Close"
+                                       aria-label="Close travel preference explanation" />
+                    </header>
 
-                <p>@GetExplanation()</p>
+                    <p>@GetExplanation()</p>
 
-                <div class="pp-tradeoff-diagram" aria-label="The cheapest eligible route is the cost baseline. The selected preference permits a higher cost in exchange for less travel.">
-                    <div class="pp-tradeoff-point">
-                        <MudIcon Icon="@Icons.Material.Filled.Savings" Size="Size.Medium" Color="Color.Success" />
-                        <span>Cost baseline</span>
-                        <strong>Cheapest eligible route</strong>
+                    <div class="pp-tradeoff-diagram" aria-label="The cheapest eligible route is the cost baseline. The selected preference permits a higher cost in exchange for less travel.">
+                        <div class="pp-tradeoff-point">
+                            <MudIcon Icon="@Icons.Material.Filled.Savings" Size="Size.Medium" Color="Color.Success" />
+                            <span>Cost baseline</span>
+                            <strong>Cheapest eligible route</strong>
+                        </div>
+                        <div class="pp-tradeoff-rule">
+                            <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Medium" />
+                            <strong>@GetPremiumRule()</strong>
+                        </div>
+                        <div class="pp-tradeoff-point">
+                            <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Medium" Color="Color.Info" />
+                            <span>Route preference</span>
+                            <strong>@GetRouteRule()</strong>
+                        </div>
                     </div>
-                    <div class="pp-tradeoff-rule">
-                        <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Medium" />
-                        <strong>@GetPremiumRule()</strong>
-                    </div>
-                    <div class="pp-tradeoff-point">
-                        <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Medium" Color="Color.Info" />
-                        <span>Route preference</span>
-                        <strong>@GetRouteRule()</strong>
-                    </div>
-                </div>
 
-                <p class="pp-tradeoff-footnote">Market evidence 12 hours old or older must be refreshed before CA will use it.</p>
-            </section>
-        </MudPopover>
-    </div>
-</div>
-
-<div class="pp-clutch-shell @(HasCurrentRouteFrontier() ? "has-routes" : "is-empty")">
-    <div class="pp-clutch-axis" aria-hidden="true">
-        <span><strong>Travel</strong><small>Fewer stops</small></span>
-        <span><strong>Price</strong><small>Lower cost</small></span>
-    </div>
-    <div class="pp-clutch-control">
-        <div class="pp-clutch-rail" aria-hidden="true"></div>
-        <div class="pp-clutch-track" aria-label="Travel preference positions">
-            @foreach (var tolerance in Enumerable.Range(0, 12))
-            {
-                <button type="button"
-                        disabled="@Disabled"
-                        class="pp-clutch-tick @(tolerance == TravelTolerance ? "is-active" : null)"
-                        style="@GetTrackRowStyle(tolerance)"
-                        aria-label="Set travel preference to position @tolerance"
-                        @onclick="() => SelectTolerance(tolerance)">
-                    <span class="pp-clutch-tick-mark"></span>
-                </button>
-            }
-            <span class="pp-clutch-handle"
-                  style="@GetTrackRowStyle(TravelTolerance)"
-                  aria-hidden="true">@TravelTolerance</span>
+                    <p class="pp-tradeoff-footnote">Market evidence 12 hours old or older must be refreshed before CA will use it.</p>
+                </section>
+            </MudPopover>
         </div>
-        <input id="procurement-travel-clutch"
-               class="pp-clutch-input"
-               type="range"
-               min="0"
-               max="11"
-               step="1"
-               value="@TravelTolerance"
-               disabled="@Disabled"
-               aria-labelledby="procurement-travel-label"
-               aria-describedby="procurement-travel-help"
-               aria-valuetext="@MarketRouteScoring.GetToleranceLabel(TravelTolerance)"
-               @oninput="OnSliderInput"
-               @onchange="OnSliderCommit" />
-    </div>
-
-    <div class="pp-frontier-lane" aria-label="Representative route choices">
-        @if (HasCurrentRouteFrontier())
-        {
-            @foreach (var option in RouteDecision!.RepresentativeRoutes)
+    </HeadingContent>
+    <ChildContent>
+        <div class="pp-frontier-lane" aria-label="Representative route choices">
+            @if (HasCurrentRouteFrontier())
             {
-                var selected = ContainsTolerance(option, GetPublishedTolerance());
-                <button type="button"
-                        disabled="@Disabled"
-                        class="pp-frontier-chit @(selected ? "is-selected" : null)"
-                        style="@GetRouteStyle(option)"
-                        title="@GetRouteTitle(option)"
-                        aria-pressed="@selected.ToString().ToLowerInvariant()"
-                        @onclick="() => SelectRoute(option)">
-                    <span class="pp-frontier-summary">
-                        <strong>@option.GilCost.ToString("N0")g</strong>
-                        <small>@GetTravelSummary(option)</small>
-                    </span>
-                    <span class="pp-frontier-detail">
-                        @GetToleranceRange(option) - @GetPremiumText(option)
-                    </span>
-                </button>
+                @foreach (var option in RouteDecision!.RepresentativeRoutes)
+                {
+                    var selected = ContainsTolerance(option, GetPublishedTolerance());
+                    <button type="button"
+                            disabled="@Disabled"
+                            class="pp-frontier-chit @(selected ? "is-selected" : null)"
+                            style="@GetRouteStyle(option)"
+                            title="@GetRouteTitle(option)"
+                            aria-pressed="@selected.ToString().ToLowerInvariant()"
+                            @onclick="() => SelectRoute(option)">
+                        <span class="pp-frontier-summary">
+                            <strong>@option.GilCost.ToString("N0")g</strong>
+                            <small>@GetTravelSummary(option)</small>
+                        </span>
+                        <span class="pp-frontier-detail">
+                            @GetToleranceRange(option) - @GetPremiumText(option)
+                        </span>
+                    </button>
+                }
             }
-        }
-        else if (RouteDecision?.RepresentativeRoutes.Count > 0)
-        {
-            <div class="pp-frontier-empty" role="status">
-                <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" />
-                <span>@GetUnavailableFrontierMessage()</span>
-            </div>
-        }
-        else if (Disabled)
-        {
-            <div class="pp-frontier-empty">
-                <MudIcon Icon="@Icons.Material.Outlined.PauseCircle" Size="Size.Small" />
-                <span>Route generation is temporarily unavailable.</span>
-            </div>
-        }
-        else
-        {
-            <div class="pp-frontier-empty">
-                <MudIcon Icon="@Icons.Material.Outlined.Route" Size="Size.Small" />
-                <span>Generate a route to reveal the viable tradeoffs.</span>
-            </div>
-        }
-    </div>
-</div>
+            else if (RouteDecision?.RepresentativeRoutes.Count > 0)
+            {
+                <div class="pp-frontier-empty" role="status">
+                    <MudIcon Icon="@Icons.Material.Outlined.Sync" Size="Size.Small" />
+                    <span>@GetUnavailableFrontierMessage()</span>
+                </div>
+            }
+            else if (Disabled)
+            {
+                <div class="pp-frontier-empty">
+                    <MudIcon Icon="@Icons.Material.Outlined.PauseCircle" Size="Size.Small" />
+                    <span>Route generation is temporarily unavailable.</span>
+                </div>
+            }
+            else
+            {
+                <div class="pp-frontier-empty">
+                    <MudIcon Icon="@Icons.Material.Outlined.Route" Size="Size.Small" />
+                    <span>Generate a route to reveal the viable tradeoffs.</span>
+                </div>
+            }
+        </div>
+    </ChildContent>
+</TravelToleranceSlider>
 @if (!Disabled && RouteValidity == ProcurementRoutePublicationValidity.SelectionChanged)
 {
     <div class="pp-clutch-pending" role="status">
@@ -166,23 +133,8 @@
 
     private void Close() => _open = false;
 
-    private Task OnSliderInput(ChangeEventArgs args)
-    {
-        return int.TryParse(args.Value?.ToString(), out var value)
-            ? TravelToleranceChanged.InvokeAsync(Math.Clamp(value, 0, 11))
-            : Task.CompletedTask;
-    }
-
-    private Task OnSliderCommit(ChangeEventArgs args) =>
-        int.TryParse(args.Value?.ToString(), out var value)
-            ? TravelToleranceCommitted.InvokeAsync(Math.Clamp(value, 0, 11))
-            : Task.CompletedTask;
-
     private Task SelectRoute(MarketRouteFrontierOption option) =>
         CommitToleranceAsync(option.RepresentativeTolerance);
-
-    private Task SelectTolerance(int tolerance) =>
-        CommitToleranceAsync(tolerance);
 
     private Task CommitToleranceAsync(int tolerance) =>
         TravelToleranceCommitted.InvokeAsync(tolerance);
@@ -258,9 +210,6 @@
 
     private static string GetTravelSummary(MarketRouteFrontierOption option) =>
         $"{option.WorldStops} world{(option.WorldStops == 1 ? string.Empty : "s")}";
-
-    private static string GetTrackRowStyle(int tolerance) =>
-        $"grid-row: {Math.Clamp(tolerance, 0, 11) + 1};";
 
     private static string GetRouteStyle(MarketRouteFrontierOption option) =>
         $"grid-row: {option.MinimumTolerance + 1} / span {option.MaximumTolerance - option.MinimumTolerance + 1};";
