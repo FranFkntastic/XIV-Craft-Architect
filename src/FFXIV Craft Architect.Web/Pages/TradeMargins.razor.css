@@ -44,9 +44,9 @@
 .margins-table-wrap ::deep .is-loss { color:#f0a3a3; }
 .margins-table-wrap ::deep .is-neutral { color:#b4bac1; }
 .margins-table-wrap ::deep .buy-cell .buy-entry { display:flex; justify-content:flex-end; align-items:center; gap:4px; }
-.margins-table-wrap ::deep .buy-cell .sub { overflow:hidden; text-overflow:ellipsis; padding-right:26px; }
+.margins-table-wrap ::deep .buy-cell .sub { overflow:hidden; text-overflow:ellipsis; }
 .margins-table-wrap ::deep .sale-input.is-live { color:#c9d3dd; }
-.margins-table-wrap ::deep .reset-space { flex:none; width:22px; }
+.margins-table-wrap ::deep td.is-action { padding:7px 4px; text-align:center; text-overflow:clip; }
 .margins-table-wrap ::deep .missing { display:block; color:#d4a746; font-size:12px; white-space:normal; overflow-wrap:anywhere; }
 .margins-table-wrap ::deep .age { color:#9aa1a9; }
 .margins-table-wrap ::deep .is-stale { color:#d4a746; }
