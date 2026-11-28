@@ -207,9 +207,9 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             !TradeOrderStatusWorkflow.IsArchived(source.Status),
             "Closed commission terms cannot be revised.");
-        Require(
-            commission.CurrentTerms.PricingEvidence.MaterialQuote?.IsLocked != true,
-            "Terms cannot be repriced after work clearance locks the material quote.");
+        // A revision is the sanctioned way to reprice: the clearance lock binds the current
+        // terms only. The revised quote is re-locked below if the commission stays cleared,
+        // or by the clearance transition once the revised gates are satisfied again.
         RequireReason(command.Reason);
         command = command with { Terms = command.Terms with { Payment = command.Terms.Payment.ForNewWork() } };
         ValidateTerms(command.Terms, commission.CompanyId, command.WorkPackage);
@@ -242,42 +242,45 @@ public static class CompanyCommissionCommandWorkflow
             updated.CraftPlanSavedAtUtc = workPackage.CraftPlanSavedAtUtc;
             updated.CraftPlanLinkKind = workPackage.CraftPlanLinkKind;
         }
+        var amended = commission with
+        {
+            CurrentTermsVersion = terms.Version,
+            TermsVersions = commission.TermsVersions
+                .Append(terms)
+                .OrderBy(item => item.Version)
+                .ToArray(),
+            ClaimPriceReview = null,
+            ParticipantAcknowledgedTermsVersion = null,
+            PaymentPolicyChangeRequest = null,
+            Gates = commission.Gates with
+            {
+                Payment = RevisePaymentGate(
+                    commission.Gates.Payment,
+                    commission.CurrentTerms,
+                    terms),
+                CompanyMaterials = ReviseMaterialGate(
+                    commission.Gates.CompanyMaterials,
+                    commission.CurrentTerms,
+                    terms)
+            },
+            OutputProgress = terms.Outputs.Select(output =>
+                new CompanyCommissionOutputProgress(
+                    output.LineId,
+                    output.ItemId,
+                    output.RequiredQuantity,
+                    0,
+                    0,
+                    0,
+                    nowUtc,
+                    actor)).ToArray(),
+            DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
+            SettlementState = CompanyCommissionSettlementState.NotDue
+        };
         return Transition(
             updated,
-            commission with
-            {
-                CurrentTermsVersion = terms.Version,
-                TermsVersions = commission.TermsVersions
-                    .Append(terms)
-                    .OrderBy(item => item.Version)
-                    .ToArray(),
-                ClaimPriceReview = null,
-                ParticipantAcknowledgedTermsVersion = null,
-                PaymentPolicyChangeRequest = null,
-                Gates = commission.Gates with
-                {
-                    Payment = RevisePaymentGate(
-                        commission.Gates.Payment,
-                        commission.CurrentTerms,
-                        terms),
-                    CompanyMaterials = ReviseMaterialGate(
-                        commission.Gates.CompanyMaterials,
-                        commission.CurrentTerms,
-                        terms)
-                },
-                OutputProgress = terms.Outputs.Select(output =>
-                    new CompanyCommissionOutputProgress(
-                        output.LineId,
-                        output.ItemId,
-                        output.RequiredQuantity,
-                        0,
-                        0,
-                        0,
-                        nowUtc,
-                        actor)).ToArray(),
-                DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
-                SettlementState = CompanyCommissionSettlementState.NotDue
-            },
+            amended.ActiveClaim != null
+                ? LockMaterialQuoteIfCleared(amended, nowUtc)
+                : amended,
             CompanyCommissionActivityKind.TermsAmended,
             command.Reason);
     }
