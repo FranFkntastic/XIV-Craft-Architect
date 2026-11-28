@@ -98,7 +98,7 @@
     private static readonly TimeSpan SearchDebounce = TimeSpan.FromMilliseconds(150);
     // Sell or Source: which rows the table shows. Both modes stay priced so switching is instant.
     private TradeMarginMode _mode = TradeMarginMode.Sell;
-    // The sale price (Sell) or manual buy price (Source) being typed.
+    // The Sell sale price being typed.
     private RowKey? _editingSale;
     private string _saleDraft = "";
     private string? _loadedCompany;
@@ -162,19 +162,22 @@
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
         MarketFetchScopeResolver.GetRegions().Select(region => new CompactSelectOption(region, region)).ToArray();
     private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
-    private enum Column { Item, Sale, Batch, Materials, Labor, Total, Margin, Percent, Age, Planner, Commission, Remove }
+    private enum Column { Item, Sale, Batch, Materials, Labor, Total, Market, Margin, Percent, Planner, Commission, Remove }
     // The row being opened in the Recipe Planner; one handoff at a time.
     private RowKey? _openingPlanner;
     /// <summary>One Margins row: an item may be tracked once per mode.</summary>
     private readonly record struct RowKey(int ItemId, TradeMarginMode Mode);
     private static RowKey KeyOf(TradeMarginItem item) => new(item.ItemId, item.Mode);
+    /// <summary>Source buys at the market cost, so any sale price an older version stored for it is dropped.</summary>
+    private static TradeMarginItem Normalized(TradeMarginItem item) =>
+        item.Mode == TradeMarginMode.Source && item.SalePrice != null ? item with { SalePrice = null } : item;
     private sealed class MarginRow(int itemId, TradeMarginMode mode, long? sale)
     {
         public int ItemId { get; } = itemId;
         public TradeMarginMode Mode { get; } = mode;
         public RowKey Key => new(ItemId, Mode);
         public string KeyText => $"{(int)Mode}-{ItemId}";
-        /// <summary>Sell: the sale price. Source: the manual buy price; null buys at the live market.</summary>
+        /// <summary>Sell: the sale price. Always null in Source, which buys at the market cost.</summary>
         public long? Sale { get; set; } = sale;
         public long? SavedSale { get; set; } = sale;
         public int Batch { get; set; } = 1;
@@ -208,9 +211,9 @@
             ? Total(row) is { } total ? (plan.MarketCost + plan.RemainderUnits * total) / Math.Max(1, cost.Units) : null
             : plan.Total / Math.Max(1, cost.Units)
         : null;
-    /// <summary>Per unit: the sale price (Sell) or the buy price, manual or live (Source).</summary>
-    private decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
-    private decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? row.SavedSale ?? LiveBuy(row) : row.SavedSale;
+    /// <summary>Per unit: the sale price (Sell) or the market cost (Source).</summary>
+    private decimal? Price(MarginRow row) => row.Mode == TradeMarginMode.Source ? LiveBuy(row) : row.Sale;
+    private decimal? SavedPrice(MarginRow row) => row.Mode == TradeMarginMode.Source ? LiveBuy(row) : row.SavedSale;
     /// <summary>Sell: margin (sale − cost). Source: savings (buy − commission cost); positive means commissioning is cheaper.</summary>
     private decimal? Delta(MarginRow row) => Price(row) is { } price && Total(row) is { } total ? price - total : null;
     private decimal? Percent(MarginRow row) => Price(row) is > 0 and var price && Delta(row) is { } delta ? delta / price * 100 : null;
@@ -231,9 +234,9 @@
     private object? SortValue(MarginRow row) => _sort.Column switch
     {
         Column.Item => row.Name, Column.Sale => SavedPrice(row), Column.Batch => row.Batch, Column.Materials => Materials(row),
-        Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => SavedPrice(row) - Total(row),
+        Column.Labor => Labor(row), Column.Total => Total(row), Column.Market => LiveBuy(row), Column.Margin => SavedPrice(row) - Total(row),
         Column.Percent => SavedPrice(row) is > 0 and var price ? (price - Total(row)) / price * 100 : null,
-        Column.Age => PriceAge(row).ObservedAtUtc, _ => null
+        _ => null
     };
     private IReadOnlyList<MarginRow> SortedRows
     {
@@ -248,16 +251,20 @@
     private IReadOnlyList<WebTableColumn<MarginRow, Column>> Columns =>
     [
         new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell">@if (ShowsExpander(row)) { <button type="button" class="expander" aria-expanded="@(_expanded.Contains(row.Key) ? "true" : "false")" aria-label="@(row.Name + " materials")" @onclick="() => ToggleExpandedAsync(row)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg></button> } else { <span class="expander-space"></span> }<ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
-        _mode == TradeMarginMode.Source
-            ? new() { Id = Column.Sale, Header = "Buy price", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<div class="buy-cell"><div class="buy-entry">@if (row.Sale != null) { <button type="button" class="reset-btn" title="Reset to live buy price" aria-label="@($"Reset {row.Name} to live buy price")" @onclick="() => ResetBuyAsync(row)">×</button> }<input class="sale-input @(row.Sale == null ? "is-live" : null)" inputmode="numeric" maxlength="19" autocomplete="off" aria-label="@(row.Name + " buy price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /></div>@if (row.Sale == null && BuyLabel(row) is { } buy) { <span class="sub @(buy.Warning ? "short-listed" : null)" title="@buy.Title">@buy.Text</span> }</div> }
-            : new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
+        .. (_mode == TradeMarginMode.Sell ? new WebTableColumn<MarginRow, Column>[]
+        {
+            new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@SaleValue(row)" @onfocus="() => BeginSale(row)" @onblur="() => EndSale(row)" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> }
+        } : []),
         new() { Id = Column.Batch, Header = "Batch", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="batch-input" inputmode="numeric" maxlength="4" autocomplete="off" aria-label="@(row.Name + " batch size")" value="@(_editingBatch == row.Key ? _batchDraft : row.Batch.ToString(CultureInfo.InvariantCulture))" @onfocus="() => BeginBatch(row)" @oninput="e => PreviewBatch(row, e)" @onblur="() => CommitBatchAsync(row.Key)" @onkeydown="e => BatchKeyAsync(e, row.Key)" /> },
         new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
         new() { Id = Column.Labor, Header = "Labor", Size = new(160), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Labor(row))<span class="sub">@(row.Cost?.Synths is { } synths ? SynthCount(synths, row.Cost.Units) : "")</span></span> },
         new() { Id = Column.Total, Header = _mode == TradeMarginMode.Source ? "Commission cost" : "Total cost", Size = new(128), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Total(row))@if (row.Mode == TradeMarginMode.Sell && row.Cost?.RootVendorPrice is > 0 and var vendorPrice) { <span class="sub">Vendor @vendorPrice.ToString("N0", CultureInfo.InvariantCulture)</span> }</span> },
+        .. (_mode == TradeMarginMode.Source ? new WebTableColumn<MarginRow, Column>[]
+        {
+            new() { Id = Column.Market, Header = "Market cost", Size = new(164), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span class="buy-cell">@Number(LiveBuy(row))@if (BuyLabel(row) is { } buy) { <span class="sub @(buy.Warning ? "short-listed" : null)" title="@buy.Title">@buy.Text</span> }</span> }
+        } : []),
         new() { Id = Column.Margin, Header = _mode == TradeMarginMode.Source ? "Savings" : "Margin", Size = new(140), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Tone, CellTemplate = row => @<span>@(Delta(row) is { } delta ? DeltaText(delta, row.Mode) : "—")@if (DeltaRun(row) is { } run) { <span class="sub">@run</span> }</span> },
         new() { Id = Column.Percent, Header = _mode == TradeMarginMode.Source ? "Savings %" : "Margin %", Size = new(88), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Tone, CellTemplate = row => @<span>@(Percent(row) is { } percent ? DeltaText(percent, row.Mode, "N1") + "%" : "—")</span> },
-        new() { Id = Column.Age, Header = "Prices", Size = new(74, 50), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span class="age @(IsStale(row) ? "is-stale" : null)" title="@AgeTitle(row)">@Age(row)</span> },
         new() { Id = Column.Planner, Header = "", Size = new(44, 44), Sortable = false, CellCssClass = "is-action", CellTemplate = row => @<button type="button" class="planner-btn" title="@($"Open {row.Name} in Recipe Planner")" aria-label="@($"Open {row.Name} in Recipe Planner")" disabled="@(_openingPlanner != null || row.Cost?.Issue is "Item data unavailable" or "Not craftable")" @onclick="() => OpenInPlannerAsync(row)"><MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" /></button> },
         new() { Id = Column.Commission, Header = "", Size = new(44, 44), Sortable = false, CellCssClass = "is-action", CellTemplate = row => @<button type="button" class="commission-btn" title="@("Create commission for " + row.Name)" aria-label="@("Create commission for " + row.Name)" @onclick="() => CreateCommission(row)"><MudIcon Icon="@Icons.Material.Filled.PostAdd" Size="Size.Small" /></button> },
         new() { Id = Column.Remove, Header = "", Size = new(44, 44), Sortable = false, CellCssClass = "is-action", CellTemplate = row => @<button type="button" class="remove-btn" aria-label="@("Remove " + row.Name)" @onclick="() => RemoveAsync(row)">×</button> }
@@ -395,7 +402,7 @@
     /// <summary>A plan over the world-stop limit, which is advisory: priced anyway, and flagged.</summary>
     private string? OverLimit(TradeMarginBuyPlan plan) =>
         plan.Worlds.Count > Policy.MaximumWorldStops ? $"⚠ {plan.Worlds.Count:N0} worlds (limit {Policy.MaximumWorldStops:N0})" : null;
-    /// <summary>The root buy under the buy price: where the live buy comes from, or why the market falls short.</summary>
+    /// <summary>The root buy under the market cost: where it comes from, or why the market falls short.</summary>
     private (string Text, string? Title, bool Warning)? BuyLabel(MarginRow row)
     {
         var market = row.Cost?.MarketBuy;
@@ -506,32 +513,6 @@
         return items;
     }
 
-    /// <summary>
-    /// A Source row buying live also prices from the item's own listings; its vendor or
-    /// commissioned part has no age.
-    /// </summary>
-    private static bool AgesWithMarketBuy(MarginRow row) =>
-        row.Mode == TradeMarginMode.Source && row.Sale == null && row.Cost?.LiveBuy is { MarketUnits: > 0 };
-    /// <summary>
-    /// When the prices a row's figures rest on were uploaded, weighted by their gil: its market
-    /// materials, plus its live market buy.
-    /// </summary>
-    private static TradeMarginPriceAge PriceAge(MarginRow row) => row.Cost is not { } cost ? TradeMarginPriceAge.None
-        : AgesWithMarketBuy(row) ? cost.MaterialsAge + cost.LiveBuy!.Age : cost.MaterialsAge;
-    private static bool IsStale(MarginRow row) =>
-        PriceAge(row) is var age && (age.IsUnknown || age.ObservedAtUtc <= DateTime.UtcNow.AddDays(-1));
-    private static string Age(MarginRow row) => PriceAge(row) switch
-    {
-        { IsUnknown: true } => "?",
-        { ObservedAtUtc: { } time } => RelativeAge(time),
-        _ => "—"
-    };
-    private static string AgeTitle(MarginRow row)
-    {
-        var age = PriceAge(row);
-        var label = AgesWithMarketBuy(row) ? "Price age, weighted by gil" : "Material price age, weighted by gil";
-        return age.IsUnknown ? "Price age unknown" : age.ObservedAtUtc is { } time ? $"{label}: {time.ToLocalTime():f}" : label;
-    }
     private static string RelativeAge(DateTime time)
     {
         var age = DateTime.UtcNow - time;
@@ -651,6 +632,7 @@
             // A plan is prepared for one item, batch size and mode, never for a market: it survives
             // a scope change, so switching scopes never walks recipe trees again.
             var keepPlan = !stale || !companyChanged && scope != null && prior is { Plan: { Issue: null } } && prior.Batch == batch;
+            item = Normalized(item);
             var row = new MarginRow(item.ItemId, item.Mode, item.SalePrice)
             {
                 Sale = preserveEdit && _editingSale == key && prior != null ? prior.Sale : item.SalePrice,
@@ -1224,7 +1206,7 @@
         if (e.Key == "ArrowUp") _activeMatch = (_activeMatch + _matches.Count - 1) % _matches.Count;
     }
     private Task SaveItemsAsync(Func<IReadOnlyList<TradeMarginItem>, IReadOnlyList<TradeMarginItem>> edit) =>
-        SaveProfileAsync(profile => profile.MarginItems = edit(profile.MarginItems ?? []), marginItems: true);
+        SaveProfileAsync(profile => profile.MarginItems = edit(profile.MarginItems ?? []).Select(Normalized).ToArray(), marginItems: true);
     /// <summary>
     /// Rebases only this edit onto the latest company profile and retries one concurrent hosted
     /// write. Margin items and material sources each travel only on their own explicit flag.
@@ -1414,33 +1396,25 @@
         if (added) _ = StageNowAsync(key);
         return added;
     }
-    /// <summary>What a price input shows: the typed draft, the stored price, or (Source) the live market price.</summary>
+    /// <summary>What the sale price input shows: the typed draft or the stored price.</summary>
     private string? SaleValue(MarginRow row) => _editingSale == row.Key ? _saleDraft
-        : (row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale) is { } price
-            ? Math.Round(price, MidpointRounding.AwayFromZero).ToString("N0", CultureInfo.InvariantCulture) : null;
+        : row.Sale?.ToString("N0", CultureInfo.InvariantCulture);
     private void BeginSale(MarginRow row)
     {
         if (_editingSale == row.Key) return;
         _editingSale = row.Key;
-        var shown = row.Mode == TradeMarginMode.Source ? row.Sale ?? LiveBuy(row) : row.Sale;
-        _saleDraft = shown is { } price ? Math.Round(price, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture) : "";
+        _saleDraft = row.Sale?.ToString("0", CultureInfo.InvariantCulture) ?? "";
     }
     private void EndSale(MarginRow row)
     {
         if (_editingSale == row.Key) _editingSale = null;
     }
-    // Typing (re)starts an edit even when focus never left the input. In Source, an empty price buys at the live market.
+    // Typing (re)starts an edit even when focus never left the input.
     private void PreviewSale(MarginRow row, ChangeEventArgs e)
     {
         _editingSale = row.Key;
         _saleDraft = new string((e.Value?.ToString() ?? "").Where(char.IsAsciiDigit).ToArray());
         row.Sale = long.TryParse(_saleDraft, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 0 ? value : null;
-    }
-    private Task ResetBuyAsync(MarginRow row)
-    {
-        if (_editingSale == row.Key) _editingSale = null;
-        row.Sale = null;
-        return SaveSaleAsync(row);
     }
     private async Task SaveSaleAsync(MarginRow row)
     {
